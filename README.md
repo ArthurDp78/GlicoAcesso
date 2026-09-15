@@ -43,7 +43,7 @@ git clone https://github.com/ArthurDp78/GlicoAcesso.git
 cd GlicoAcesso
 ```
 
-As instruções para subir os serviços serão incluídas quando houver uma implementação nas próximas etapas.
+As instruções para subir os serviços serão incluídas quando houver uma implementação concreta nas próximas etapas de desenvolvimento do projeto.
 
 ## Documentação
 
