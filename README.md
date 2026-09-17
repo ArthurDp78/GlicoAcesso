@@ -128,6 +128,108 @@ O projeto está na **Parte 1 - Concepção e Pitch** da disciplina de Sistemas D
 
 Ainda não há sistema executável. A implementação e a arquitetura distribuída serão desenvolvidas nas próximas etapas do trabalho.
 
+## Adequação à disciplina de Sistemas Distribuídos
+
+O GlicoAcesso foi concebido de forma que sua evolução para as próximas etapas da disciplina de **Sistemas Distribuídos** possa explorar problemas reais de comunicação, consistência e coordenação entre diferentes serviços.
+
+A arquitetura proposta considera quatro microsserviços principais de domínio:
+
+* **Unidades** — responsável pelos dados das unidades participantes, endereços, horários e informações de atendimento.
+* **Estoque** — responsável pela disponibilidade e movimentação dos medicamentos e insumos.
+* **Reservas** — responsável pelas solicitações e estados das reservas realizadas pelos cidadãos.
+* **Retiradas** — responsável pelo registro e acompanhamento da retirada dos itens reservados.
+
+Cada microsserviço poderá possuir **seu próprio banco de dados**, mantendo o isolamento dos domínios e permitindo que os serviços evoluam e sejam escalados de forma independente.
+
+### Transações distribuídas
+
+Um dos principais desafios distribuídos do sistema está no processo de **reserva**. Uma solicitação pode envolver diferentes serviços: a reserva precisa ser registrada, o estoque precisa ser verificado e, posteriormente, a retirada precisa ser registrada.
+
+Como não existe uma única transação ACID envolvendo todos os bancos de dados, esse fluxo poderá ser implementado utilizando o padrão **SAGA**, com uma abordagem **orquestrada**.
+
+Nesse modelo, um componente orquestrador coordena as etapas da reserva e, caso alguma etapa falhe, executa **ações de compensação** para desfazer os efeitos das etapas que já foram concluídas. Dessa forma, o sistema consegue lidar com falhas parciais sem depender de uma transação distribuída tradicional.
+
+### CQRS e Outbox
+
+O microsserviço de **Estoque** também apresenta características que permitem explorar padrões arquiteturais distribuídos.
+
+Como o sistema deverá realizar muitas consultas de disponibilidade, ao mesmo tempo em que recebe operações de atualização de estoque, o serviço é um candidato ao uso de **CQRS (Command Query Responsibility Segregation)**, separando as operações de leitura das operações de escrita.
+
+Além disso, o padrão **Outbox** poderá ser utilizado para garantir maior confiabilidade na publicação de eventos. Alterações importantes no estoque podem ser registradas em uma tabela Outbox dentro da mesma transação que atualiza o banco de dados. Um processo posterior pode publicar esses eventos para os demais serviços, reduzindo o risco de uma alteração ser persistida sem que o evento correspondente seja enviado.
+
+### BFFs para os diferentes clientes
+
+O sistema possui dois tipos principais de usuários:
+
+* **Cidadão**, que pesquisa itens, consulta unidades e solicita reservas.
+* **Unidade de saúde**, que atualiza estoques, gerencia reservas e registra retiradas.
+
+Por possuírem necessidades diferentes, a arquitetura poderá utilizar **BFFs (Backend for Frontend) distintos**:
+
+```text
+                    ┌─────────────────────┐
+                    │      Cidadão        │
+                    └──────────┬──────────┘
+                               │
+                        ┌──────▼──────┐
+                        │ BFF Cidadão │
+                        └──────┬──────┘
+                               │
+              ┌────────────────┼────────────────┐
+              │                │                │
+        ┌─────▼─────┐    ┌─────▼─────┐   ┌─────▼─────┐
+        │ Unidades  │    │  Estoque   │   │  Reservas │
+        └───────────┘    └───────────┘   └─────┬─────┘
+                                               │
+                                         ┌─────▼─────┐
+                                         │ Retiradas │
+                                         └───────────┘
+
+                    ┌─────────────────────┐
+                    │ Unidade de Saúde    │
+                    └──────────┬──────────┘
+                               │
+                        ┌──────▼───────┐
+                        │ BFF Unidade  │
+                        └──────────────┘
+```
+
+Os BFFs permitem adaptar as interfaces e os dados disponibilizados para cada tipo de cliente sem transferir essa responsabilidade diretamente para os microsserviços de domínio.
+
+### RAG e ferramentas na etapa final
+
+Em uma etapa posterior, o GlicoAcesso também poderá incorporar uma solução de **RAG (Retrieval-Augmented Generation)** para auxiliar o cidadão na compreensão de regras e procedimentos de dispensação.
+
+O RAG poderá utilizar documentos institucionais, regras de dispensação e informações previamente cadastradas para responder perguntas como:
+
+* Quais documentos são necessários para retirar determinado item?
+* Quais são os requisitos para a dispensação?
+* Como funciona o processo de retirada?
+* Quais são os procedimentos adotados pela unidade?
+
+Para informações que precisam refletir o **estado atual do sistema**, como quantidade disponível ou situação de uma reserva, o assistente não dependerá apenas dos documentos recuperados. Uma **tool** poderá consultar diretamente os microsserviços responsáveis pelos dados reais.
+
+Dessa forma, a arquitetura separa informações documentais, recuperadas pelo RAG, de informações operacionais e dinâmicas, consultadas diretamente nos serviços do sistema.
+
+### Relação com os objetivos da disciplina
+
+A evolução proposta permite que o GlicoAcesso explore, nas próximas etapas, diferentes conceitos de Sistemas Distribuídos:
+
+| Conceito              | Aplicação no GlicoAcesso                                          |
+| --------------------- | ----------------------------------------------------------------- |
+| **Microsserviços**    | Separação dos domínios em Unidades, Estoque, Reservas e Retiradas |
+| **Banco por serviço** | Cada microsserviço mantém seus próprios dados                     |
+| **SAGA**              | Coordenação distribuída do processo de reserva                    |
+| **Compensação**       | Tratamento de falhas durante uma reserva                          |
+| **CQRS**              | Separação entre consultas e alterações no Estoque                 |
+| **Outbox**            | Publicação confiável de eventos de alteração                      |
+| **BFF**               | Interfaces específicas para cidadão e unidade                     |
+| **RAG**               | Consulta de documentos e regras de dispensação                    |
+| **Tools**             | Consulta de dados operacionais reais, como estoque e reservas     |
+
+Assim, a proposta inicial do GlicoAcesso não se limita a uma aplicação CRUD tradicional. O domínio escolhido apresenta situações que justificam a aplicação progressiva de **comunicação entre serviços, consistência eventual, eventos, transações distribuídas, tolerância a falhas e diferentes formas de acesso aos dados**, permitindo que o projeto seja desenvolvido de acordo com os objetivos das próximas etapas da disciplina.
+
+
 ## Integrantes
 
 - Marcos Vinícius Pereira
