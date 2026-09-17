@@ -1,5 +1,9 @@
 # GlicoAcesso
 
+<p align="center">
+    <img src="./identidade-visual/logo-sem-fundo.png" alt="Logo do GlicoAcesso" width="320">
+</p>
+
 > **Encontre. Reserve. Continue seu cuidado.**
 
 O **GlicoAcesso** é uma startup fictícia de impacto social que busca facilitar o acesso de pessoas com diabetes a medicamentos e insumos disponibilizados pela rede pública de saúde.

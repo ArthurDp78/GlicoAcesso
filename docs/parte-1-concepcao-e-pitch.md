@@ -5,9 +5,7 @@
 - **Nome:** GlicoAcesso
 - **Slogan:** Encontre. Reserve. Continue seu cuidado.
 - **Definição:** plataforma que facilita a localização, a solicitação de reserva e o acompanhamento da retirada de medicamentos e insumos para diabetes em unidades públicas de saúde participantes.
-- **Identidade visual sugerida:** azul para confiança e saúde; verde para acesso e continuidade; símbolo de uma gota combinada com um marcador de localização.
-
-O logotipo não é obrigatório nesta etapa.
+- **Identidade visual:** logotipo em [`/identidade-visual/logo.png`](./identidade-visual/logo.png)
 
 ### Em uma frase
 
