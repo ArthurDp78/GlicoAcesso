@@ -378,16 +378,17 @@ Para evitar sobreposição entre as frentes, este documento não fixa:
 
 Os detalhes ficam nos documentos OpenAPI e 02–11 indicados na estrutura compartilhada pelo documento 00. Os documentos especializados podem detalhar a implementação, mas não podem alterar as responsabilidades e fronteiras aqui descritas sem revisar primeiro o contrato compartilhado.
 
-### 13.1 Lacuna de integração identificada
+### 13.1 Decisão de integração para a retirada física
 
-O documento 00 define que Retiradas publica retirada.concluida.v1 e que Reservas consome esse evento para mudar a reserva de CONFIRMADA para RETIRADA. Também define que Estoque controla o saldo físico e as alocações. Porém, o contrato atual não declara como o Estoque toma conhecimento da retirada concluída, como a quantidade física é baixada nem como a alocação ativa daquela reserva é encerrada.
+Depois que Retiradas confirmar a entrega física, publica `retirada.concluida.v1` pela própria Outbox. RabbitMQ entrega o evento em filas duráveis independentes: uma de Reservas e outra de Estoque. Assim, os dois serviços processam o fato sem competir pela mesma mensagem.
 
-Essa regra precisa ser decidida no contrato compartilhado antes de fechar a integração de retirada. Ela afeta, no mínimo, o documento 00, o contrato OpenAPI/eventos da Pessoa 2 e os documentos de bancos, consistência, Outbox e CQRS da Pessoa 4. Até essa definição:
+Reservas muda a reserva de `CONFIRMADA` para `RETIRADA`. Estoque valida a alocação ativa vinculada ao `reservaId` e, em transação local idempotente, registra a saída física, encerra a alocação e grava `estoque.retirada-baixada.v1` em sua Outbox.
 
-- Retiradas continua sendo a autoridade do fato de entrega presencial;
-- Estoque continua sendo a autoridade do saldo físico e da alocação;
-- nenhum serviço pode contornar essa fronteira gravando no banco do outro;
-- este documento não presume um comando ou evento adicional nem considera a baixa de estoque resolvida.
+O payload de `retirada.concluida.v1` inclui `retiradaId`, `reservaId`, `unidadeId`, `itemId` e `quantidade`; não inclui dados pessoais do cidadão. Estoque deduplica pelo `eventId` e confere se unidade, item e quantidade correspondem à alocação ativa. Se houver divergência, não realiza baixa parcial ou arbitrária: registra uma ocorrência operacional observável para reconciliação e reprocessamento.
+
+O payload de `estoque.retirada-baixada.v1` inclui `retiradaId`, `reservaId`, `unidadeId`, `itemId` e `quantidadeBaixada` positiva. Esse valor representa tanto a redução do estoque físico quanto o encerramento da alocação associada. A projeção de disponibilidade aplica ambos os efeitos ao consumir o evento.
+
+Cada serviço altera apenas seu banco. Se o evento de Retiradas chegar repetido, o consumidor não pode debitar o estoque novamente. A semântica e o envelope dos eventos seguem o documento 00; detalhes de filas, persistência e consumidores ficam nos documentos das Pessoas 2 e 4.
 
 ## 14. Critério de conformidade
 

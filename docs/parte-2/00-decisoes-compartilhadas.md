@@ -302,14 +302,25 @@ O exemplo ilustra o formato, não um evento de teste com IDs reais. `eventId` id
 
 | Produtor | `eventType` | Quando publicar | Consumidor/uso inicial |
 |---|---|---|---|
-| Estoque | `estoque.alocacao-criada.v1` | Uma alocação foi confirmada no banco local. | Atualizar disponibilidade projetada e informar outros consumidores interessados. |
-| Estoque | `estoque.alocacao-liberada.v1` | Uma alocação foi liberada no banco local. | Atualizar disponibilidade projetada. |
-| Estoque | `estoque.estoque-ajustado.v1` | Uma movimentação alterou a quantidade física. | Atualizar disponibilidade projetada. |
-| Retiradas | `retirada.concluida.v1` | A entrega física foi registrada e confirmada no banco local. | Reservas muda `CONFIRMADA` para `RETIRADA`; projeções de acompanhamento podem ser atualizadas. |
+| Retiradas | `retirada.concluida.v1` | A entrega física foi registrada e confirmada no banco local. | Reservas muda `CONFIRMADA` para `RETIRADA`. Estoque baixa a quantidade física e encerra a alocação ativa da reserva. |
+| Estoque | `estoque.retirada-baixada.v1` | Estoque processou a retirada, baixou a quantidade física e encerrou a alocação na mesma transação local. | Atualizar a projeção de disponibilidade e informar outros consumidores interessados. |
 
-Os eventos de estoque devem incluir no `payload` os identificadores `unidadeId`, `itemId`, `reservaId` quando aplicável e a alteração quantitativa necessária para reconstruir a projeção. Não devem incluir dados pessoais do cidadão.
+O evento `retirada.concluida.v1` deve incluir no `payload` `retiradaId`, `reservaId`, `unidadeId`, `itemId` e `quantidade`. Esses dados identificam o item entregue e a alocação que Estoque deve encerrar. O evento não deve incluir dados pessoais do cidadão. `occurredAt` registra o instante do fato no envelope.
 
-Reservas pode publicar eventos de ciclo de vida se outros consumidores precisarem deles. Nesse caso, também deve usar Outbox; a lista acima não autoriza publicação direta ao broker fora da transação local.
+O evento `estoque.retirada-baixada.v1` deve incluir `retiradaId`, `reservaId`, `unidadeId`, `itemId` e `quantidadeBaixada`. A quantidade é positiva e representa o valor retirado do estoque físico e encerrado da alocação daquela reserva. A projeção de disponibilidade aplica a baixa física e a redução da alocação ativa ao processar esse evento.
+
+`retirada.concluida.v1` é destinado a dois consumidores independentes. RabbitMQ deve entregá-lo em filas duráveis separadas, uma consumida por Reservas e outra por Estoque. Os dois serviços não devem competir pela mesma fila, pois ambos precisam processar o fato.
+
+O consumidor de `retirada.concluida.v1` em Estoque deve, em uma única transação local:
+
+1. deduplicar a mensagem por `eventId`;
+2. validar que existe uma alocação ativa para o `reservaId` com os mesmos `unidadeId`, `itemId` e `quantidade` do evento;
+3. registrar a movimentação de saída, reduzir o estoque físico e encerrar a alocação;
+4. gravar na Outbox o evento `estoque.retirada-baixada.v1`, para atualização da projeção de disponibilidade.
+
+Se a mensagem já tiver sido processada, o consumidor não repete a baixa. Se a alocação não existir ou seus dados não corresponderem ao evento, Estoque não realiza uma baixa parcial ou arbitrária: registra a ocorrência para reconciliação operacional e mantém o evento observável para reprocessamento após correção. O evento da retirada continua sendo a prova de que a entrega física aconteceu em Retiradas.
+
+Os eventos produzidos por Estoque devem incluir no `payload` os identificadores `unidadeId`, `itemId`, `reservaId` quando aplicável e a alteração quantitativa necessária para reconstruir a projeção. Não devem incluir dados pessoais do cidadão.
 
 ### 10.3 Outbox e publicação
 
