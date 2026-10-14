@@ -1,13 +1,76 @@
-openapi: 3.0.0
+openapi: 3.0.3
 info:
   title: API de Estoque
-  version: "1.0"
-  description: Contratos do microsserviço de Estoque, incluindo rotas públicas e comandos internos da SAGA.
+  version: "1.0.0"
+  description: Catálogo, saldo físico, alocações e projeção de disponibilidade.
+servers:
+  - url: /
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  schemas:
+    DisponibilidadeItem:
+      type: object
+      properties:
+        itemId: { type: string, format: uuid }
+        unidadeId: { type: string, format: uuid }
+        quantidadeDisponivel: { type: integer }
+        permiteReserva: { type: boolean }
+        atualizadoEm: { type: string, format: date-time }
 paths:
+  /api/cidadao/v1/estoque/disponibilidade:
+    get:
+      summary: Consulta de disponibilidade (Projeção)
+      parameters:
+        - name: unidadeId
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+        - name: itemId
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Sucesso.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DisponibilidadeItem'
+  /api/unidade/v1/estoque/{unidadeId}/itens/{itemId}/permissao:
+    put:
+      summary: Configurar se item permite reserva
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: unidadeId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: itemId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                permiteReserva: { type: boolean }
+      responses:
+        '200':
+          description: Configuração atualizada.
+        '401':
+          description: Não autenticado.
+        '403':
+          description: Sem permissão.
   /internal/v1/alocacoes:
     post:
-      summary: Alocar Estoque (Comando interno da SAGA)
-      description: Valida o saldo e cria uma alocação ativa.
+      summary: Alocar Estoque (SAGA)
       requestBody:
         required: true
         content:
@@ -20,42 +83,24 @@ paths:
                 unidadeId: { type: string, format: uuid }
                 itemId: { type: string, format: uuid }
                 quantidade: { type: integer, minimum: 1 }
-                correlationId: { type: string, format: uuid }
                 idempotencyKey: { type: string }
       responses:
         '201':
-          description: Alocação confirmada com sucesso.
+          description: Alocação criada/confirmada.
         '409':
-          description: Conflito (saldo insuficiente ou idempotência).
-        '422':
-          description: Erro de validação.
-
+          description: Saldo insuficiente ou conflito.
   /internal/v1/alocacoes/{reservaId}:
     delete:
-      summary: Liberar Alocação (Compensação da SAGA)
-      description: Libera a alocação vinculada a uma reserva específica de forma idempotente.
+      summary: Liberar Alocação (Compensação SAGA)
       parameters:
         - name: reservaId
           in: path
           required: true
-          schema:
-            type: string
-            format: uuid
-        - name: X-Saga-Id
-          in: header
-          required: true
-          schema:
-            type: string
-        - name: X-Correlation-Id
-          in: header
-          required: true
-          schema:
-            type: string
+          schema: { type: string, format: uuid }
         - name: X-Idempotency-Key
           in: header
           required: true
-          schema:
-            type: string
+          schema: { type: string }
       responses:
         '204':
-          description: Alocação libertada com sucesso.
+          description: Alocação libertada de forma idempotente.

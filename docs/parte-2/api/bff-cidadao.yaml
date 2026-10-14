@@ -1,25 +1,29 @@
-openapi: 3.0.0
+openapi: 3.0.3
 info:
   title: BFF Cidadão
-  version: "1.0"
-  description: Backend For Frontend para a aplicação móvel/web do Cidadão. Focado em agregar dados e retornar JSONs leves e seguros.
+  version: "1.0.0"
+  description: Agrega Unidades, Estoque e Reservas para o cidadão. Não exibe dados sensíveis operacionais.
 servers:
   - url: /api/cidadao/v1
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
 paths:
   /reservas/{reservaId}:
     get:
-      summary: Consultar detalhes da reserva (Agregado)
-      description: O BFF consulta o microsserviço de Reservas e de Unidades para montar a resposta final. Não expõe dados operacionais.
+      summary: Consultar reserva agregada (Cidadão)
+      security:
+        - bearerAuth: []
       parameters:
         - name: reservaId
           in: path
           required: true
-          schema:
-            type: string
-            format: uuid
+          schema: { type: string, format: uuid }
       responses:
         '200':
-          description: Detalhes da reserva formatados para o Cidadão.
+          description: Vista segura e simplificada da reserva.
           content:
             application/json:
               schema:
@@ -27,14 +31,29 @@ paths:
                 properties:
                   reservaId: { type: string, format: uuid }
                   status: { type: string }
-                  item:
+                  itemNome: { type: string }
+                  unidadeNome: { type: string }
+                  enderecoLocal: { type: string }
+                  _links:
                     type: object
-                    properties:
-                      nome: { type: string }
-                  localRetirada:
-                    type: object
-                    properties:
-                      nome: { type: string }
-                      endereco: { type: string }
-                  instrucoes: { type: string }
-                  
+  /explorar:
+    get:
+      summary: Explorar disponibilidade agregada
+      parameters:
+        - name: itemId
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Lista de unidades com o respetivo status de estoque.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    unidadeId: { type: string, format: uuid }
+                    nomeUnidade: { type: string }
+                    disponivel: { type: boolean }

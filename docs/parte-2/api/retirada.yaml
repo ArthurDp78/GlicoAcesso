@@ -1,13 +1,37 @@
-openapi: 3.0.0
+openapi: 3.0.3
 info:
   title: API de Retiradas
-  version: "1.0"
-  description: Contratos do microsserviço de Retiradas, incluindo rotas públicas e comandos internos da SAGA.
+  version: "1.0.0"
+  description: Autorizações de balcão e registo de entrega física.
+servers:
+  - url: /
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
 paths:
+  /api/unidade/v1/retiradas:
+    post:
+      summary: Registar entrega presencial
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                autorizacaoId: { type: string, format: uuid }
+      responses:
+        '201':
+          description: Entrega física registada. Dispara evento retirada.concluida.v1.
+        '409':
+          description: Autorização cancelada, já usada ou inexistente.
   /internal/v1/autorizacoes:
     post:
-      summary: Preparar Autorização (Comando interno da SAGA)
-      description: Cria uma autorização apta para uso no balcão.
+      summary: Preparar Autorização (SAGA)
       requestBody:
         required: true
         content:
@@ -20,42 +44,24 @@ paths:
                 unidadeId: { type: string, format: uuid }
                 itemId: { type: string, format: uuid }
                 quantidade: { type: integer, minimum: 1 }
-                correlationId: { type: string, format: uuid }
                 idempotencyKey: { type: string }
       responses:
         '201':
-          description: Autorização preparada com sucesso.
-        '409':
-          description: Conflito de estado ou idempotência.
-
+          description: Autorização criada.
   /internal/v1/autorizacoes/{reservaId}/cancelar:
     post:
-      summary: Cancelar Autorização (Compensação da SAGA)
-      description: Revoga a autorização sem apagar o histórico de registos.
+      summary: Cancelar Autorização (Compensação SAGA)
       parameters:
         - name: reservaId
           in: path
           required: true
-          schema:
-            type: string
-            format: uuid
-        - name: X-Saga-Id
-          in: header
-          required: true
-          schema:
-            type: string
-        - name: X-Correlation-Id
-          in: header
-          required: true
-          schema:
-            type: string
+          schema: { type: string, format: uuid }
         - name: X-Idempotency-Key
           in: header
           required: true
-          schema:
-            type: string
+          schema: { type: string }
       responses:
         '200':
-          description: Autorização revogada com sucesso.
+          description: Autorização revogada.
         '409':
-          description: Conflito (ex. se a entrega já ocorreu).
+          description: Entrega já registada (conflito).
