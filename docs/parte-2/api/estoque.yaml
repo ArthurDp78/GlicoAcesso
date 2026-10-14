@@ -1,0 +1,61 @@
+openapi: 3.0.0
+info:
+  title: API de Estoque
+  version: "1.0"
+  description: Contratos do microsserviço de Estoque, incluindo rotas públicas e comandos internos da SAGA.
+paths:
+  /internal/v1/alocacoes:
+    post:
+      summary: Alocar Estoque (Comando interno da SAGA)
+      description: Valida o saldo e cria uma alocação ativa.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                sagaId: { type: string, format: uuid }
+                reservaId: { type: string, format: uuid }
+                unidadeId: { type: string, format: uuid }
+                itemId: { type: string, format: uuid }
+                quantidade: { type: integer, minimum: 1 }
+                correlationId: { type: string, format: uuid }
+                idempotencyKey: { type: string }
+      responses:
+        '201':
+          description: Alocação confirmada com sucesso.
+        '409':
+          description: Conflito (saldo insuficiente ou idempotência).
+        '422':
+          description: Erro de validação.
+
+  /internal/v1/alocacoes/{reservaId}:
+    delete:
+      summary: Liberar Alocação (Compensação da SAGA)
+      description: Libera a alocação vinculada a uma reserva específica de forma idempotente.
+      parameters:
+        - name: reservaId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: X-Saga-Id
+          in: header
+          required: true
+          schema:
+            type: string
+        - name: X-Correlation-Id
+          in: header
+          required: true
+          schema:
+            type: string
+        - name: X-Idempotency-Key
+          in: header
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Alocação libertada com sucesso.
