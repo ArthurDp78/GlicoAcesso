@@ -1,0 +1,54 @@
+openapi: 3.0.0
+info:
+  title: API de Unidades
+  version: "1.0"
+  description: Contratos do microsserviço de Unidades. Controla informações institucionais, horários e configuração de prazos.
+paths:
+  # Rota pública consumida pelos BFFs (Cidadão e Unidade)
+  /api/cidadao/v1/unidades:
+    get:
+      summary: Listar unidades de saúde
+      description: Retorna a lista de unidades disponíveis para consulta do cidadão.
+      responses:
+        '200':
+          description: Lista de unidades retornada com sucesso.
+          
+  /api/cidadao/v1/unidades/{unidadeId}:
+    get:
+      summary: Detalhes da unidade
+      parameters:
+        - name: unidadeId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Dados da unidade, endereço e horários.
+        '404':
+          description: Unidade não encontrada.
+
+  # Rota interna (Não passa pelo Gateway) consumida pelo serviço de Reservas
+  /internal/v1/unidades/{unidadeId}/prazo-analise:
+    get:
+      summary: Consultar prazo de análise (Comando interno)
+      description: O serviço de Reservas consome esta rota para calcular o campo decisaoAte ao criar uma solicitação.
+      parameters:
+        - name: unidadeId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Prazo retornado com sucesso.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  prazoAnaliseHoras: { type: integer }
+        '404':
+          description: Unidade não encontrada ou prazo não configurado.
