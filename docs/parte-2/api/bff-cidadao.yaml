@@ -1,0 +1,40 @@
+openapi: 3.0.0
+info:
+  title: BFF Cidadão
+  version: "1.0"
+  description: Backend For Frontend para a aplicação móvel/web do Cidadão. Focado em agregar dados e retornar JSONs leves e seguros.
+servers:
+  - url: /api/cidadao/v1
+paths:
+  /reservas/{reservaId}:
+    get:
+      summary: Consultar detalhes da reserva (Agregado)
+      description: O BFF consulta o microsserviço de Reservas e de Unidades para montar a resposta final. Não expõe dados operacionais.
+      parameters:
+        - name: reservaId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Detalhes da reserva formatados para o Cidadão.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  reservaId: { type: string, format: uuid }
+                  status: { type: string }
+                  item:
+                    type: object
+                    properties:
+                      nome: { type: string }
+                  localRetirada:
+                    type: object
+                    properties:
+                      nome: { type: string }
+                      endereco: { type: string }
+                  instrucoes: { type: string }
+                  
