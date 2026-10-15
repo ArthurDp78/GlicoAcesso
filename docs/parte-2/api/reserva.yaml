@@ -1,0 +1,110 @@
+openapi: 3.0.3
+info:
+  title: API de Reservas
+  version: "1.0.0"
+  description: Ciclo de vida da solicitação, HATEOAS e orquestração da SAGA.
+servers:
+  - url: /
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  schemas:
+    Reserva:
+      type: object
+      properties:
+        reservaId: { type: string, format: uuid }
+        cidadaoId: { type: string }
+        unidadeId: { type: string, format: uuid }
+        itemId: { type: string, format: uuid }
+        quantidade: { type: integer }
+        status: { type: string, enum: [SOLICITADA, EM_CONFIRMACAO, CONFIRMADA, CANCELAMENTO_EM_ANDAMENTO, CANCELADA, REJEITADA, EXPIRADA, FALHA_CONFIRMACAO, RETIRADA] }
+        _links:
+          type: object
+          additionalProperties: true
+paths:
+  /api/cidadao/v1/reservas:
+    post:
+      summary: Criar solicitação
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                unidadeId: { type: string, format: uuid }
+                itemId: { type: string, format: uuid }
+                quantidade: { type: integer, minimum: 1 }
+                idempotencyKey: { type: string }
+      responses:
+        '201':
+          description: Criada com status SOLICITADA.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Reserva'
+        '422':
+          description: Unidade não permite reserva.
+  /api/cidadao/v1/reservas/{reservaId}/cancelar:
+    post:
+      summary: Cancelar reserva pelo cidadão
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: reservaId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '202':
+          description: Cancelamento em andamento.
+        '409':
+          description: Reserva em estado terminal.
+  /api/unidade/v1/reservas/{reservaId}/decisao:
+    post:
+      summary: Registar decisão da unidade (Aceitar/Rejeitar)
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: reservaId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                decisao: { type: string, enum: [ACEITAR, REJEITAR] }
+      responses:
+        '200':
+          description: Decisão registada.
+        '403':
+          description: Profissional não pertence à unidade.
+  /api/unidade/v1/reservas/{reservaId}/cancelar:
+    post:
+      summary: Cancelar reserva pela unidade
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: reservaId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                justificativa: { type: string, minLength: 5 }
+      responses:
+        '202':
+          description: Cancelamento processado.

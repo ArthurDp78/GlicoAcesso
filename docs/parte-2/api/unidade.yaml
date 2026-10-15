@@ -1,0 +1,61 @@
+openapi: 3.0.3
+info:
+  title: API de Unidades
+  version: "1.0.0"
+  description: Gestão de informações institucionais, horários e prazos de análise.
+servers:
+  - url: /
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    Erro:
+      type: object
+      properties:
+        codigo: { type: string }
+        mensagem: { type: string }
+    Unidade:
+      type: object
+      properties:
+        unidadeId: { type: string, format: uuid }
+        nome: { type: string }
+        endereco: { type: string }
+        horarioAtendimento: { type: string }
+paths:
+  /api/cidadao/v1/unidades:
+    get:
+      summary: Listar unidades
+      description: Retorna as unidades disponíveis para consulta.
+      responses:
+        '200':
+          description: Sucesso.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Unidade'
+        '500':
+          description: Erro interno.
+  /internal/v1/unidades/{unidadeId}/prazo-analise:
+    get:
+      summary: Obter prazo de análise (Comando Interno SAGA)
+      parameters:
+        - name: unidadeId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Sucesso.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  prazoAnaliseHoras: { type: integer }
+        '404':
+          description: Unidade não encontrada.

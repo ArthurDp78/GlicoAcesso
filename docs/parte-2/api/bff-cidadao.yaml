@@ -1,0 +1,59 @@
+openapi: 3.0.3
+info:
+  title: BFF Cidadão
+  version: "1.0.0"
+  description: Agrega Unidades, Estoque e Reservas para o cidadão. Não exibe dados sensíveis operacionais.
+servers:
+  - url: /api/cidadao/v1
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+paths:
+  /reservas/{reservaId}:
+    get:
+      summary: Consultar reserva agregada (Cidadão)
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: reservaId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Vista segura e simplificada da reserva.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  reservaId: { type: string, format: uuid }
+                  status: { type: string }
+                  itemNome: { type: string }
+                  unidadeNome: { type: string }
+                  enderecoLocal: { type: string }
+                  _links:
+                    type: object
+  /explorar:
+    get:
+      summary: Explorar disponibilidade agregada
+      parameters:
+        - name: itemId
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Lista de unidades com o respetivo status de estoque.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    unidadeId: { type: string, format: uuid }
+                    nomeUnidade: { type: string }
+                    disponivel: { type: boolean }

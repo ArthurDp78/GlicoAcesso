@@ -1,0 +1,67 @@
+openapi: 3.0.3
+info:
+  title: API de Retiradas
+  version: "1.0.0"
+  description: Autorizações de balcão e registo de entrega física.
+servers:
+  - url: /
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+paths:
+  /api/unidade/v1/retiradas:
+    post:
+      summary: Registar entrega presencial
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                autorizacaoId: { type: string, format: uuid }
+      responses:
+        '201':
+          description: Entrega física registada. Dispara evento retirada.concluida.v1.
+        '409':
+          description: Autorização cancelada, já usada ou inexistente.
+  /internal/v1/autorizacoes:
+    post:
+      summary: Preparar Autorização (SAGA)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                sagaId: { type: string, format: uuid }
+                reservaId: { type: string, format: uuid }
+                unidadeId: { type: string, format: uuid }
+                itemId: { type: string, format: uuid }
+                quantidade: { type: integer, minimum: 1 }
+                idempotencyKey: { type: string }
+      responses:
+        '201':
+          description: Autorização criada.
+  /internal/v1/autorizacoes/{reservaId}/cancelar:
+    post:
+      summary: Cancelar Autorização (Compensação SAGA)
+      parameters:
+        - name: reservaId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: X-Idempotency-Key
+          in: header
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Autorização revogada.
+        '409':
+          description: Entrega já registada (conflito).
