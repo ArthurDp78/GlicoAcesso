@@ -5,7 +5,7 @@
 **Versão:** 1.0  
 **Situação:** detalhamento das fronteiras definidas no contrato compartilhado  
 **Documento normativo:** [00 — Decisões arquiteturais compartilhadas](./00-decisoes-compartilhadas.md)  
-**Última revisão:** 9 de outubro de 2026
+**Última revisão:** 20 de outubro de 2026
 
 > Este documento explica quais são os quatro microsserviços de domínio do GlicoAcesso, qual problema cada um resolve, quais informações controla, quais responsabilidades não lhe pertencem e por que as fronteiras foram escolhidas. Ele detalha o contrato do documento 00; não cria uma segunda definição de estados, eventos, identificadores ou tecnologias.
 
@@ -380,9 +380,9 @@ Os detalhes ficam nos documentos OpenAPI e 02–11 indicados na estrutura compar
 
 ### 13.1 Decisão de integração para a retirada física
 
-Depois que Retiradas confirmar a entrega física, publica `retirada.concluida.v1` pela própria Outbox. RabbitMQ entrega o evento em filas duráveis independentes: uma de Reservas e outra de Estoque. Assim, os dois serviços processam o fato sem competir pela mesma mensagem.
+Retiradas registra a entrega física e o evento `retirada.concluida.v1` na própria Outbox, na mesma transação local. Após o commit, o publicador envia o evento ao RabbitMQ, que o entrega em filas duráveis independentes: uma de Reservas e outra de Estoque. Assim, os dois serviços processam o fato sem competir pela mesma mensagem.
 
-Reservas muda a reserva de `CONFIRMADA` para `RETIRADA`. Estoque valida a alocação ativa vinculada ao `reservaId` e, em transação local idempotente, registra a saída física, encerra a alocação e grava `estoque.retirada-baixada.v1` em sua Outbox.
+Reservas muda a reserva de `CONFIRMADA` ou `CANCELAMENTO_EM_ANDAMENTO` para `RETIRADA`. Se a retirada venceu um cancelamento em andamento, encerra a execução de cancelamento como `INTERROMPIDA` na mesma transação local da deduplicação, da atualização da reserva e da auditoria, conforme o documento 00, seção 9.3. Estoque valida a alocação ativa vinculada ao `reservaId` e, em transação local idempotente, registra a saída física, encerra a alocação como consumida e grava `estoque.retirada-baixada.v1` em sua Outbox.
 
 O payload de `retirada.concluida.v1` inclui `retiradaId`, `reservaId`, `unidadeId`, `itemId` e `quantidade`; não inclui dados pessoais do cidadão. Estoque deduplica pelo `eventId` e confere se unidade, item e quantidade correspondem à alocação ativa. Se houver divergência, não realiza baixa parcial ou arbitrária: registra uma ocorrência operacional observável para reconciliação e reprocessamento.
 

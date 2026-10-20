@@ -188,7 +188,9 @@ O campo `status` é o estado de negócio visível da reserva. Somente estas tran
 | `EM_CONFIRMACAO` | Estoque alocado, autorização criada e finalização local gravada | `CONFIRMADA` |
 | `EM_CONFIRMACAO` | Uma etapa falha e todas as compensações necessárias terminam | `FALHA_CONFIRMACAO` |
 | `EM_CONFIRMACAO` | Cidadão cancela ou profissional autorizado cancela com justificativa; efeitos parciais são compensados | `CANCELAMENTO_EM_ANDAMENTO`, depois `CANCELADA` |
-| `CONFIRMADA` | Cidadão cancela ou profissional autorizado cancela com justificativa; autorização cancelada e alocação liberada | `CANCELAMENTO_EM_ANDAMENTO`, depois `CANCELADA` |
+| `CONFIRMADA` | Cidadão solicita cancelamento ou profissional autorizado solicita cancelamento com justificativa | `CANCELAMENTO_EM_ANDAMENTO` |
+| `CANCELAMENTO_EM_ANDAMENTO` | Cancelamento da autorização e liberação da alocação confirmados, quando aplicáveis | `CANCELADA` |
+| `CANCELAMENTO_EM_ANDAMENTO` | `retirada.concluida.v1` comprova que a retirada física venceu o cancelamento | `RETIRADA` |
 | `CONFIRMADA` | Retirada física registrada e evento processado | `RETIRADA` |
 
 Estados terminais: `REJEITADA`, `CANCELADA`, `EXPIRADA`, `FALHA_CONFIRMACAO` e `RETIRADA`. No escopo desta etapa, não há reabertura de uma reserva terminal; deve ser criada outra solicitação.
@@ -200,7 +202,7 @@ Regras adicionais:
 - A expiração automática ocorre somente enquanto a reserva está `SOLICITADA`: quando `agora >= decisaoAte` e nenhuma decisão venceu a corrida, Reservas muda o estado para `EXPIRADA`. O prazo é configurado por unidade em `prazoAnalise` e copiado para `decisaoAte` ao criar a solicitação. Como a SAGA ainda não começou, não há estoque a liberar. Reserva `EM_CONFIRMACAO` não expira por relógio: é finalizada ou cancelada pela SAGA.
 - `CONFIRMADA` pode ser cancelada, mas o cancelamento coordena a revogação da autorização e a liberação da alocação antes de mudar para `CANCELADA`.
 - `CANCELAMENTO_EM_ANDAMENTO` informa que o pedido foi aceito, mas efeitos distribuídos ainda estão sendo revertidos. Só passa a `CANCELADA` depois da confirmação de todas as operações aplicáveis.
-- Retirada e cancelamento são concorrentes: Retiradas deve garantir que apenas um deles possa vencer. Se a entrega física for registrada primeiro, o cancelamento é recusado; se o cancelamento concluir primeiro, a autorização não pode mais ser usada.
+- Retirada e cancelamento são concorrentes: Retiradas deve garantir que apenas um deles possa vencer. Se a entrega física for registrada primeiro, o cancelamento é recusado e o consumo de `retirada.concluida.v1` leva a reserva de `CONFIRMADA` ou `CANCELAMENTO_EM_ANDAMENTO` para `RETIRADA`; se o cancelamento concluir primeiro, a autorização não pode mais ser usada.
 - `RETIRADA`, `REJEITADA`, `CANCELADA`, `EXPIRADA` e `FALHA_CONFIRMACAO` não voltam a estados anteriores.
 - Os estados da execução da SAGA são distintos do estado de negócio e são descritos na seção 9. Uma SAGA com retry ou compensação pendente não deve ser apresentada como falha final.
 
@@ -231,10 +233,12 @@ O cancelamento após o início da confirmação é coordenado por Reservas e usa
 
 1. Reservas valida condicionalmente que a reserva ainda não está `RETIRADA` e registra `CANCELAMENTO_EM_ANDAMENTO`, o ator e o instante do pedido. Se o ator for profissional da unidade, exige e registra uma justificativa não vazia.
 2. Se existir autorização, Reservas envia a Retiradas `CancelarAutorizacao(reservaId)`.
-3. Se existir alocação ativa, Reservas envia ao Estoque `LiberarAlocacao(reservaId)`.
+3. Se existir alocação ativa e o cancelamento da autorização, quando existente, tiver sido confirmado, Reservas envia ao Estoque `LiberarAlocacao(reservaId)`.
 4. Depois de confirmar todas as operações aplicáveis, Reservas registra `CANCELADA`.
 5. Se um participante estiver indisponível ou o resultado for incerto, manter o cancelamento em andamento e repetir/consultar usando a mesma chave idempotente. Não informar que a reserva foi cancelada antes da reconciliação.
 6. Retiradas deve tornar mutuamente exclusivos o cancelamento da autorização e o registro da retirada física. Se `RegistrarRetirada` tiver sido confirmado primeiro, o cancelamento falha por conflito de estado; se o cancelamento concluir primeiro, a autorização não pode ser usada para retirar o item.
+
+Se a retirada física vencer o cancelamento de uma reserva confirmada, Reservas não envia `LiberarAlocacao`. Ao consumir `retirada.concluida.v1`, deve, na mesma transação local, deduplicar por `eventId`, mudar a reserva de `CANCELAMENTO_EM_ANDAMENTO` para `RETIRADA`, encerrar a execução de cancelamento como `INTERROMPIDA` e registrar a auditoria correspondente, incluindo a evidência da retirada e o motivo do encerramento. Respostas tardias e retries não podem reativar essa execução nem levar a reserva posteriormente para `CANCELADA`. Estoque consome o evento normalmente, baixa o estoque físico e encerra a alocação como consumida, em vez de liberá-la por cancelamento.
 
 O cancelamento de uma reserva ainda `SOLICITADA` é local a Reservas e não chama Estoque ou Retiradas. Uma reserva `EM_CONFIRMACAO` entra em `CANCELAMENTO_EM_ANDAMENTO`; Reservas interrompe passos futuros e compensa, em ordem inversa, apenas os efeitos que já tenham sido confirmados. A expiração de `SOLICITADA` também não exige compensação porque ainda não existe alocação.
 
@@ -247,12 +251,12 @@ O registro interno da SAGA usa os estados:
 - `COMPENSACAO_PENDENTE`: uma compensação não foi confirmada; o sistema continuará tentando e alertará a operação;
 - `CANCELANDO`: um pedido explícito de cancelamento está revertendo efeitos distribuídos;
 - `CANCELAMENTO_PENDENTE`: não foi possível confirmar uma operação de cancelamento; o sistema continuará tentando;
-- `INTERROMPIDA`: execução de confirmação encerrada por solicitação de cancelamento, após reconciliar todas as chamadas em voo ou com resultado desconhecido; nenhuma nova etapa de confirmação será iniciada nessa execução, e os efeitos confirmados permanecem registrados;
+- `INTERROMPIDA`: execução encerrada sem prosseguir em suas etapas, seja uma confirmação interrompida por solicitação de cancelamento após reconciliar chamadas em voo ou com resultado desconhecido, seja um cancelamento inviabilizado pela retirada física comprovada por `retirada.concluida.v1`;
 - `CONCLUIDA`: reserva confirmada;
 - `COMPENSADA`: efeitos distribuídos revertidos após falha de confirmação; reserva marcada `FALHA_CONFIRMACAO`;
 - `CANCELADA`: efeitos distribuídos revertidos por solicitação de cancelamento; reserva marcada `CANCELADA`.
 
-`INTERROMPIDA` é terminal para a execução de confirmação, mas não significa que seus efeitos já foram compensados nem que a reserva está `CANCELADA`. Só depois desse encerramento Reservas inicia a execução distinta de cancelamento, com novo `sagaId` e o mesmo `reservaId`, preservando a regra de uma única execução ativa por reserva. A reserva permanece em `CANCELAMENTO_EM_ANDAMENTO` enquanto as operações aplicáveis do cancelamento não forem concluídas.
+`INTERROMPIDA` é terminal para a execução, mas não significa que seus efeitos já foram compensados nem que a reserva está `CANCELADA`. Quando interrompe uma confirmação, Reservas preserva os efeitos confirmados e só depois inicia a execução distinta de cancelamento, com novo `sagaId` e o mesmo `reservaId`, mantendo uma única execução ativa por reserva. Nesse caso, a reserva fica em `CANCELAMENTO_EM_ANDAMENTO` enquanto o cancelamento continua. Quando a retirada vence o cancelamento, a execução de cancelamento termina em `INTERROMPIDA` e a reserva termina em `RETIRADA`, conforme a seção 9.3.
 
 `COMPENSACAO_PENDENTE` e `CANCELAMENTO_PENDENTE` não são resultados finais para o cidadão. A reserva permanece em `EM_CONFIRMACAO` ou `CANCELAMENTO_EM_ANDAMENTO` até o estado distribuído ser reconciliado. A equipe deve conseguir localizar a execução por `sagaId`/`reservaId` e verificar etapa, tentativas e erro técnico, sem expor detalhes internos ao cidadão.
 
@@ -305,7 +309,7 @@ O exemplo ilustra o formato, não um evento de teste com IDs reais. `eventId` id
 
 | Produtor | `eventType` | Quando publicar | Consumidor/uso inicial |
 |---|---|---|---|
-| Retiradas | `retirada.concluida.v1` | A entrega física foi registrada e confirmada no banco local. | Reservas muda `CONFIRMADA` para `RETIRADA`. Estoque baixa a quantidade física e encerra a alocação ativa da reserva. |
+| Retiradas | `retirada.concluida.v1` | A entrega física e o evento foram persistidos na mesma transação local, pela Outbox. | Reservas muda `CONFIRMADA` ou `CANCELAMENTO_EM_ANDAMENTO` para `RETIRADA`; no segundo caso, encerra o cancelamento como `INTERROMPIDA`, conforme a seção 9.3. Estoque baixa a quantidade física e encerra a alocação ativa da reserva como consumida. |
 | Estoque | `estoque.retirada-baixada.v1` | Estoque processou a retirada, baixou a quantidade física e encerrou a alocação na mesma transação local. | Atualizar a projeção de disponibilidade e informar outros consumidores interessados. |
 
 O evento `retirada.concluida.v1` deve incluir no `payload` `retiradaId`, `reservaId`, `unidadeId`, `itemId` e `quantidade`. Esses dados identificam o item entregue e a alocação que Estoque deve encerrar. O evento não deve incluir dados pessoais do cidadão. `occurredAt` registra o instante do fato no envelope.
@@ -337,7 +341,7 @@ Os eventos produzidos por Estoque devem incluir no `payload` os identificadores 
 ### 10.4 Onde existe consistência eventual
 
 1. A disponibilidade consultada pelo cidadão é uma projeção de leitura de Estoque, atualizada após eventos. Pode atrasar em relação ao saldo canônico.
-2. O estado `RETIRADA` em Reservas é atualizado após Reservas consumir `retirada.concluida.v1`; pode haver um intervalo em que Retiradas já registrou a entrega e Reservas ainda exibe `CONFIRMADA`.
+2. O estado `RETIRADA` em Reservas é atualizado após Reservas consumir `retirada.concluida.v1`; pode haver um intervalo em que Retiradas já registrou a entrega e Reservas ainda exibe `CONFIRMADA` ou `CANCELAMENTO_EM_ANDAMENTO`.
 3. Qualquer BFF ou visão de pesquisa que combine eventos pode ficar temporariamente defasada em relação ao serviço de origem.
 
 O atraso-alvo para projeções é de até **5 segundos em condições normais**. A resposta de leitura deve informar `atualizadoEm` para que um cliente possa reconhecer a idade da informação. Se a projeção exceder 5 segundos, deve ser sinalizada como desatualizada/monitorada; essa defasagem não pode ser escondida como se fosse informação atual.
