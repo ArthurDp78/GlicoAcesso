@@ -21,7 +21,7 @@ sequenceDiagram
     B->>R: POST decisão, corpo {decisao: ACEITAR}
     R->>DBR: Transação local: gravar EM_CONFIRMACAO e SAGA EM_EXECUCAO
     DBR-->>R: Commit confirmado
-    R-->>B: 200 — decisão registrada; confirmação em andamento
+    R-->>B: 200 — decisão registrada#59; confirmação em andamento
     B-->>G: Resultado da decisão
     G-->>P: Reserva em EM_CONFIRMACAO
 
@@ -42,7 +42,7 @@ sequenceDiagram
     R->>DBR: Tentar finalizar reserva CONFIRMADA e SAGA CONCLUIDA
     DBR-->>R: Falha definitiva de persistência
     R->>DBR: Reconciliar estado local e confirmar que CONFIRMADA não foi gravada
-    DBR-->>R: Reserva segue EM_CONFIRMACAO; confirmação não persistida
+    DBR-->>R: Reserva segue EM_CONFIRMACAO#59; confirmação não persistida
     R->>DBR: Persistir SAGA COMPENSANDO e etapa CancelarAutorizacao
     DBR-->>R: Compensação registrada
 
@@ -57,7 +57,7 @@ sequenceDiagram
         E->>DBE: Liberar somente a alocação desta reserva
         DBE-->>E: Commit da liberação confirmado
         E-->>R: 204 — alocação liberada
-        R->>DBR: Persistir liberação confirmada; SAGA COMPENSADA; reserva FALHA_CONFIRMACAO
+        R->>DBR: Persistir liberação confirmada#59; SAGA COMPENSADA#59; reserva FALHA_CONFIRMACAO
         DBR-->>R: Commit confirmado
         R-->>B: Resultado final FALHA_CONFIRMACAO
         B-->>G: Resultado conforme representação pública
@@ -65,7 +65,7 @@ sequenceDiagram
     else Cancelamento temporariamente indisponível ou resultado incerto
         T--xR: Sem resposta conclusiva ou falha transitória
         R->>DBR: Persistir COMPENSACAO_PENDENTE e tentativa de cancelamento
-        DBR-->>R: Pendência durável; reserva continua EM_CONFIRMACAO
+        DBR-->>R: Pendência durável#59; reserva continua EM_CONFIRMACAO
         Note over R,E: Não liberar estoque enquanto o cancelamento não estiver confirmado.
         R->>T: Repetir POST cancelar com a mesma X-Idempotency-Key
         T->>DBT: Confirmar/repetir revogação idempotente
@@ -77,7 +77,7 @@ sequenceDiagram
         E->>DBE: Liberar somente a alocação desta reserva
         DBE-->>E: Commit da liberação confirmado
         E-->>R: 204 — alocação liberada
-        R->>DBR: Persistir liberação confirmada; SAGA COMPENSADA; reserva FALHA_CONFIRMACAO
+        R->>DBR: Persistir liberação confirmada#59; SAGA COMPENSADA#59; reserva FALHA_CONFIRMACAO
         DBR-->>R: Commit confirmado
         R-->>B: Resultado final FALHA_CONFIRMACAO
         B-->>G: Resultado conforme representação pública
@@ -85,4 +85,4 @@ sequenceDiagram
     end
 ```
 
-Timeout ou perda de resposta em qualquer comando deixa o resultado incerto. Reservas não presume que a operação falhou nem inicia a etapa seguinte sem reconciliação. A repetição usa a mesma chave idempotente, conforme a regra arquitetural cuja implementação precisa ser confirmada nos participantes; os contratos atuais não definem endpoint de consulta do resultado por `reservaId`. A reserva só passa de `EM_CONFIRMACAO` para `FALHA_CONFIRMACAO` depois que os resultados relevantes estiverem resolvidos e as compensações obrigatórias tiverem sido confirmadas. A entrega física não faz parte deste fluxo.
+Timeout ou perda de resposta em qualquer comando deixa o resultado incerto. Reservas não presume que a operação falhou nem inicia a etapa seguinte sem reconciliação. A repetição usa a mesma chave idempotente; os contratos atuais não oferecem consulta dos resultados de alocação/autorização nos participantes. O GET de estado em Reservas valida somente a entrega posterior. A reserva só passa de `EM_CONFIRMACAO` para `FALHA_CONFIRMACAO` depois que os resultados relevantes estiverem resolvidos e as compensações obrigatórias tiverem sido confirmadas. A entrega física não faz parte deste fluxo.

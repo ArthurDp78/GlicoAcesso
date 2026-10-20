@@ -6,7 +6,7 @@
 **Situação:** representação dos componentes e das comunicações definidos nos documentos 00 e 01  
 **Documento normativo:** [00 — Decisões arquiteturais compartilhadas](./00-decisoes-compartilhadas.md)  
 **Documento complementar:** [01 — Decomposição e fronteiras dos microsserviços](./01-microsservicos.md)  
-**Última revisão:** 9 de outubro de 2026
+**Última revisão:** 20 de outubro de 2026
 
 > Este documento representa visualmente a arquitetura lógica do GlicoAcesso. Os limites dos serviços, as responsabilidades, os identificadores, os estados e os eventos são os definidos nos documentos 00 e 01. Se um desenho aqui parecer contradizê-los, prevalecem os documentos 00 e 01.
 
@@ -89,6 +89,7 @@ flowchart TB
     R -->|"REST interno: consultar prazoAnalise"| U
     R -->|"REST interno: validar permissão e alocar/liberar"| E
     R -->|"REST interno: preparar/cancelar autorização"| T
+    T -->|"REST interno: consultar estado antes da entrega"| R
     T -->|"Outbox: retirada.concluida.v1"| MQ
     MQ --> Qr
     MQ --> Qe
@@ -113,11 +114,11 @@ Unidades participa da validação inicial da solicitação, mas não é particip
 
 ### 4.2 Evento de retirada física e baixa de estoque
 
-O registro de entrega física ocorre em Retiradas. Após confirmar esse fato no próprio banco, Retiradas grava o evento retirada.concluida.v1 na sua Outbox para publicação pelo RabbitMQ.
+O registro de entrega física ocorre em Retiradas, na mesma transação local que grava o evento retirada.concluida.v1 na sua Outbox. Após o commit, o publicador envia o evento ao RabbitMQ.
 
 Esse evento tem **dois consumidores independentes**, cada um com sua própria fila durável:
 
-- **Reservas** consome o evento e atualiza o status da reserva de CONFIRMADA para RETIRADA.
+- **Reservas** consome o evento e atualiza o status da reserva de CONFIRMADA ou CANCELAMENTO_EM_ANDAMENTO para RETIRADA. Se a retirada venceu o cancelamento, encerra a execução de cancelamento como INTERROMPIDA, atomicamente com a deduplicação, a atualização da reserva e a auditoria, conforme o documento 00, seção 9.3.
 - **Estoque** consome o evento e, em uma transação local idempotente, valida a alocação vinculada ao reservaId, registra a saída física, encerra a alocação e grava estoque.retirada-baixada.v1 na própria Outbox.
 
 A projeção de disponibilidade consome estoque.retirada-baixada.v1 para refletir a redução do estoque físico e o encerramento da alocação. A fila de Reservas e a fila de Estoque não podem ser compartilhadas como uma única fila de consumidores concorrentes: ambos os serviços precisam receber o fato.
@@ -181,7 +182,7 @@ O cancelamento de uma reserva ativa é coordenado por Reservas. Se houver efeito
 
 ### 6.4 Registro da retirada física
 
-Após a autorização ser validada no balcão, Retiradas grava a entrega física e publica retirada.concluida.v1 pela Outbox. Reservas e Estoque recebem o evento em filas separadas. Reservas atualiza o status para RETIRADA; Estoque baixa o saldo e encerra a alocação. A baixa de Estoque gera estoque.retirada-baixada.v1 para atualizar a projeção de disponibilidade.
+Retiradas consulta `GET /internal/v1/reservas/{reservaId}/estado` e exige o estado canônico CONFIRMADA; timeout, indisponibilidade ou outro estado impedem a entrega naquele momento. Depois, revalida a autorização local, serializando com a revogação, e grava entrega e retirada.concluida.v1 na Outbox, na mesma transação. Reservas e Estoque recebem o evento em filas separadas. Reservas atualiza o status para RETIRADA; Estoque baixa o saldo e encerra a alocação. A baixa de Estoque gera estoque.retirada-baixada.v1 para atualizar a projeção de disponibilidade.
 
 ## 7. Consistência, duplicidade e recuperação
 

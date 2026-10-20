@@ -5,7 +5,7 @@
 **Versão:** 1.0  
 **Situação:** detalhamento das fronteiras definidas no contrato compartilhado  
 **Documento normativo:** [00 — Decisões arquiteturais compartilhadas](./00-decisoes-compartilhadas.md)  
-**Última revisão:** 9 de outubro de 2026
+**Última revisão:** 20 de outubro de 2026
 
 > Este documento explica quais são os quatro microsserviços de domínio do GlicoAcesso, qual problema cada um resolve, quais informações controla, quais responsabilidades não lhe pertencem e por que as fronteiras foram escolhidas. Ele detalha o contrato do documento 00; não cria uma segunda definição de estados, eventos, identificadores ou tecnologias.
 
@@ -207,6 +207,7 @@ Reservas:
 - registra a solicitação como SOLICITADA e calcula decisaoAte;
 - autoriza a unidade correspondente a decidir sobre a solicitação;
 - registra aceitação ou rejeição e seus responsáveis;
+- fornece seu estado canônico por consulta interna para Retiradas validar uma entrega;
 - ao aceitar, inicia e coordena a SAGA de confirmação;
 - envia comandos internos idempotentes a Estoque e Retiradas, mantendo o estado durável do processo;
 - altera a reserva para CONFIRMADA somente após a alocação no Estoque e a preparação da autorização em Retiradas terem sido confirmadas;
@@ -258,7 +259,8 @@ Retiradas:
 
 - prepara, de forma idempotente, a autorização solicitada pela SAGA depois que Estoque confirmou a alocação;
 - cancela uma autorização quando Reservas coordena cancelamento ou compensação;
-- valida que a autorização está apta e corresponde à reserva e à unidade envolvidas;
+- consulta o estado canônico em Reservas antes de entregar e exige `CONFIRMADA`; timeout, indisponibilidade ou outro estado impedem o registro naquele momento;
+- revalida, na transação local, que a autorização corresponde à reserva e à unidade e não foi revogada nem utilizada;
 - registra uma única vez a entrega física, com ator e instante;
 - publica o evento retirada.concluida.v1 depois de confirmar localmente a entrega;
 - assegura que cancelamento da autorização e registro da retirada física sejam mutuamente exclusivos.
@@ -313,7 +315,7 @@ Esta seção descreve responsabilidades e direção das chamadas em nível arqui
 | Reservas | Estoque | Verificar permiteReserva e executar alocação ou liberação durante a SAGA. | Comandos REST internos, idempotentes e versionados. |
 | Reservas | Retiradas | Preparar ou cancelar autorização durante confirmação, compensação ou cancelamento. | Comandos REST internos, idempotentes e versionados. |
 | Estoque | Consumidores interessados | Informar alterações persistidas que atualizam disponibilidade e projeções. | Eventos publicados por Outbox no RabbitMQ; consumidores deduplicam por eventId. |
-| Retiradas | Reservas | Informar que a entrega presencial foi registrada. | Evento retirada.concluida.v1 publicado por Outbox; Reservas atualiza seu status ao consumi-lo. |
+| Retiradas | Reservas | Verificar a confirmação antes da entrega e informar a retirada após o registro. | GET interno do estado canônico antes da entrega; evento retirada.concluida.v1 publicado por Outbox depois dela. |
 
 Os clientes chamam o API Gateway, e o Gateway encaminha cada público ao BFF correspondente. Clientes não chamam APIs dos microsserviços de domínio diretamente. Os BFFs podem agregar respostas para uma tela, mas não possuem regras de domínio, não gravam nos bancos dos microsserviços e não orquestram a SAGA.
 
@@ -380,15 +382,15 @@ Os detalhes ficam nos documentos OpenAPI e 02–11 indicados na estrutura compar
 
 ### 13.1 Decisão de integração para a retirada física
 
-Depois que Retiradas confirmar a entrega física, publica `retirada.concluida.v1` pela própria Outbox. RabbitMQ entrega o evento em filas duráveis independentes: uma de Reservas e outra de Estoque. Assim, os dois serviços processam o fato sem competir pela mesma mensagem.
+Retiradas registra a entrega física e o evento `retirada.concluida.v1` na própria Outbox, na mesma transação local. Após o commit, o publicador envia o evento ao RabbitMQ, que o entrega em filas duráveis independentes: uma de Reservas e outra de Estoque. Assim, os dois serviços processam o fato sem competir pela mesma mensagem.
 
-Reservas muda a reserva de `CONFIRMADA` para `RETIRADA`. Estoque valida a alocação ativa vinculada ao `reservaId` e, em transação local idempotente, registra a saída física, encerra a alocação e grava `estoque.retirada-baixada.v1` em sua Outbox.
+Reservas muda a reserva de `CONFIRMADA` ou `CANCELAMENTO_EM_ANDAMENTO` para `RETIRADA`. Se a retirada venceu um cancelamento em andamento, encerra a execução de cancelamento como `INTERROMPIDA` na mesma transação local da deduplicação, da atualização da reserva e da auditoria, conforme o documento 00, seção 9.3. Estoque valida a alocação ativa vinculada ao `reservaId` e, em transação local idempotente, registra a saída física, encerra a alocação como consumida e grava `estoque.retirada-baixada.v1` em sua Outbox.
 
 O payload de `retirada.concluida.v1` inclui `retiradaId`, `reservaId`, `unidadeId`, `itemId` e `quantidade`; não inclui dados pessoais do cidadão. Estoque deduplica pelo `eventId` e confere se unidade, item e quantidade correspondem à alocação ativa. Se houver divergência, não realiza baixa parcial ou arbitrária: registra uma ocorrência operacional observável para reconciliação e reprocessamento.
 
 O payload de `estoque.retirada-baixada.v1` inclui `retiradaId`, `reservaId`, `unidadeId`, `itemId` e `quantidadeBaixada` positiva. Esse valor representa tanto a redução do estoque físico quanto o encerramento da alocação associada. A projeção de disponibilidade aplica ambos os efeitos ao consumir o evento.
 
-Cada serviço altera apenas seu banco. Se o evento de Retiradas chegar repetido, o consumidor não pode debitar o estoque novamente. A semântica e o envelope dos eventos seguem o documento 00; detalhes de filas, persistência e consumidores ficam nos documentos das Pessoas 2 e 4.
+Cada serviço altera apenas seu banco. Se o evento de Retiradas chegar repetido, o consumidor não pode debitar o estoque novamente. A semântica e o envelope dos eventos seguem o documento 00; detalhes de filas, persistência e consumidores ficam nos documentos de Guilerme e Lana.
 
 ## 14. Critério de conformidade
 

@@ -16,7 +16,7 @@ sequenceDiagram
     R->>E: AlocarEstoque(reservaId, ...)
     alt Estoque rejeita por regra de negócio
         E-->>R: Rejeição definitiva (ex.: saldo insuficiente)
-        R->>R: Reserva FALHA_CONFIRMACAO; SAGA COMPENSADA
+        R->>R: Reserva FALHA_CONFIRMACAO#59; SAGA COMPENSADA
     else Estoque confirma alocação
         E-->>R: Alocação confirmada
         R->>T: PrepararAutorizacao(reservaId, ...)
@@ -25,7 +25,7 @@ sequenceDiagram
             R->>E: LiberarAlocacao(reservaId)
             E->>E: Liberar somente a alocação desta reserva
             E-->>R: Liberação confirmada
-            R->>R: Reserva FALHA_CONFIRMACAO; SAGA COMPENSADA
+            R->>R: Reserva FALHA_CONFIRMACAO#59; SAGA COMPENSADA
         else Retiradas confirma autorização
             T-->>R: Autorização confirmada
             R->>R: Finalização local falha de forma definitiva
@@ -34,7 +34,7 @@ sequenceDiagram
             T-->>R: Cancelamento confirmado
             R->>E: LiberarAlocacao(reservaId)
             E-->>R: Liberação confirmada
-            R->>R: Reserva FALHA_CONFIRMACAO; SAGA COMPENSADA
+            R->>R: Reserva FALHA_CONFIRMACAO#59; SAGA COMPENSADA
         end
     end
 ```

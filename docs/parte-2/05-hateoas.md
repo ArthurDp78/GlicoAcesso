@@ -37,6 +37,9 @@ A unidade aceitou o pedido e a SAGA está em andamento.
 
 ### 2.3. Estado: `CONFIRMADA`
 A alocação de estoque e a preparação da autorização de retirada foram concluídas com sucesso.
+
+O link de consulta da autorização não substitui a validação da entrega: ao registrar a retirada, Retiradas consulta o estado canônico de Reservas e exige `CONFIRMADA`, além de revalidar a autorização local. Falha na consulta impede a entrega naquele momento, conforme o documento 00, seção 9.8.
+
 *   **Links para o Cidadão:**
     *   `self`: Link para recarregar a reserva.
     *   `cancelar`: Inicia o cancelamento e a reversão de efeitos.
@@ -78,7 +81,7 @@ Abaixo estão exemplos de como o microsserviço de Reservas devolve as informaç
     "rejeitar": {
       "href": "/api/unidade/v1/reservas/a1b2c3d4-5678-90ab-cdef-1234567890ab/decisao",
       "method": "POST",
-      "body": { "decisao": "REJEITADA" }
+      "body": { "decisao": "REJEITAR" }
     },
     "cancelar": {
       "href": "/api/unidade/v1/reservas/a1b2c3d4-5678-90ab-cdef-1234567890ab/cancelar",

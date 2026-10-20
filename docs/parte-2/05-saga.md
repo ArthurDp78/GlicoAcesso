@@ -46,7 +46,7 @@ Reservas só inicia a confirmação quando a solicitação existe e está `SOLIC
 | 2 — Autorizar | Reservas envia a Retiradas os dados da reserva e a chave idempotente. | Retiradas confirma a autorização no próprio banco. |
 | 3 — Finalizar | Reservas grava `CONFIRMADA` e `CONCLUIDA` em transação local. | Persistência local confirmada após as duas respostas de sucesso. |
 
-**Pós-condição de sucesso:** há uma alocação ativa pertencente à reserva, uma autorização utilizável vinculada à reserva, e Reservas registra `status = CONFIRMADA` e execução concluída.
+**Pós-condição de sucesso:** há uma alocação ativa e uma autorização persistida vinculadas à reserva; Reservas registra `status = CONFIRMADA` e execução concluída. No momento da entrega, Retiradas ainda exige consulta canônica de `CONFIRMADA` e revalida a autorização local, conforme o documento 00, seção 9.8.
 
 **Pós-condição de falha definitiva:** a reserva só pode passar de `EM_CONFIRMACAO` para `FALHA_CONFIRMACAO` quando todos os resultados relevantes estiverem resolvidos e todos os efeitos distribuídos confirmados tiverem sido compensados. Se não houve efeito distribuído, não há operação remota a compensar; aplica-se a convenção canônica de encerrar a SAGA como `COMPENSADA` e a reserva como `FALHA_CONFIRMACAO`. Se houver efeito, a execução permanece não terminal até a respectiva compensação ser confirmada.
 
@@ -69,14 +69,15 @@ Os caminhos abaixo são os declarados nos OpenAPI atuais. Os nomes das operaçõ
 | Liberar alocação | Estoque: `DELETE /internal/v1/alocacoes/{reservaId}` | Path `reservaId`; header `X-Idempotency-Key` | `204` |
 | Preparar autorização | Retiradas: `POST /internal/v1/autorizacoes` | `sagaId`, `reservaId`, `unidadeId`, `itemId`, `quantidade`, `idempotencyKey` | `201` |
 | Cancelar autorização | Retiradas: `POST /internal/v1/autorizacoes/{reservaId}/cancelar` | Path `reservaId`; header `X-Idempotency-Key` | `200`; `409` se a entrega já foi registrada |
+| Consultar estado para retirada (fora da SAGA) | Reservas: `GET /internal/v1/reservas/{reservaId}/estado` | Path `reservaId`; identidade de serviço de Retiradas; `X-Correlation-Id` opcional; sem chave idempotente | `200` com `reservaId` e `status`; `401`; `403`; `404`; `503` |
 
 **O que o OpenAPI declara:** caminhos, métodos, campos de entrada e códigos/resumos de resposta listados acima. Os schemas atuais não especificam corpos detalhados de resposta para todos os comandos nem descrevem integralmente a semântica de repetição.
 
 **O que as decisões arquiteturais estabelecem:** os comandos devem ser idempotentes; a alocação e a autorização são únicas por reserva; repetir uma liberação ou cancelamento não duplica efeitos; timeout é resultado incerto; compensações seguem ordem inversa. Essas são regras arquiteturais do documento 00 e da especificação 04, não evidência de implementação executável.
 
-**O que requer implementação ou confirmação da Pessoa 2:** persistir e aplicar as chaves idempotentes no serviço, devolver resultado compatível em retries, detectar chave igual com conteúdo divergente e harmonizar o uso de `idempotencyKey` no corpo dos comandos de criação com `X-Idempotency-Key` nas compensações. Os YAMLs mostram esses campos, mas não comprovam que o comportamento está implementado.
+**O que requer implementação ou confirmação de Guilerme:** persistir e aplicar as chaves idempotentes no serviço, devolver resultado compatível em retries, detectar chave igual com conteúdo divergente e harmonizar o uso de `idempotencyKey` no corpo dos comandos de criação com `X-Idempotency-Key` nas compensações. Os YAMLs mostram esses campos, mas não comprovam que o comportamento está implementado.
 
-Os YAMLs não especificam uma operação interna para consultar o resultado de alocação ou autorização por `reservaId`. Esta especificação não presume tal endpoint. Após timeout, a recuperação depende de repetir o mesmo comando de forma idempotente ou de uma capacidade de consulta que venha a ser formalmente contratada. A decisão compartilhada 00 menciona consulta por `reservaId`, enquanto o contrato atual não apresenta essa operação; fica registrada uma pendência de alinhamento, sem alterar o contrato.
+Os YAMLs não especificam consulta do resultado de alocação em Estoque ou de autorização em Retiradas por `reservaId`; após timeout desses comandos, a recuperação depende da repetição idempotente. O GET de estado em Reservas valida a entrega e não reconcilia esses efeitos remotos.
 
 ## 5. Estados de negócio e estados da execução
 
@@ -116,9 +117,9 @@ Uma compensação neutraliza um efeito de negócio já confirmado. Não apaga se
 | Início falha antes de persistir a execução | Nenhum efeito remoto deve ter sido enviado | Não chamar participantes; reconciliar a persistência local antes de permitir nova tentativa se o resultado local for incerto | Confirmar se a transação de início foi aceita |
 | Estoque rejeita alocação definitivamente por saldo/regra | Nenhuma alocação confirmada | Não chamar Retiradas; sem efeito distribuído, nenhuma compensação remota é necessária | Após resolver o resultado, encerrar conforme a convenção: SAGA `COMPENSADA`, reserva `FALHA_CONFIRMACAO` |
 | Estoque confirma e etapa posterior falha definitivamente; não há autorização criada | Alocação ativa | `DELETE /internal/v1/alocacoes/{reservaId}` com chave idempotente | Resposta de liberação confirmada; liberar somente a alocação da reserva |
-| Autorização preparada e falha posterior definitiva | Alocação e autorização ativas | Primeiro cancelar autorização em Retiradas. Só após confirmação, liberar alocação em Estoque | Confirmar cada operação na ordem inversa dos efeitos |
-| Preparação da autorização tem resultado incerto | Alocação confirmada; autorização pode existir | Repetir `POST /internal/v1/autorizacoes` com a mesma chave para reconciliar. Se a decisão final for abandonar, cancelar eventual autorização e depois liberar estoque | Não liberar estoque enquanto a autorização puder estar ativa |
-| Cancelamento da autorização falha temporariamente ou fica incerto | Autorização pode continuar utilizável; alocação ativa | Manter compensação pendente e repetir/reconciliar o cancelamento com a mesma chave. Não chamar a liberação do Estoque ainda | Confirmar a revogação antes de prosseguir |
+| Autorização preparada e falha posterior definitiva | Alocação e autorização persistidas | Primeiro cancelar autorização em Retiradas. Só após confirmação, liberar alocação em Estoque | Confirmar cada operação na ordem inversa dos efeitos |
+| Preparação da autorização tem resultado incerto | Alocação confirmada; autorização pode existir | Repetir `POST /internal/v1/autorizacoes` com a mesma chave para reconciliar. Se a decisão final for abandonar, cancelar eventual autorização e depois liberar estoque | Não liberar estoque antes de confirmar a revogação da autorização eventualmente criada |
+| Cancelamento da autorização falha temporariamente ou fica incerto | Autorização pode continuar sem revogação; alocação ativa | Manter compensação pendente e repetir/reconciliar o cancelamento com a mesma chave. Não chamar a liberação do Estoque ainda | Confirmar a revogação antes de prosseguir |
 | Cancelamento da autorização confirmado; liberação do estoque falha ou fica incerta | Autorização revogada; alocação pode continuar ativa | Repetir a liberação idempotente em Estoque | Confirmar a liberação antes de declarar compensação concluída |
 | Finalização local falha com resultado incerto | Alocação e autorização confirmadas; `CONFIRMADA` pode já ter sido gravada | Consultar o próprio estado local após recuperar conectividade e repetir a finalização se necessário; não compensar às cegas | Coerência entre reserva e execução após reconciliação |
 | Qualquer compensação permanece indisponível | Efeito original pode continuar ativo | Registrar pendência, erro e tentativa; agendar nova tentativa com a mesma chave | Não registrar `COMPENSADA` nem `FALHA_CONFIRMACAO` enquanto faltar confirmação |
@@ -139,7 +140,7 @@ Para qualquer compensação:
 
 ### Timeout ou perda de resposta
 
-Timeout, conexão interrompida ou resposta perdida significam resultado desconhecido. Reservas não presume falha e não inicia uma compensação que possa contradizer uma operação já efetivada. Como os contratos atuais não oferecem consulta interna de estado, a alternativa contratualmente disponível depende da idempotência exigida pela arquitetura: repetir o mesmo comando e reconciliar pela resposta. Se esse comportamento ainda não estiver implementado ou confirmado, a execução permanece pendente até alinhamento ou reconciliação operacional; não se inventa endpoint de consulta.
+Timeout, conexão interrompida ou resposta perdida nos comandos da SAGA significam resultado desconhecido. Reservas não presume falha nem compensa às cegas: repete o comando idempotente para reconciliar os efeitos em Estoque ou Retiradas. O GET de estado da Reserva não substitui essa recuperação. Se a consulta falhar no balcão, Retiradas não registra a entrega e uma nova tentativa exige nova consulta.
 
 ### Queda e reinício do orquestrador
 
@@ -165,9 +166,9 @@ Detalhes internos, credenciais, stack traces e dados pessoais desnecessários n�
 
 ## 10. Pendências de alinhamento
 
-- **Pessoa 1:** confirmar que este complemento permanece subordinado ao documento normativo 00 e alinhado ao fluxo e aos diagramas existentes.
-- **Pessoa 2:** confirmar a semântica e a implementação da idempotência dos comandos; avaliar uma consulta contratada para resultados incertos, pois o documento 00 a menciona mas os YAMLs atuais não definem essa operação; harmonizar o uso de `idempotencyKey` no corpo dos comandos de criação com `X-Idempotency-Key` nas compensações. O YAML do BFF Unidade também apresenta conteúdo concatenado que precisa de revisão. Esta entrega não altera contratos nem corrige esse arquivo.
-- **Pessoa 4:** confirmar como o serviço de Reservas persistirá execução, efeitos confirmados, chaves idempotentes, tentativas, compensações pendentes e retomada após reinício.
+- **Marcos:** confirmar que este complemento permanece subordinado ao documento normativo 00 e alinhado ao fluxo e aos diagramas existentes.
+- **Guilerme:** confirmar a semântica e a implementação da idempotência dos comandos; avaliar consultas dos resultados de alocação/autorização, ainda ausentes nos contratos dos participantes; harmonizar `idempotencyKey` no corpo das criações com `X-Idempotency-Key` nas compensações. O GET de estado de Reservas é exclusivo da validação de entrega.
+- **Lana:** confirmar como o serviço de Reservas persistirá execução, efeitos confirmados, chaves idempotentes, tentativas, compensações pendentes e retomada após reinício.
 
 ## 11. Referências e diagramas complementares
 

@@ -7,7 +7,7 @@
 **Documento normativo:** [00 — Decisões arquiteturais compartilhadas](./00-decisoes-compartilhadas.md)  
 **Documento de fronteiras:** [01 — Decomposição e fronteiras dos microsserviços](./01-microsservicos.md)  
 **Diagrama de componentes:** [02 — Diagrama de arquitetura](./02-diagrama-arquitetura.md)  
-**Última revisão:** 9 de outubro de 2026
+**Última revisão:** 20 de outubro de 2026
 
 > Este documento detalha o fluxo de negócio da reserva. A SAGA, seus comandos, compensações, estados internos, timeouts e recuperação são especificados no documento [04 — SAGA](./04-saga.md). Em caso de divergência, prevalecem as decisões do documento 00.
 
@@ -67,8 +67,13 @@ flowchart TD
     J -->|"Falha compensada"| L["FALHA_CONFIRMACAO"]
     K --> M{"Cancelamento antes da entrega?"}
     M -->|"Sim"| N["CANCELAMENTO_EM_ANDAMENTO"]
-    N --> O["CANCELADA após operações aplicáveis"]
-    M -->|"Não, entrega registrada"| P["Retiradas publica retirada.concluida.v1"]
+    N -->|"Cancelamento confirmado"| O["CANCELADA após operações aplicáveis"]
+    M -->|"Não"| V["Retiradas consulta estado canônico em Reservas"]
+    V --> S{"Estado CONFIRMADA?"}
+    V -->|"Timeout ou indisponibilidade"| X["Não registra entrega"]
+    S -->|"Não"| X
+    S -->|"Sim"| P["Retiradas revalida autorização e registra entrega e Outbox"]
+    N -->|"Retirada vence após consulta de CONFIRMADA"| P
     P --> Q["Reservas atualiza para RETIRADA"]
 ```
 
@@ -152,7 +157,7 @@ O cancelamento é permitido antes da retirada física enquanto a reserva estiver
 |---|---|
 | `SOLICITADA` | Reservas cancela localmente, sem chamar Estoque ou Retiradas, e grava `CANCELADA`. |
 | `EM_CONFIRMACAO` | Reservas registra `CANCELAMENTO_EM_ANDAMENTO`, interrompe etapas futuras e coordena a compensação dos efeitos que já tenham sido confirmados. Só grava `CANCELADA` após concluir as operações aplicáveis. |
-| `CONFIRMADA` | Reservas registra `CANCELAMENTO_EM_ANDAMENTO`, pede a Retiradas que cancele a autorização e a Estoque que libere a alocação. Só grava `CANCELADA` após confirmar as operações aplicáveis. |
+| `CONFIRMADA` | Reservas registra `CANCELAMENTO_EM_ANDAMENTO`, pede a Retiradas que cancele a autorização e, somente após confirmar a revogação, pede a Estoque que libere a alocação. Só grava `CANCELADA` após confirmar as operações aplicáveis; se a retirada vencer, segue o fluxo da seção 9. |
 | `CANCELAMENTO_EM_ANDAMENTO` | Não inicia um segundo cancelamento concorrente. Retorna o estado atual e permite consultar o andamento. |
 | `REJEITADA`, `CANCELADA`, `EXPIRADA`, `FALHA_CONFIRMACAO` ou `RETIRADA` | Recusa o cancelamento adicional porque a reserva está em estado terminal. |
 
@@ -161,18 +166,20 @@ O sistema não comunica `CANCELADA` antes de confirmar a revogação da autoriza
 ## 9. Fluxo E — retirada física
 
 1. O profissional da unidade apresenta/valida a autorização da reserva no serviço de Retiradas.
-2. Retiradas confirma que a autorização está válida, corresponde à unidade e à reserva e ainda não foi cancelada nem usada.
+2. Retiradas obtém `reservaId` da autorização e consulta `GET /internal/v1/reservas/{reservaId}/estado`. Só prossegue com estado canônico `CONFIRMADA`; timeout, indisponibilidade, reserva inexistente ou outro estado impedem a entrega naquele momento. Na transação local, revalida que a autorização corresponde à unidade e à reserva e não foi revogada nem usada.
 3. Retiradas registra a entrega física uma única vez em seu próprio banco e grava `retirada.concluida.v1` na mesma transação local, pela Outbox.
 4. A Outbox publica o evento no RabbitMQ. Reservas e Estoque recebem cópias por filas duráveis independentes.
-5. Reservas deduplica por `eventId` e atualiza o estado de negócio de `CONFIRMADA` para `RETIRADA` em seu próprio banco.
+5. Reservas deduplica por `eventId` e atualiza o estado de negócio de `CONFIRMADA` ou `CANCELAMENTO_EM_ANDAMENTO` para `RETIRADA` em seu próprio banco. No segundo caso, encerra a execução de cancelamento como `INTERROMPIDA` e registra a auditoria correspondente, na mesma transação local da deduplicação e da atualização da reserva.
 6. Estoque deduplica por `eventId`, valida a alocação ativa pelo `reservaId` e confere `unidadeId`, `itemId` e `quantidade`. Em uma única transação local, registra a saída física, baixa a quantidade, encerra a alocação e grava `estoque.retirada-baixada.v1` na sua Outbox.
 7. A projeção de disponibilidade consome `estoque.retirada-baixada.v1` e atualiza sua leitura.
 
 O evento de retirada contém `retiradaId`, `reservaId`, `unidadeId`, `itemId` e `quantidade`; não contém dados pessoais do cidadão. O evento é um fato já ocorrido e não um comando para realizar a entrega.
 
-Durante o processamento assíncrono pode haver um intervalo em que Retiradas já registrou a entrega, mas Reservas ainda apresenta `CONFIRMADA` ou Estoque ainda mantém a alocação ativa. Até o consumidor de Estoque concluir a transação, a quantidade permanece alocada e não pode ser oferecida para outra solicitação.
+Durante o processamento assíncrono pode haver um intervalo em que Retiradas já registrou a entrega, mas Reservas ainda apresenta `CONFIRMADA` ou `CANCELAMENTO_EM_ANDAMENTO`, ou Estoque ainda mantém a alocação ativa. Até o consumidor de Estoque concluir a transação, a quantidade permanece alocada e não pode ser oferecida para outra solicitação.
 
-Se a entrega física for registrada primeiro, um cancelamento concorrente deve ser recusado. Se o cancelamento da autorização concluir primeiro, a autorização não pode ser usada para registrar a entrega. Retiradas serializa essas operações para que somente um resultado vença.
+Se a entrega física for registrada primeiro, um cancelamento concorrente deve ser recusado. Se o cancelamento da autorização concluir primeiro, a autorização não pode ser usada para registrar a entrega. Retiradas serializa essas operações para que somente um resultado vença. A consulta não bloqueia a Reserva: a corrida continua possível se o cancelamento começar depois da leitura de `CONFIRMADA`, conforme o documento 00, seção 9.8.
+
+Quando a retirada vence, Reservas não envia `LiberarAlocacao`: Estoque baixa o físico e encerra a alocação como consumida ao processar o evento. Respostas tardias ou retries não podem retomar a execução de cancelamento encerrada nem mudar a reserva de `RETIRADA` para `CANCELADA`. O tratamento da execução está detalhado no documento 04, seção 5.3.
 
 ## 10. Estados de negócio
 
@@ -190,6 +197,7 @@ O estado de negócio pertence a Reservas. Os estados internos da SAGA são difer
 | `EM_CONFIRMACAO` | Cancelamento solicitado | `CANCELAMENTO_EM_ANDAMENTO` | Não |
 | `CONFIRMADA` | Cancelamento solicitado | `CANCELAMENTO_EM_ANDAMENTO` | Não |
 | `CANCELAMENTO_EM_ANDAMENTO` | Operações aplicáveis de cancelamento confirmadas | `CANCELADA` | Sim |
+| `CANCELAMENTO_EM_ANDAMENTO` | `retirada.concluida.v1` comprova que a retirada física venceu o cancelamento | `RETIRADA` | Sim |
 | `CONFIRMADA` | Retirada concluída consumida por Reservas | `RETIRADA` | Sim |
 
 Estados terminais: `REJEITADA`, `CANCELADA`, `EXPIRADA`, `FALHA_CONFIRMACAO` e `RETIRADA`. Não há reabertura neste escopo. Para tentar novamente, o cidadão cria uma nova solicitação.
@@ -257,7 +265,7 @@ O fluxo está de acordo com as decisões compartilhadas quando:
 - a aceitação inicia a SAGA, mas não informa confirmação antes da alocação e da autorização;
 - expiração ocorre somente em `SOLICITADA` e disputa atomicamente com a decisão;
 - cidadão pode cancelar a própria solicitação ativa antes da entrega; profissional da unidade também pode cancelar, com justificativa registrada;
-- cancelamento distribuído só termina em `CANCELADA` após as operações aplicáveis serem confirmadas;
+- cancelamento bem-sucedido só leva a `CANCELADA` após as operações aplicáveis serem confirmadas; se a retirada vencer, a reserva termina em `RETIRADA` e a execução de cancelamento em `INTERROMPIDA`;
 - a retirada física é registrada em Retiradas e comunicada por `retirada.concluida.v1` via Outbox;
 - Reservas e Estoque recebem o evento em filas separadas e atualizam somente seus próprios bancos;
 - Estoque baixa a quantidade e encerra a alocação em uma transação local idempotente;

@@ -3,7 +3,7 @@
 **Etapa:** 2 — Arquitetura  
 **Versão:** 1.0  
 **Situação:** contrato-base para os documentos da Etapa 2  
-**Última revisão:** 9 de outubro de 2026
+**Última revisão:** 20 de outubro de 2026
 
 > Este documento estabelece a linguagem e as decisões que devem ser usadas por todas as pessoas do grupo. Os documentos de APIs, persistência, SAGA, Gateway e BFFs detalham estas decisões; não podem redefinir o mesmo conceito de outra forma. Se uma decisão precisar mudar, a alteração deve ser registrada aqui e propagada aos documentos afetados antes de ser considerada válida.
 
@@ -66,7 +66,7 @@ Cada solicitação tem um cidadão solicitante e uma unidade de retirada. O vín
 | Disponibilidade | Quantidade calculada para consulta: estoque físico menos alocações ativas, conforme a projeção de leitura. Pode estar defasada. |
 | Reserva | Solicitação de um item e quantidade em uma unidade, identificada por `reservaId`. Cada reserva contém exatamente um item. |
 | Alocação | Retenção de quantidade no Estoque, vinculada a uma única reserva. Não representa entrega física. |
-| Autorização de retirada | Registro criado pelo serviço de Retiradas após a alocação; permite que a unidade reconheça a reserva no balcão. Não significa que o item foi entregue. |
+| Autorização de retirada | Registro criado por Retiradas após a alocação. Sua existência não basta para entregar: no balcão, Retiradas consulta Reservas e exige estado canônico `CONFIRMADA`, além de autorização local não revogada nem utilizada. |
 | Retirada | Entrega presencial efetivamente registrada pela unidade. |
 | SAGA | Processo distribuído de confirmação de uma reserva, coordenado pelo serviço de Reservas e compensado quando uma etapa posterior falha. |
 | Compensação | Operação de negócio que desfaz o efeito de uma etapa concluída. Não é rollback de uma transação única entre bancos. |
@@ -112,6 +112,7 @@ flowchart LR
     BU --> RT["Retiradas"]
     RE -->|"REST interno: comandos da SAGA"| ES
     RE -->|"REST interno: comandos da SAGA"| RT
+    RT -->|"REST interno: consultar estado antes da entrega"| RE
     ES -->|"Outbox → RabbitMQ"| MQ["Mensageria"]
     RT -->|"Outbox → RabbitMQ"| MQ
     MQ -->|"eventos → projeções"| ES
@@ -125,6 +126,7 @@ O diagrama é lógico: cada microsserviço tem sua instância PostgreSQL indepen
 - O Gateway expõe apenas os dois BFFs. Clientes não chamam microsserviços de domínio diretamente.
 - Os BFFs fazem consultas e comandos próprios de cada tipo de cliente e podem agregar respostas. Eles não implementam a SAGA.
 - A confirmação da SAGA é coordenada por **Reservas**, que envia comandos internos REST a Estoque e Retiradas.
+- Para registrar a entrega, Retiradas consulta o estado canônico de Reservas por REST interno. Essa dependência síncrona mantém a validação simples e não altera os participantes da SAGA de confirmação.
 - Mensagens RabbitMQ propagam fatos para projeções e atualização de estados derivados. Elas não substituem o comando de confirmação nem transferem a coordenação da SAGA para os participantes.
 - As APIs públicas são versionadas sob `/api/cidadao/v1` e `/api/unidade/v1`. As chamadas entre serviços usam rotas internas versionadas sob `/internal/v1`; essas rotas não são publicadas pelo Gateway.
 - As APIs usam JSON UTF-8. Os nomes dos campos JSON são `camelCase`; identificadores são UUID em formato textual; instantes são ISO 8601 em UTC.
@@ -171,7 +173,7 @@ Identificadores de outras fronteiras são tratados como referências opacas. Um 
 6. Estoque tenta alocar atomicamente a quantidade solicitada para `reservaId`. A verificação é feita no modelo de escrita atual, não na projeção de disponibilidade.
 7. Se a alocação funcionar, Retiradas cria uma autorização de retirada ligada a `reservaId` e `autorizacaoId`.
 8. Se ambas as etapas forem bem-sucedidas, Reservas grava `CONFIRMADA` e a SAGA termina com sucesso.
-9. No balcão, o profissional valida a autorização e registra a entrega efetiva no serviço de Retiradas. A reserva passa a `RETIRADA` após o evento de retirada concluída ser processado por Reservas.
+9. No balcão, Retiradas consulta Reservas e só prossegue se o estado canônico retornado for `CONFIRMADA`. Revalida a autorização na transação local da entrega, serializando com sua revogação. A reserva passa a `RETIRADA` após o evento de retirada concluída ser processado por Reservas.
 
 O aceite pela unidade é uma decisão anterior à SAGA; a confirmação só é comunicada ao cidadão após a alocação e a preparação da autorização. Assim, “aceita pela unidade” não equivale a “confirmada”.
 
@@ -188,7 +190,9 @@ O campo `status` é o estado de negócio visível da reserva. Somente estas tran
 | `EM_CONFIRMACAO` | Estoque alocado, autorização criada e finalização local gravada | `CONFIRMADA` |
 | `EM_CONFIRMACAO` | Uma etapa falha e todas as compensações necessárias terminam | `FALHA_CONFIRMACAO` |
 | `EM_CONFIRMACAO` | Cidadão cancela ou profissional autorizado cancela com justificativa; efeitos parciais são compensados | `CANCELAMENTO_EM_ANDAMENTO`, depois `CANCELADA` |
-| `CONFIRMADA` | Cidadão cancela ou profissional autorizado cancela com justificativa; autorização cancelada e alocação liberada | `CANCELAMENTO_EM_ANDAMENTO`, depois `CANCELADA` |
+| `CONFIRMADA` | Cidadão solicita cancelamento ou profissional autorizado solicita cancelamento com justificativa | `CANCELAMENTO_EM_ANDAMENTO` |
+| `CANCELAMENTO_EM_ANDAMENTO` | Cancelamento da autorização e liberação da alocação confirmados, quando aplicáveis | `CANCELADA` |
+| `CANCELAMENTO_EM_ANDAMENTO` | `retirada.concluida.v1` comprova que a retirada física venceu o cancelamento | `RETIRADA` |
 | `CONFIRMADA` | Retirada física registrada e evento processado | `RETIRADA` |
 
 Estados terminais: `REJEITADA`, `CANCELADA`, `EXPIRADA`, `FALHA_CONFIRMACAO` e `RETIRADA`. No escopo desta etapa, não há reabertura de uma reserva terminal; deve ser criada outra solicitação.
@@ -200,7 +204,7 @@ Regras adicionais:
 - A expiração automática ocorre somente enquanto a reserva está `SOLICITADA`: quando `agora >= decisaoAte` e nenhuma decisão venceu a corrida, Reservas muda o estado para `EXPIRADA`. O prazo é configurado por unidade em `prazoAnalise` e copiado para `decisaoAte` ao criar a solicitação. Como a SAGA ainda não começou, não há estoque a liberar. Reserva `EM_CONFIRMACAO` não expira por relógio: é finalizada ou cancelada pela SAGA.
 - `CONFIRMADA` pode ser cancelada, mas o cancelamento coordena a revogação da autorização e a liberação da alocação antes de mudar para `CANCELADA`.
 - `CANCELAMENTO_EM_ANDAMENTO` informa que o pedido foi aceito, mas efeitos distribuídos ainda estão sendo revertidos. Só passa a `CANCELADA` depois da confirmação de todas as operações aplicáveis.
-- Retirada e cancelamento são concorrentes: Retiradas deve garantir que apenas um deles possa vencer. Se a entrega física for registrada primeiro, o cancelamento é recusado; se o cancelamento concluir primeiro, a autorização não pode mais ser usada.
+- Retirada e cancelamento são concorrentes: Retiradas deve garantir que apenas um deles possa vencer. Se a entrega física for registrada primeiro, o cancelamento é recusado e o consumo de `retirada.concluida.v1` leva a reserva de `CONFIRMADA` ou `CANCELAMENTO_EM_ANDAMENTO` para `RETIRADA`; se o cancelamento concluir primeiro, a autorização não pode mais ser usada.
 - `RETIRADA`, `REJEITADA`, `CANCELADA`, `EXPIRADA` e `FALHA_CONFIRMACAO` não voltam a estados anteriores.
 - Os estados da execução da SAGA são distintos do estado de negócio e são descritos na seção 9. Uma SAGA com retry ou compensação pendente não deve ser apresentada como falha final.
 
@@ -220,7 +224,7 @@ Escolhemos orquestração porque a sequência e a regra de compensação são co
 |---:|---|---|---|---|
 | 0 | Reservas | `AceitarReserva` | Registra decisão da unidade, muda para `EM_CONFIRMACAO` e persiste a SAGA como `EM_EXECUCAO`. | Se a transação local não confirmar, não se envia comando aos participantes. |
 | 1 | Estoque | `AlocarEstoque(reservaId, unidadeId, itemId, quantidade)` | Valida o saldo canônico e cria uma alocação ativa. Uma reserva não pode ter duas alocações ativas. | `LiberarAlocacao(reservaId)`, que libera apenas a alocação da reserva correspondente. |
-| 2 | Retiradas | `PrepararAutorizacao(reservaId, unidadeId, itemId, quantidade)` | Cria autorização apta a ser usada no balcão; não registra entrega. | `CancelarAutorizacao(reservaId)`, idempotente e sem apagar histórico. |
+| 2 | Retiradas | `PrepararAutorizacao(reservaId, unidadeId, itemId, quantidade)` | Persiste a autorização e conclui sua etapa, sem permitir entrega antes da consulta posterior de `CONFIRMADA` em Reservas. | `CancelarAutorizacao(reservaId)`, idempotente e sem apagar histórico. |
 | 3 | Reservas | `FinalizarConfirmacao(reservaId)` | Muda a reserva para `CONFIRMADA` e a SAGA para `CONCLUIDA`. | Se a persistência local falhar temporariamente, repetir a finalização idempotente. Se a falha for definitiva, compensar Retiradas e Estoque. |
 
 As operações inversas são executadas na ordem inversa dos efeitos concluídos: cancelar autorização e depois liberar alocação. A SAGA não deve liberar estoque antes de cancelar ou confirmar o estado da autorização.
@@ -231,10 +235,12 @@ O cancelamento após o início da confirmação é coordenado por Reservas e usa
 
 1. Reservas valida condicionalmente que a reserva ainda não está `RETIRADA` e registra `CANCELAMENTO_EM_ANDAMENTO`, o ator e o instante do pedido. Se o ator for profissional da unidade, exige e registra uma justificativa não vazia.
 2. Se existir autorização, Reservas envia a Retiradas `CancelarAutorizacao(reservaId)`.
-3. Se existir alocação ativa, Reservas envia ao Estoque `LiberarAlocacao(reservaId)`.
+3. Se existir alocação ativa e o cancelamento da autorização, quando existente, tiver sido confirmado, Reservas envia ao Estoque `LiberarAlocacao(reservaId)`.
 4. Depois de confirmar todas as operações aplicáveis, Reservas registra `CANCELADA`.
 5. Se um participante estiver indisponível ou o resultado for incerto, manter o cancelamento em andamento e repetir/consultar usando a mesma chave idempotente. Não informar que a reserva foi cancelada antes da reconciliação.
 6. Retiradas deve tornar mutuamente exclusivos o cancelamento da autorização e o registro da retirada física. Se `RegistrarRetirada` tiver sido confirmado primeiro, o cancelamento falha por conflito de estado; se o cancelamento concluir primeiro, a autorização não pode ser usada para retirar o item.
+
+Se a retirada física vencer o cancelamento de uma reserva confirmada, Reservas não envia `LiberarAlocacao`. Ao consumir `retirada.concluida.v1`, deve, na mesma transação local, deduplicar por `eventId`, mudar a reserva de `CANCELAMENTO_EM_ANDAMENTO` para `RETIRADA`, encerrar a execução de cancelamento como `INTERROMPIDA` e registrar a auditoria correspondente, incluindo a evidência da retirada e o motivo do encerramento. Respostas tardias e retries não podem reativar essa execução nem levar a reserva posteriormente para `CANCELADA`. Estoque consome o evento normalmente, baixa o estoque físico e encerra a alocação como consumida, em vez de liberá-la por cancelamento.
 
 O cancelamento de uma reserva ainda `SOLICITADA` é local a Reservas e não chama Estoque ou Retiradas. Uma reserva `EM_CONFIRMACAO` entra em `CANCELAMENTO_EM_ANDAMENTO`; Reservas interrompe passos futuros e compensa, em ordem inversa, apenas os efeitos que já tenham sido confirmados. A expiração de `SOLICITADA` também não exige compensação porque ainda não existe alocação.
 
@@ -247,9 +253,12 @@ O registro interno da SAGA usa os estados:
 - `COMPENSACAO_PENDENTE`: uma compensação não foi confirmada; o sistema continuará tentando e alertará a operação;
 - `CANCELANDO`: um pedido explícito de cancelamento está revertendo efeitos distribuídos;
 - `CANCELAMENTO_PENDENTE`: não foi possível confirmar uma operação de cancelamento; o sistema continuará tentando;
+- `INTERROMPIDA`: execução encerrada sem prosseguir em suas etapas, seja uma confirmação interrompida por solicitação de cancelamento após reconciliar chamadas em voo ou com resultado desconhecido, seja um cancelamento inviabilizado pela retirada física comprovada por `retirada.concluida.v1`;
 - `CONCLUIDA`: reserva confirmada;
 - `COMPENSADA`: efeitos distribuídos revertidos após falha de confirmação; reserva marcada `FALHA_CONFIRMACAO`;
 - `CANCELADA`: efeitos distribuídos revertidos por solicitação de cancelamento; reserva marcada `CANCELADA`.
+
+`INTERROMPIDA` é terminal para a execução, mas não significa que seus efeitos já foram compensados nem que a reserva está `CANCELADA`. Quando interrompe uma confirmação, Reservas preserva os efeitos confirmados e só depois inicia a execução distinta de cancelamento, com novo `sagaId` e o mesmo `reservaId`, mantendo uma única execução ativa por reserva. Nesse caso, a reserva fica em `CANCELAMENTO_EM_ANDAMENTO` enquanto o cancelamento continua. Quando a retirada vence o cancelamento, a execução de cancelamento termina em `INTERROMPIDA` e a reserva termina em `RETIRADA`, conforme a seção 9.3.
 
 `COMPENSACAO_PENDENTE` e `CANCELAMENTO_PENDENTE` não são resultados finais para o cidadão. A reserva permanece em `EM_CONFIRMACAO` ou `CANCELAMENTO_EM_ANDAMENTO` até o estado distribuído ser reconciliado. A equipe deve conseguir localizar a execução por `sagaId`/`reservaId` e verificar etapa, tentativas e erro técnico, sem expor detalhes internos ao cidadão.
 
@@ -275,6 +284,12 @@ O registro interno da SAGA usa os estados:
 ### 9.7 Diagramas da SAGA
 
 Os diagramas detalhados de sucesso e falha ficam em `docs/parte-2/diagramas/saga-sucesso.md` e `docs/parte-2/diagramas/saga-falha.md`. Eles devem manter exatamente os participantes, comandos, estados e compensações definidos aqui.
+
+### 9.8 Validação da Reserva no registro da retirada
+
+Retiradas obtém o `reservaId` da autorização e consulta `GET /internal/v1/reservas/{reservaId}/estado`, autenticado como serviço. Reservas retorna apenas `reservaId` e `status` de sua fonte canônica, sem cache ou projeção. Só uma resposta válida com o mesmo identificador e `status = CONFIRMADA` permite prosseguir. Estado diferente, reserva inexistente, timeout ou indisponibilidade impedem o registro naquele momento; nova tentativa exige nova consulta. O GET não exige chave idempotente; `X-Correlation-Id` é opcional para rastreamento.
+
+Após a consulta, Retiradas revalida localmente que a autorização não foi revogada nem utilizada e confirma entrega e Outbox na mesma transação. A consulta não bloqueia a Reserva: se retornar `CANCELAMENTO_EM_ANDAMENTO`, a entrega é recusada; se retornar `CONFIRMADA` e o cancelamento começar depois, revogação e entrega disputam a autorização em Retiradas. Se a entrega vencer, aplica-se a transição e o encerramento do cancelamento definidos na seção 9.3. Essa dependência síncrona evita sincronização adicional de estado e mantém os três serviços na SAGA de confirmação.
 
 ## 10. Eventos, Outbox e consistência eventual
 
@@ -302,7 +317,7 @@ O exemplo ilustra o formato, não um evento de teste com IDs reais. `eventId` id
 
 | Produtor | `eventType` | Quando publicar | Consumidor/uso inicial |
 |---|---|---|---|
-| Retiradas | `retirada.concluida.v1` | A entrega física foi registrada e confirmada no banco local. | Reservas muda `CONFIRMADA` para `RETIRADA`. Estoque baixa a quantidade física e encerra a alocação ativa da reserva. |
+| Retiradas | `retirada.concluida.v1` | A entrega física e o evento foram persistidos na mesma transação local, pela Outbox. | Reservas muda `CONFIRMADA` ou `CANCELAMENTO_EM_ANDAMENTO` para `RETIRADA`; no segundo caso, encerra o cancelamento como `INTERROMPIDA`, conforme a seção 9.3. Estoque baixa a quantidade física e encerra a alocação ativa da reserva como consumida. |
 | Estoque | `estoque.retirada-baixada.v1` | Estoque processou a retirada, baixou a quantidade física e encerrou a alocação na mesma transação local. | Atualizar a projeção de disponibilidade e informar outros consumidores interessados. |
 
 O evento `retirada.concluida.v1` deve incluir no `payload` `retiradaId`, `reservaId`, `unidadeId`, `itemId` e `quantidade`. Esses dados identificam o item entregue e a alocação que Estoque deve encerrar. O evento não deve incluir dados pessoais do cidadão. `occurredAt` registra o instante do fato no envelope.
@@ -334,7 +349,7 @@ Os eventos produzidos por Estoque devem incluir no `payload` os identificadores 
 ### 10.4 Onde existe consistência eventual
 
 1. A disponibilidade consultada pelo cidadão é uma projeção de leitura de Estoque, atualizada após eventos. Pode atrasar em relação ao saldo canônico.
-2. O estado `RETIRADA` em Reservas é atualizado após Reservas consumir `retirada.concluida.v1`; pode haver um intervalo em que Retiradas já registrou a entrega e Reservas ainda exibe `CONFIRMADA`.
+2. O estado `RETIRADA` em Reservas é atualizado após Reservas consumir `retirada.concluida.v1`; pode haver um intervalo em que Retiradas já registrou a entrega e Reservas ainda exibe `CONFIRMADA` ou `CANCELAMENTO_EM_ANDAMENTO`.
 3. Qualquer BFF ou visão de pesquisa que combine eventos pode ficar temporariamente defasada em relação ao serviço de origem.
 
 O atraso-alvo para projeções é de até **5 segundos em condições normais**. A resposta de leitura deve informar `atualizadoEm` para que um cliente possa reconhecer a idade da informação. Se a projeção exceder 5 segundos, deve ser sinalizada como desatualizada/monitorada; essa defasagem não pode ser escondida como se fosse informação atual.
@@ -351,7 +366,7 @@ Estoque separa modelos de escrita e de leitura, ainda que ambos possam residir n
 | Alocações e liberações identificadas por `reservaId`. | Visão agregada para BFF Cidadão e consultas operacionais. |
 | Valida invariantes e concorrência em transação local. | Otimiza leitura e pode refletir eventos alguns segundos depois. |
 
-O modelo de leitura é atualizado por eventos persistidos na Outbox e publicados no RabbitMQ. O consumidor é idempotente e atualiza sua projeção antes de confirmar a mensagem. `10-cqrs.md` detalha tabelas, atualização e comportamento diante de atraso; deve preservar o limite de 5 segundos e a regra de que a escrita é a autoridade.
+O modelo de leitura é atualizado por eventos persistidos na Outbox e publicados no RabbitMQ. O consumidor é idempotente e atualiza sua projeção antes de confirmar a mensagem. `11-cqrs.md` detalha tabelas, atualização e comportamento diante de atraso; deve preservar o limite de 5 segundos e a regra de que a escrita é a autoridade.
 
 ## 12. Contratos HTTP, Gateway, BFFs e HATEOAS
 
@@ -373,28 +388,28 @@ Os detalhes de status HTTP, esquemas, parâmetros, autenticação, limites e exe
 - Cada microsserviço pode alterar somente seu banco. Uma integração não pode contornar a API/evento para consultar uma tabela alheia.
 - Dados pessoais são limitados ao identificador estável do cidadão e ao necessário para cumprir a retirada. O sistema não armazena cópia de receita ou documentos de saúde; requisitos são apresentados ao cidadão e conferidos pela unidade. Senhas e tokens nunca são armazenados nos bancos de domínio nem publicados em eventos.
 - Estoque deve impedir alocação superior ao saldo disponível por operação atômica/controle de concorrência no banco de escrita.
-- Retiradas não pode registrar uma entrega sem autorização válida e vinculada à mesma unidade e reserva. Uma entrega só pode ser confirmada uma vez.
+- Retiradas exige consulta canônica de `CONFIRMADA` e autorização local válida, vinculada à mesma unidade e reserva. A transação local revalida revogação e uso; uma entrega só pode ser confirmada uma vez.
 - Reservas registra ator e instante das decisões de unidade, confirmação e cancelamento. Quando o cancelamento for solicitado por profissional da unidade, também registra uma justificativa não vazia.
 - Cada serviço valida novamente os dados e permissões relevantes à própria operação; confiar no BFF como única barreira não é suficiente.
 
 ## 14. Divisão de trabalho e dependências
 
-O contrato-base é responsabilidade da **Pessoa 1** e deve ser estabilizado antes da implementação paralela. A divisão abaixo associa cada frente aos critérios e reduz sobreposição:
+O contrato-base é responsabilidade de **Marcos** e deve ser estabilizado antes da implementação paralela. A divisão abaixo associa cada frente aos critérios e reduz sobreposição:
 
 | Pessoa | Frente e entregáveis principais | Dependência |
 |---|---|---|
-| **1 — você** | Fronteiras e justificativa dos quatro serviços; arquitetura geral; fluxo e estados; SAGA, compensações e diagramas de sucesso/falha. `01`–`04` e `diagramas/`. | Define primeiro este contrato-base. Depois alinha nomes de comandos/eventos com as Pessoas 2 e 4. |
-| **2** | Contratos REST/OpenAPI dos quatro serviços e HATEOAS da Reserva. `api/*.yaml` e `05-hateoas.md`. | Usa serviços, estados, campos e transições definidos aqui. |
-| **3** | API Gateway e dois BFFs, com rotas, autenticação e respostas específicas dos dois clientes. `06-api-gateway.md` e `07-bffs.md`. | Usa os contratos REST da Pessoa 2 e não altera regras dos serviços. Pode esboçar rotas antes e fechar após o OpenAPI. |
-| **4** | Bancos por serviço, consistência eventual, Outbox e CQRS no Estoque. `08`–`11`. | Usa propriedade de dados, eventos, envelope, broker e defasagem definidos aqui. |
+| **Marcos** | Fronteiras e justificativa dos quatro serviços; arquitetura geral; fluxo e estados; SAGA, compensações e diagramas de sucesso/falha. `01`–`04` e `diagramas/`. | Define primeiro este contrato-base. Depois alinha nomes de comandos/eventos com Guilerme e Lana. |
+| **Guilerme** | Contratos REST/OpenAPI dos quatro serviços e HATEOAS da Reserva. `api/*.yaml` e `05-hateoas.md`. | Usa serviços, estados, campos e transições definidos aqui. |
+| **Arthur** | API Gateway e dois BFFs, com rotas, autenticação e respostas específicas dos dois clientes. `06-api-gateway.md` e `07-bffs.md`. | Usa os contratos REST de Guilerme e não altera regras dos serviços. Pode esboçar rotas antes e fechar após o OpenAPI. |
+| **Lana** | Bancos por serviço, consistência eventual, Outbox e CQRS no Estoque. `08`–`11`. | Usa propriedade de dados, eventos, envelope, broker e defasagem definidos aqui. |
 
 Todas as pessoas devem revisar os documentos integrados e participar da apresentação, conforme o enunciado. Cada integrante deve manter contribuição autoral verificável no GitHub; a divisão de tarefas não substitui essa exigência.
 
 ### 14.1 Ordem de trabalho
 
-1. Pessoa 1 publica este contrato-base com fronteiras, estados e fluxo inicial.
-2. Pessoas 2, 3 e 4 trabalham em paralelo, seguindo o contrato.
-3. Pessoa 1 confere que os contratos HTTP e eventos concretos mantêm a sequência e a semântica acordadas.
+1. Marcos publica este contrato-base com fronteiras, estados e fluxo inicial.
+2. Guilerme, Arthur e Lana trabalham em paralelo, seguindo o contrato.
+3. Marcos confere que os contratos HTTP e eventos concretos mantêm a sequência e a semântica acordadas.
 4. O grupo executa revisão cruzada: uma pessoa verifica os documentos de outra frente e registra divergências para correção.
 5. README e índice de `/docs` apontam para os arquivos efetivamente existentes; não se deve deixar link quebrado ou referência a decisão ainda não escrita.
 
@@ -447,6 +462,7 @@ Uma revisão final só termina quando todos estes itens forem verdadeiros:
 - [ ] Os mesmos nomes de estado e transições aparecem em APIs, HATEOAS, SAGA, banco e diagramas, incluindo cancelamento em andamento e expiração da solicitação pendente.
 - [ ] A reserva só fica `CONFIRMADA` depois de alocação no Estoque e autorização em Retiradas.
 - [ ] A retirada física ocorre depois da confirmação e só muda o estado para `RETIRADA` após registro em Retiradas.
+- [ ] Antes da entrega, Retiradas consulta o estado canônico em Reservas e exige `CONFIRMADA`; falha de consulta impede o registro, e a transação local serializa entrega e revogação.
 - [ ] A SAGA tem três participantes — Reservas, Estoque e Retiradas — e as compensações são idempotentes e reversas.
 - [ ] Timeout não é interpretado automaticamente como falha remota; resultado incerto é consultado/repetido com idempotência.
 - [ ] Eventos usam envelope e nomes canônicos; cada produtor usa Outbox quando publica eventos.

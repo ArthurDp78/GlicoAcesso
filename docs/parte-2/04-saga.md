@@ -3,11 +3,11 @@
 **Etapa:** 2 — Arquitetura  
 **Documento:** 04 — SAGA  
 **Versão:** 1.0  
-**Responsável:** Pessoa 1 — arquitetura e fluxo  
+**Responsável:** Marcos — arquitetura e fluxo  
 **Documento normativo:** [00 — Decisões arquiteturais compartilhadas](./00-decisoes-compartilhadas.md)  
 **Fluxo de negócio:** [03 — Fluxo de reservas](./03-fluxo-reservas.md)  
 **Diagramas:** [sucesso](./diagramas/saga-sucesso.md) e [falha](./diagramas/saga-falha.md)  
-**Última revisão:** 9 de outubro de 2026
+**Última revisão:** 20 de outubro de 2026
 
 > Este documento especifica como Reservas coordena efeitos distribuídos ao confirmar ou cancelar uma reserva. Não há transação compartilhada entre bancos: cada participante altera somente o próprio banco. Em caso de divergência, prevalecem as regras do documento 00.
 
@@ -64,7 +64,7 @@ Se uma condição falhar, nenhum participante é chamado. Durante o processament
 |---:|---|---|---|
 | 0 | Reservas | Registra o aceite, muda `SOLICITADA` para `EM_CONFIRMACAO`, cria `sagaId` e persiste a execução como `EM_EXECUCAO`. | A transação local foi confirmada. Se não foi, não envia comandos. |
 | 1 | Reservas → Estoque | `AlocarEstoque`(`reservaId`, `unidadeId`, `itemId`, quantidade). | Estoque confirma uma alocação ativa no próprio banco. |
-| 2 | Reservas → Retiradas | `PrepararAutorizacao`(`reservaId`, `unidadeId`, `itemId`, quantidade). Só ocorre após confirmação da alocação. | Retiradas confirma uma autorização utilizável no balcão, vinculada à reserva. |
+| 2 | Reservas → Retiradas | `PrepararAutorizacao`(`reservaId`, `unidadeId`, `itemId`, quantidade). Só ocorre após confirmação da alocação. | Retiradas persiste a autorização; uma entrega futura ainda exige consulta canônica de `CONFIRMADA` em Reservas. |
 | 3 | Reservas | Grava `CONFIRMADA` e a execução `CONCLUIDA` em transação local. | Só após a confirmação local a reserva é apresentada como confirmada. |
 
 Os comandos internos são síncronos e versionados pelos contratos internos. Uma resposta de sucesso significa que o participante confirmou o efeito em seu próprio banco, não que Reservas alterou o banco dele.
@@ -89,6 +89,10 @@ As compensações ocorrem na ordem inversa dos efeitos: cancelar a autorização
 | Falha temporária ao persistir a finalização em Reservas | Efeitos dos participantes podem estar confirmados, mas o estado local não. | Repete a finalização local. Não inicia compensação por falha temporária de banco. |
 
 `FALHA_CONFIRMACAO` só é final depois que todos os efeitos confirmados tiverem sido compensados. Enquanto uma etapa ou compensação estiver pendente, a reserva permanece `EM_CONFIRMACAO` e a SAGA não é terminal.
+
+### 4.5 Validação posterior no balcão
+
+A SAGA termina com `CONFIRMADA` e `CONCLUIDA`, após Reservas, Estoque e Retiradas confirmarem suas etapas. A autorização criada não basta para entregar: Retiradas consulta `GET /internal/v1/reservas/{reservaId}/estado` e exige resposta canônica `CONFIRMADA`. Falha de consulta ou outro estado impede a entrega naquele momento, sem desfazer a confirmação. A consulta é somente leitura, sem chave idempotente; a transação de entrega revalida a autorização e serializa com a revogação. O procedimento e a corrida após a consulta estão no documento 00, seção 9.8, e na seção 5.3 abaixo.
 
 ## 5. Cancelamento distribuído
 
@@ -118,11 +122,15 @@ Se nenhum participante produziu efeito, o cancelamento pode terminar localmente.
 4. Depois que Retiradas confirmar o cancelamento, Reservas envia `LiberarAlocacao`(`reservaId`) a Estoque.
 5. Só após as confirmações aplicáveis Reservas grava `CANCELADA`.
 
-Retiradas serializa `CancelarAutorizacao` e `RegistrarRetirada`: somente uma operação pode vencer. Se a entrega já foi registrada, Retiradas recusa o cancelamento; Reservas processa `retirada.concluida.v1` e atualiza a reserva para RETIRADA. Se o cancelamento vencer, a autorização não pode ser usada.
+Retiradas serializa `CancelarAutorizacao` e `RegistrarRetirada`: somente uma operação pode vencer. Se o cancelamento vencer, a autorização não pode ser usada. Se a entrega já foi registrada, Retiradas recusa o cancelamento e Reservas não envia `LiberarAlocacao`. A entrega e o evento `retirada.concluida.v1` são persistidos na mesma transação local de Retiradas, pela Outbox.
+
+Ao consumir esse evento válido para uma reserva em `CANCELAMENTO_EM_ANDAMENTO`, Reservas deve, em uma única transação local, deduplicar por `eventId`, atualizar a reserva para `RETIRADA`, encerrar a execução de cancelamento (`CANCELANDO` ou `CANCELAMENTO_PENDENTE`) como `INTERROMPIDA` e registrar a auditoria, com motivo do encerramento e referências ao evento e à retirada. O evento comprova a entrega física; a recusa do comando de cancelamento não substitui esse consumo.
+
+`INTERROMPIDA` é terminal: respostas tardias e retries não podem retomar o cancelamento, enviar `LiberarAlocacao` nem mudar a reserva posteriormente para `CANCELADA`. A aplicação dos resultados das chamadas deve respeitar o estado persistido da reserva e da execução. Estoque processa `retirada.concluida.v1` normalmente, baixando o físico e encerrando a alocação como consumida, sem liberação por cancelamento.
 
 ### 5.4 Falha durante o cancelamento
 
-Indisponibilidade ou timeout não conclui nem desfaz automaticamente o cancelamento. Reservas mantém `CANCELAMENTO_EM_ANDAMENTO`, registra a etapa pendente e repete usando a mesma chave idempotente. Não apresenta `CANCELADA` enquanto existir autorização utilizável ou alocação a liberar.
+Indisponibilidade ou timeout não conclui nem desfaz automaticamente o cancelamento. Enquanto não houver comprovação de retirada pelo evento conforme a seção 5.3, Reservas mantém `CANCELAMENTO_EM_ANDAMENTO`, registra a etapa pendente e repete usando a mesma chave idempotente. Não apresenta `CANCELADA` enquanto existir autorização utilizável ou alocação a liberar.
 
 Se Retiradas confirmou a revogação, mas Estoque ainda não confirmou a liberação, a execução permanece pendente na etapa de Estoque. Repetir `CancelarAutorizacao` não reativa a autorização; repetir `LiberarAlocacao` atua somente sobre o `reservaId` correspondente.
 
@@ -137,12 +145,14 @@ O estado da SAGA não substitui o estado de negócio da reserva. Uma execução 
 | `COMPENSACAO_PENDENTE` | Uma compensação não foi confirmada; retry/reconciliação pendente. | `EM_CONFIRMACAO` |
 | `CANCELANDO` | Cancelamento solicitado está revertendo efeitos distribuídos. | `CANCELAMENTO_EM_ANDAMENTO` |
 | `CANCELAMENTO_PENDENTE` | Operação aplicável do cancelamento não foi confirmada. | `CANCELAMENTO_EM_ANDAMENTO` |
-| `INTERROMPIDA` | Execução de confirmação foi parada por cancelamento; chamadas em voo foram reconciliadas e não haverá novas etapas nela. | `CANCELAMENTO_EM_ANDAMENTO` enquanto a execução distinta de cancelamento continua |
+| `INTERROMPIDA` | Confirmação encerrada por cancelamento após reconciliar chamadas em voo, ou cancelamento encerrado porque `retirada.concluida.v1` comprovou que a retirada venceu. Não haverá novas etapas nessa execução. | `CANCELAMENTO_EM_ANDAMENTO` no primeiro caso, enquanto o cancelamento continua; `RETIRADA` no segundo |
 | `CONCLUIDA` | Alocação e autorização foram confirmadas e a reserva foi finalizada localmente. | `CONFIRMADA` |
 | `COMPENSADA` | Efeitos da confirmação foram desfeitos após falha definitiva. | `FALHA_CONFIRMACAO` |
 | `CANCELADA` | Efeitos aplicáveis foram desfeitos após solicitação de cancelamento. | `CANCELADA` |
 
 O registro durável deve permitir recuperar, no mínimo: `sagaId`, `reservaId`, tipo da execução (confirmação ou cancelamento), estado, etapa atual, efeitos confirmados, compensações concluídas, tentativas, próximo instante elegível para retry, erro técnico sanitizado, `correlationId`, timestamps de criação/atualização e controle de concorrência. Não deve armazenar tokens, credenciais ou dados pessoais desnecessários.
+
+Para o cancelamento interrompido por retirada, preserva também o motivo do encerramento e as referências `eventId` e `retiradaId` que comprovam o fato, junto da auditoria da transação descrita na seção 5.3.
 
 ## 7. Persistência e recuperação
 
@@ -176,9 +186,9 @@ Backoff, limite de tentativas automáticas, alertas e procedimento de fila de fa
 | Retiradas rejeita após alocação | Alocação | Libera a alocação em Estoque e aguarda confirmação. | Após liberar: `FALHA_CONFIRMACAO`; SAGA `COMPENSADA`. |
 | Timeout ao preparar autorização | Alocação; autorização possivelmente criada | Consulta ou repete preparação idempotente. Se não puder preparar, cancela eventual autorização e libera alocação. | Pendente até reconciliação; depois `CONFIRMADA` ou `FALHA_CONFIRMACAO`. |
 | Falha temporária ao finalizar em Reservas | Alocação e autorização | Repete a finalização local. | Pendente enquanto transitória; após falha definitiva e compensação, `FALHA_CONFIRMACAO`. |
-| Retiradas indisponível ao cancelar | Autorização possivelmente ativa | Mantém `CANCELAMENTO_EM_ANDAMENTO`; não libera estoque antes de resolver a autorização. | `CANCELADA` após confirmar operações aplicáveis. |
+| Retiradas indisponível ao cancelar | Autorização possivelmente ativa | Mantém `CANCELAMENTO_EM_ANDAMENTO`; não libera estoque antes de resolver a autorização. | `CANCELADA` após confirmar operações aplicáveis, ou `RETIRADA` se o evento comprovar que a entrega venceu. |
 | Estoque indisponível ao liberar alocação | Autorização cancelada; alocação possivelmente ativa | Mantém cancelamento pendente e repete liberação idempotente. | `CANCELADA` após liberação confirmada. |
-| Retirada vence a corrida contra cancelamento | Entrega registrada | Retiradas recusa cancelamento; Reservas e Estoque processam o evento de retirada. | RETIRADA após Reservas consumir o evento. |
+| Retirada vence a corrida contra cancelamento | Entrega registrada | Retiradas recusa cancelamento. Reservas consome o evento e encerra o cancelamento atomicamente com a deduplicação, a atualização da reserva e a auditoria. Não envia `LiberarAlocacao`; Estoque baixa o físico e encerra a alocação como consumida. | Reserva `RETIRADA`; execução de cancelamento `INTERROMPIDA`. |
 
 ## 10. Observabilidade e operação
 
@@ -213,7 +223,8 @@ Intervenção manual não grava diretamente nos bancos de Estoque ou Retiradas. 
 - Timeout é resultado incerto, tratado com consulta ou retry idempotente.
 - Confirmação e cancelamento são execuções distintas, ligadas ao mesmo `reservaId`; ao cancelar durante a confirmação, a execução de confirmação é reconciliada e encerrada como `INTERROMPIDA` antes da execução de cancelamento.
 - Só existe uma execução ativa por reserva.
-- O cancelamento só termina depois de revogar autorização e liberar alocação, quando aplicável.
+- O cancelamento bem-sucedido só leva a `CANCELADA` depois de revogar autorização e liberar alocação, quando aplicável.
+- Se a retirada vencer, o consumo de `retirada.concluida.v1` muda `CANCELAMENTO_EM_ANDAMENTO` para `RETIRADA` e encerra o cancelamento como `INTERROMPIDA`, na mesma transação da deduplicação e da auditoria; respostas tardias e retries não retomam a execução nem levam a `CANCELADA`.
 - Retiradas serializa cancelamento da autorização e registro da entrega.
 - Execuções pendentes sobrevivem à queda de Reservas e podem ser recuperadas do banco local.
 - Nenhum serviço grava no banco de outro serviço.
