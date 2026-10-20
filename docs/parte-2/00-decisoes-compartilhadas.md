@@ -3,7 +3,7 @@
 **Etapa:** 2 — Arquitetura  
 **Versão:** 1.0  
 **Situação:** contrato-base para os documentos da Etapa 2  
-**Última revisão:** 9 de outubro de 2026
+**Última revisão:** 20 de outubro de 2026
 
 > Este documento estabelece a linguagem e as decisões que devem ser usadas por todas as pessoas do grupo. Os documentos de APIs, persistência, SAGA, Gateway e BFFs detalham estas decisões; não podem redefinir o mesmo conceito de outra forma. Se uma decisão precisar mudar, a alteração deve ser registrada aqui e propagada aos documentos afetados antes de ser considerada válida.
 
@@ -247,9 +247,12 @@ O registro interno da SAGA usa os estados:
 - `COMPENSACAO_PENDENTE`: uma compensação não foi confirmada; o sistema continuará tentando e alertará a operação;
 - `CANCELANDO`: um pedido explícito de cancelamento está revertendo efeitos distribuídos;
 - `CANCELAMENTO_PENDENTE`: não foi possível confirmar uma operação de cancelamento; o sistema continuará tentando;
+- `INTERROMPIDA`: execução de confirmação encerrada por solicitação de cancelamento, após reconciliar todas as chamadas em voo ou com resultado desconhecido; nenhuma nova etapa de confirmação será iniciada nessa execução, e os efeitos confirmados permanecem registrados;
 - `CONCLUIDA`: reserva confirmada;
 - `COMPENSADA`: efeitos distribuídos revertidos após falha de confirmação; reserva marcada `FALHA_CONFIRMACAO`;
 - `CANCELADA`: efeitos distribuídos revertidos por solicitação de cancelamento; reserva marcada `CANCELADA`.
+
+`INTERROMPIDA` é terminal para a execução de confirmação, mas não significa que seus efeitos já foram compensados nem que a reserva está `CANCELADA`. Só depois desse encerramento Reservas inicia a execução distinta de cancelamento, com novo `sagaId` e o mesmo `reservaId`, preservando a regra de uma única execução ativa por reserva. A reserva permanece em `CANCELAMENTO_EM_ANDAMENTO` enquanto as operações aplicáveis do cancelamento não forem concluídas.
 
 `COMPENSACAO_PENDENTE` e `CANCELAMENTO_PENDENTE` não são resultados finais para o cidadão. A reserva permanece em `EM_CONFIRMACAO` ou `CANCELAMENTO_EM_ANDAMENTO` até o estado distribuído ser reconciliado. A equipe deve conseguir localizar a execução por `sagaId`/`reservaId` e verificar etapa, tentativas e erro técnico, sem expor detalhes internos ao cidadão.
 
