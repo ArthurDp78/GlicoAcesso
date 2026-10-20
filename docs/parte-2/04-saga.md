@@ -3,7 +3,7 @@
 **Etapa:** 2 — Arquitetura  
 **Documento:** 04 — SAGA  
 **Versão:** 1.0  
-**Responsável:** Pessoa 1 — arquitetura e fluxo  
+**Responsável:** Marcos — arquitetura e fluxo  
 **Documento normativo:** [00 — Decisões arquiteturais compartilhadas](./00-decisoes-compartilhadas.md)  
 **Fluxo de negócio:** [03 — Fluxo de reservas](./03-fluxo-reservas.md)  
 **Diagramas:** [sucesso](./diagramas/saga-sucesso.md) e [falha](./diagramas/saga-falha.md)  

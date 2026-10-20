@@ -75,7 +75,7 @@ Os caminhos abaixo são os declarados nos OpenAPI atuais. Os nomes das operaçõ
 
 **O que as decisões arquiteturais estabelecem:** os comandos devem ser idempotentes; a alocação e a autorização são únicas por reserva; repetir uma liberação ou cancelamento não duplica efeitos; timeout é resultado incerto; compensações seguem ordem inversa. Essas são regras arquiteturais do documento 00 e da especificação 04, não evidência de implementação executável.
 
-**O que requer implementação ou confirmação da Pessoa 2:** persistir e aplicar as chaves idempotentes no serviço, devolver resultado compatível em retries, detectar chave igual com conteúdo divergente e harmonizar o uso de `idempotencyKey` no corpo dos comandos de criação com `X-Idempotency-Key` nas compensações. Os YAMLs mostram esses campos, mas não comprovam que o comportamento está implementado.
+**O que requer implementação ou confirmação de Guilerme:** persistir e aplicar as chaves idempotentes no serviço, devolver resultado compatível em retries, detectar chave igual com conteúdo divergente e harmonizar o uso de `idempotencyKey` no corpo dos comandos de criação com `X-Idempotency-Key` nas compensações. Os YAMLs mostram esses campos, mas não comprovam que o comportamento está implementado.
 
 Os YAMLs não especificam consulta do resultado de alocação em Estoque ou de autorização em Retiradas por `reservaId`; após timeout desses comandos, a recuperação depende da repetição idempotente. O GET de estado em Reservas valida a entrega e não reconcilia esses efeitos remotos.
 
@@ -166,9 +166,9 @@ Detalhes internos, credenciais, stack traces e dados pessoais desnecessários n�
 
 ## 10. Pendências de alinhamento
 
-- **Pessoa 1:** confirmar que este complemento permanece subordinado ao documento normativo 00 e alinhado ao fluxo e aos diagramas existentes.
-- **Pessoa 2:** confirmar a semântica e a implementação da idempotência dos comandos; avaliar consultas dos resultados de alocação/autorização, ainda ausentes nos contratos dos participantes; harmonizar `idempotencyKey` no corpo das criações com `X-Idempotency-Key` nas compensações. O GET de estado de Reservas é exclusivo da validação de entrega. O conteúdo concatenado do YAML do BFF Unidade continua pendente de revisão.
-- **Pessoa 4:** confirmar como o serviço de Reservas persistirá execução, efeitos confirmados, chaves idempotentes, tentativas, compensações pendentes e retomada após reinício.
+- **Marcos:** confirmar que este complemento permanece subordinado ao documento normativo 00 e alinhado ao fluxo e aos diagramas existentes.
+- **Guilerme:** confirmar a semântica e a implementação da idempotência dos comandos; avaliar consultas dos resultados de alocação/autorização, ainda ausentes nos contratos dos participantes; harmonizar `idempotencyKey` no corpo das criações com `X-Idempotency-Key` nas compensações. O GET de estado de Reservas é exclusivo da validação de entrega.
+- **Lana:** confirmar como o serviço de Reservas persistirá execução, efeitos confirmados, chaves idempotentes, tentativas, compensações pendentes e retomada após reinício.
 
 ## 11. Referências e diagramas complementares
 

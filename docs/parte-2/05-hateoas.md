@@ -81,7 +81,7 @@ Abaixo estão exemplos de como o microsserviço de Reservas devolve as informaç
     "rejeitar": {
       "href": "/api/unidade/v1/reservas/a1b2c3d4-5678-90ab-cdef-1234567890ab/decisao",
       "method": "POST",
-      "body": { "decisao": "REJEITADA" }
+      "body": { "decisao": "REJEITAR" }
     },
     "cancelar": {
       "href": "/api/unidade/v1/reservas/a1b2c3d4-5678-90ab-cdef-1234567890ab/cancelar",

@@ -390,7 +390,7 @@ O payload de `retirada.concluida.v1` inclui `retiradaId`, `reservaId`, `unidadeI
 
 O payload de `estoque.retirada-baixada.v1` inclui `retiradaId`, `reservaId`, `unidadeId`, `itemId` e `quantidadeBaixada` positiva. Esse valor representa tanto a redução do estoque físico quanto o encerramento da alocação associada. A projeção de disponibilidade aplica ambos os efeitos ao consumir o evento.
 
-Cada serviço altera apenas seu banco. Se o evento de Retiradas chegar repetido, o consumidor não pode debitar o estoque novamente. A semântica e o envelope dos eventos seguem o documento 00; detalhes de filas, persistência e consumidores ficam nos documentos das Pessoas 2 e 4.
+Cada serviço altera apenas seu banco. Se o evento de Retiradas chegar repetido, o consumidor não pode debitar o estoque novamente. A semântica e o envelope dos eventos seguem o documento 00; detalhes de filas, persistência e consumidores ficam nos documentos de Guilerme e Lana.
 
 ## 14. Critério de conformidade
 

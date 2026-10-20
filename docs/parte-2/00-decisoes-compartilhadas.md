@@ -366,7 +366,7 @@ Estoque separa modelos de escrita e de leitura, ainda que ambos possam residir n
 | Alocações e liberações identificadas por `reservaId`. | Visão agregada para BFF Cidadão e consultas operacionais. |
 | Valida invariantes e concorrência em transação local. | Otimiza leitura e pode refletir eventos alguns segundos depois. |
 
-O modelo de leitura é atualizado por eventos persistidos na Outbox e publicados no RabbitMQ. O consumidor é idempotente e atualiza sua projeção antes de confirmar a mensagem. `10-cqrs.md` detalha tabelas, atualização e comportamento diante de atraso; deve preservar o limite de 5 segundos e a regra de que a escrita é a autoridade.
+O modelo de leitura é atualizado por eventos persistidos na Outbox e publicados no RabbitMQ. O consumidor é idempotente e atualiza sua projeção antes de confirmar a mensagem. `11-cqrs.md` detalha tabelas, atualização e comportamento diante de atraso; deve preservar o limite de 5 segundos e a regra de que a escrita é a autoridade.
 
 ## 12. Contratos HTTP, Gateway, BFFs e HATEOAS
 
@@ -394,22 +394,22 @@ Os detalhes de status HTTP, esquemas, parâmetros, autenticação, limites e exe
 
 ## 14. Divisão de trabalho e dependências
 
-O contrato-base é responsabilidade da **Pessoa 1** e deve ser estabilizado antes da implementação paralela. A divisão abaixo associa cada frente aos critérios e reduz sobreposição:
+O contrato-base é responsabilidade de **Marcos** e deve ser estabilizado antes da implementação paralela. A divisão abaixo associa cada frente aos critérios e reduz sobreposição:
 
 | Pessoa | Frente e entregáveis principais | Dependência |
 |---|---|---|
-| **1 — você** | Fronteiras e justificativa dos quatro serviços; arquitetura geral; fluxo e estados; SAGA, compensações e diagramas de sucesso/falha. `01`–`04` e `diagramas/`. | Define primeiro este contrato-base. Depois alinha nomes de comandos/eventos com as Pessoas 2 e 4. |
-| **2** | Contratos REST/OpenAPI dos quatro serviços e HATEOAS da Reserva. `api/*.yaml` e `05-hateoas.md`. | Usa serviços, estados, campos e transições definidos aqui. |
-| **3** | API Gateway e dois BFFs, com rotas, autenticação e respostas específicas dos dois clientes. `06-api-gateway.md` e `07-bffs.md`. | Usa os contratos REST da Pessoa 2 e não altera regras dos serviços. Pode esboçar rotas antes e fechar após o OpenAPI. |
-| **4** | Bancos por serviço, consistência eventual, Outbox e CQRS no Estoque. `08`–`11`. | Usa propriedade de dados, eventos, envelope, broker e defasagem definidos aqui. |
+| **Marcos** | Fronteiras e justificativa dos quatro serviços; arquitetura geral; fluxo e estados; SAGA, compensações e diagramas de sucesso/falha. `01`–`04` e `diagramas/`. | Define primeiro este contrato-base. Depois alinha nomes de comandos/eventos com Guilerme e Lana. |
+| **Guilerme** | Contratos REST/OpenAPI dos quatro serviços e HATEOAS da Reserva. `api/*.yaml` e `05-hateoas.md`. | Usa serviços, estados, campos e transições definidos aqui. |
+| **Arthur** | API Gateway e dois BFFs, com rotas, autenticação e respostas específicas dos dois clientes. `06-api-gateway.md` e `07-bffs.md`. | Usa os contratos REST de Guilerme e não altera regras dos serviços. Pode esboçar rotas antes e fechar após o OpenAPI. |
+| **Lana** | Bancos por serviço, consistência eventual, Outbox e CQRS no Estoque. `08`–`11`. | Usa propriedade de dados, eventos, envelope, broker e defasagem definidos aqui. |
 
 Todas as pessoas devem revisar os documentos integrados e participar da apresentação, conforme o enunciado. Cada integrante deve manter contribuição autoral verificável no GitHub; a divisão de tarefas não substitui essa exigência.
 
 ### 14.1 Ordem de trabalho
 
-1. Pessoa 1 publica este contrato-base com fronteiras, estados e fluxo inicial.
-2. Pessoas 2, 3 e 4 trabalham em paralelo, seguindo o contrato.
-3. Pessoa 1 confere que os contratos HTTP e eventos concretos mantêm a sequência e a semântica acordadas.
+1. Marcos publica este contrato-base com fronteiras, estados e fluxo inicial.
+2. Guilerme, Arthur e Lana trabalham em paralelo, seguindo o contrato.
+3. Marcos confere que os contratos HTTP e eventos concretos mantêm a sequência e a semântica acordadas.
 4. O grupo executa revisão cruzada: uma pessoa verifica os documentos de outra frente e registra divergências para correção.
 5. README e índice de `/docs` apontam para os arquivos efetivamente existentes; não se deve deixar link quebrado ou referência a decisão ainda não escrita.
 
