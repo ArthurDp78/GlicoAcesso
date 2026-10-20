@@ -89,6 +89,7 @@ flowchart TB
     R -->|"REST interno: consultar prazoAnalise"| U
     R -->|"REST interno: validar permissão e alocar/liberar"| E
     R -->|"REST interno: preparar/cancelar autorização"| T
+    T -->|"REST interno: consultar estado antes da entrega"| R
     T -->|"Outbox: retirada.concluida.v1"| MQ
     MQ --> Qr
     MQ --> Qe
@@ -181,7 +182,7 @@ O cancelamento de uma reserva ativa é coordenado por Reservas. Se houver efeito
 
 ### 6.4 Registro da retirada física
 
-Após a autorização ser validada no balcão, Retiradas grava a entrega física e publica retirada.concluida.v1 pela Outbox. Reservas e Estoque recebem o evento em filas separadas. Reservas atualiza o status para RETIRADA; Estoque baixa o saldo e encerra a alocação. A baixa de Estoque gera estoque.retirada-baixada.v1 para atualizar a projeção de disponibilidade.
+Retiradas consulta `GET /internal/v1/reservas/{reservaId}/estado` e exige o estado canônico CONFIRMADA; timeout, indisponibilidade ou outro estado impedem a entrega naquele momento. Depois, revalida a autorização local, serializando com a revogação, e grava entrega e retirada.concluida.v1 na Outbox, na mesma transação. Reservas e Estoque recebem o evento em filas separadas. Reservas atualiza o status para RETIRADA; Estoque baixa o saldo e encerra a alocação. A baixa de Estoque gera estoque.retirada-baixada.v1 para atualizar a projeção de disponibilidade.
 
 ## 7. Consistência, duplicidade e recuperação
 

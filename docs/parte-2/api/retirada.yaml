@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: API de Retiradas
-  version: "1.0.0"
+  version: "1.1.0"
   description: Autorizações de balcão e registo de entrega física.
 servers:
   - url: /
@@ -14,6 +14,16 @@ paths:
   /api/unidade/v1/retiradas:
     post:
       summary: Registar entrega presencial
+      description: >-
+        A autorização criada pela SAGA não basta para registrar a entrega.
+        Retiradas obtém reservaId da autorização e consulta
+        GET /internal/v1/reservas/{reservaId}/estado em Reservas, autenticado
+        como serviço. Só prossegue com 200, o mesmo reservaId e status CONFIRMADA.
+        Timeout, indisponibilidade ou resposta inconclusiva impedem a entrega,
+        sem fallback para cache. Na transação local, revalida a autorização
+        contra revogação ou uso concorrente e grava entrega e Outbox juntas.
+        A unicidade por autorização impede entrega duplicada em retentativas;
+        autorização já utilizada continua retornando 409, sem nova entrega.
       security:
         - bearerAuth: []
       requestBody:
@@ -28,10 +38,13 @@ paths:
         '201':
           description: Entrega física registada. Dispara evento retirada.concluida.v1.
         '409':
-          description: Autorização cancelada, já usada ou inexistente.
+          description: Autorização cancelada, já usada ou inexistente; Reserva não encontrada ou estado consultado diferente de CONFIRMADA. Nenhuma nova entrega é registrada.
+        '503':
+          description: Não foi possível obter o estado canônico de Reservas, inclusive por timeout ou falha técnica na consulta. Nenhuma nova entrega é registrada; uma nova tentativa exige nova consulta.
   /internal/v1/autorizacoes:
     post:
       summary: Preparar Autorização (SAGA)
+      description: A criação conclui a etapa de Retiradas na SAGA, mas não autoriza entrega por si só. O registro da retirada exige consulta posterior ao estado canônico de Reservas.
       requestBody:
         required: true
         content:

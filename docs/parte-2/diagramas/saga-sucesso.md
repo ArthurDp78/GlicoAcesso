@@ -2,7 +2,7 @@
 
 **Referência:** [04 — SAGA de confirmação e cancelamento](../04-saga.md)
 
-Este diagrama mostra a confirmação após o profissional aceitar uma solicitação `SOLICITADA`. O estado só vira `CONFIRMADA` depois que Estoque confirma a alocação, Retiradas confirma a autorização e Reservas persiste a finalização local.
+Este diagrama mostra a confirmação após o profissional aceitar uma solicitação `SOLICITADA`. O estado só vira `CONFIRMADA` depois que Estoque confirma a alocação, Retiradas persiste a autorização e Reservas grava a finalização local. A autorização não permite entrega por si só: no balcão, Retiradas exige consulta canônica de `CONFIRMADA` e revalida a autorização local.
 
 ```mermaid
 sequenceDiagram

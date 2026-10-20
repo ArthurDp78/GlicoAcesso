@@ -64,7 +64,7 @@ Se uma condição falhar, nenhum participante é chamado. Durante o processament
 |---:|---|---|---|
 | 0 | Reservas | Registra o aceite, muda `SOLICITADA` para `EM_CONFIRMACAO`, cria `sagaId` e persiste a execução como `EM_EXECUCAO`. | A transação local foi confirmada. Se não foi, não envia comandos. |
 | 1 | Reservas → Estoque | `AlocarEstoque`(`reservaId`, `unidadeId`, `itemId`, quantidade). | Estoque confirma uma alocação ativa no próprio banco. |
-| 2 | Reservas → Retiradas | `PrepararAutorizacao`(`reservaId`, `unidadeId`, `itemId`, quantidade). Só ocorre após confirmação da alocação. | Retiradas confirma uma autorização utilizável no balcão, vinculada à reserva. |
+| 2 | Reservas → Retiradas | `PrepararAutorizacao`(`reservaId`, `unidadeId`, `itemId`, quantidade). Só ocorre após confirmação da alocação. | Retiradas persiste a autorização; uma entrega futura ainda exige consulta canônica de `CONFIRMADA` em Reservas. |
 | 3 | Reservas | Grava `CONFIRMADA` e a execução `CONCLUIDA` em transação local. | Só após a confirmação local a reserva é apresentada como confirmada. |
 
 Os comandos internos são síncronos e versionados pelos contratos internos. Uma resposta de sucesso significa que o participante confirmou o efeito em seu próprio banco, não que Reservas alterou o banco dele.
@@ -89,6 +89,10 @@ As compensações ocorrem na ordem inversa dos efeitos: cancelar a autorização
 | Falha temporária ao persistir a finalização em Reservas | Efeitos dos participantes podem estar confirmados, mas o estado local não. | Repete a finalização local. Não inicia compensação por falha temporária de banco. |
 
 `FALHA_CONFIRMACAO` só é final depois que todos os efeitos confirmados tiverem sido compensados. Enquanto uma etapa ou compensação estiver pendente, a reserva permanece `EM_CONFIRMACAO` e a SAGA não é terminal.
+
+### 4.5 Validação posterior no balcão
+
+A SAGA termina com `CONFIRMADA` e `CONCLUIDA`, após Reservas, Estoque e Retiradas confirmarem suas etapas. A autorização criada não basta para entregar: Retiradas consulta `GET /internal/v1/reservas/{reservaId}/estado` e exige resposta canônica `CONFIRMADA`. Falha de consulta ou outro estado impede a entrega naquele momento, sem desfazer a confirmação. A consulta é somente leitura, sem chave idempotente; a transação de entrega revalida a autorização e serializa com a revogação. O procedimento e a corrida após a consulta estão no documento 00, seção 9.8, e na seção 5.3 abaixo.
 
 ## 5. Cancelamento distribuído
 

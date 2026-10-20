@@ -66,7 +66,7 @@ Cada solicitação tem um cidadão solicitante e uma unidade de retirada. O vín
 | Disponibilidade | Quantidade calculada para consulta: estoque físico menos alocações ativas, conforme a projeção de leitura. Pode estar defasada. |
 | Reserva | Solicitação de um item e quantidade em uma unidade, identificada por `reservaId`. Cada reserva contém exatamente um item. |
 | Alocação | Retenção de quantidade no Estoque, vinculada a uma única reserva. Não representa entrega física. |
-| Autorização de retirada | Registro criado pelo serviço de Retiradas após a alocação; permite que a unidade reconheça a reserva no balcão. Não significa que o item foi entregue. |
+| Autorização de retirada | Registro criado por Retiradas após a alocação. Sua existência não basta para entregar: no balcão, Retiradas consulta Reservas e exige estado canônico `CONFIRMADA`, além de autorização local não revogada nem utilizada. |
 | Retirada | Entrega presencial efetivamente registrada pela unidade. |
 | SAGA | Processo distribuído de confirmação de uma reserva, coordenado pelo serviço de Reservas e compensado quando uma etapa posterior falha. |
 | Compensação | Operação de negócio que desfaz o efeito de uma etapa concluída. Não é rollback de uma transação única entre bancos. |
@@ -112,6 +112,7 @@ flowchart LR
     BU --> RT["Retiradas"]
     RE -->|"REST interno: comandos da SAGA"| ES
     RE -->|"REST interno: comandos da SAGA"| RT
+    RT -->|"REST interno: consultar estado antes da entrega"| RE
     ES -->|"Outbox → RabbitMQ"| MQ["Mensageria"]
     RT -->|"Outbox → RabbitMQ"| MQ
     MQ -->|"eventos → projeções"| ES
@@ -125,6 +126,7 @@ O diagrama é lógico: cada microsserviço tem sua instância PostgreSQL indepen
 - O Gateway expõe apenas os dois BFFs. Clientes não chamam microsserviços de domínio diretamente.
 - Os BFFs fazem consultas e comandos próprios de cada tipo de cliente e podem agregar respostas. Eles não implementam a SAGA.
 - A confirmação da SAGA é coordenada por **Reservas**, que envia comandos internos REST a Estoque e Retiradas.
+- Para registrar a entrega, Retiradas consulta o estado canônico de Reservas por REST interno. Essa dependência síncrona mantém a validação simples e não altera os participantes da SAGA de confirmação.
 - Mensagens RabbitMQ propagam fatos para projeções e atualização de estados derivados. Elas não substituem o comando de confirmação nem transferem a coordenação da SAGA para os participantes.
 - As APIs públicas são versionadas sob `/api/cidadao/v1` e `/api/unidade/v1`. As chamadas entre serviços usam rotas internas versionadas sob `/internal/v1`; essas rotas não são publicadas pelo Gateway.
 - As APIs usam JSON UTF-8. Os nomes dos campos JSON são `camelCase`; identificadores são UUID em formato textual; instantes são ISO 8601 em UTC.
@@ -171,7 +173,7 @@ Identificadores de outras fronteiras são tratados como referências opacas. Um 
 6. Estoque tenta alocar atomicamente a quantidade solicitada para `reservaId`. A verificação é feita no modelo de escrita atual, não na projeção de disponibilidade.
 7. Se a alocação funcionar, Retiradas cria uma autorização de retirada ligada a `reservaId` e `autorizacaoId`.
 8. Se ambas as etapas forem bem-sucedidas, Reservas grava `CONFIRMADA` e a SAGA termina com sucesso.
-9. No balcão, o profissional valida a autorização e registra a entrega efetiva no serviço de Retiradas. A reserva passa a `RETIRADA` após o evento de retirada concluída ser processado por Reservas.
+9. No balcão, Retiradas consulta Reservas e só prossegue se o estado canônico retornado for `CONFIRMADA`. Revalida a autorização na transação local da entrega, serializando com sua revogação. A reserva passa a `RETIRADA` após o evento de retirada concluída ser processado por Reservas.
 
 O aceite pela unidade é uma decisão anterior à SAGA; a confirmação só é comunicada ao cidadão após a alocação e a preparação da autorização. Assim, “aceita pela unidade” não equivale a “confirmada”.
 
@@ -222,7 +224,7 @@ Escolhemos orquestração porque a sequência e a regra de compensação são co
 |---:|---|---|---|---|
 | 0 | Reservas | `AceitarReserva` | Registra decisão da unidade, muda para `EM_CONFIRMACAO` e persiste a SAGA como `EM_EXECUCAO`. | Se a transação local não confirmar, não se envia comando aos participantes. |
 | 1 | Estoque | `AlocarEstoque(reservaId, unidadeId, itemId, quantidade)` | Valida o saldo canônico e cria uma alocação ativa. Uma reserva não pode ter duas alocações ativas. | `LiberarAlocacao(reservaId)`, que libera apenas a alocação da reserva correspondente. |
-| 2 | Retiradas | `PrepararAutorizacao(reservaId, unidadeId, itemId, quantidade)` | Cria autorização apta a ser usada no balcão; não registra entrega. | `CancelarAutorizacao(reservaId)`, idempotente e sem apagar histórico. |
+| 2 | Retiradas | `PrepararAutorizacao(reservaId, unidadeId, itemId, quantidade)` | Persiste a autorização e conclui sua etapa, sem permitir entrega antes da consulta posterior de `CONFIRMADA` em Reservas. | `CancelarAutorizacao(reservaId)`, idempotente e sem apagar histórico. |
 | 3 | Reservas | `FinalizarConfirmacao(reservaId)` | Muda a reserva para `CONFIRMADA` e a SAGA para `CONCLUIDA`. | Se a persistência local falhar temporariamente, repetir a finalização idempotente. Se a falha for definitiva, compensar Retiradas e Estoque. |
 
 As operações inversas são executadas na ordem inversa dos efeitos concluídos: cancelar autorização e depois liberar alocação. A SAGA não deve liberar estoque antes de cancelar ou confirmar o estado da autorização.
@@ -282,6 +284,12 @@ O registro interno da SAGA usa os estados:
 ### 9.7 Diagramas da SAGA
 
 Os diagramas detalhados de sucesso e falha ficam em `docs/parte-2/diagramas/saga-sucesso.md` e `docs/parte-2/diagramas/saga-falha.md`. Eles devem manter exatamente os participantes, comandos, estados e compensações definidos aqui.
+
+### 9.8 Validação da Reserva no registro da retirada
+
+Retiradas obtém o `reservaId` da autorização e consulta `GET /internal/v1/reservas/{reservaId}/estado`, autenticado como serviço. Reservas retorna apenas `reservaId` e `status` de sua fonte canônica, sem cache ou projeção. Só uma resposta válida com o mesmo identificador e `status = CONFIRMADA` permite prosseguir. Estado diferente, reserva inexistente, timeout ou indisponibilidade impedem o registro naquele momento; nova tentativa exige nova consulta. O GET não exige chave idempotente; `X-Correlation-Id` é opcional para rastreamento.
+
+Após a consulta, Retiradas revalida localmente que a autorização não foi revogada nem utilizada e confirma entrega e Outbox na mesma transação. A consulta não bloqueia a Reserva: se retornar `CANCELAMENTO_EM_ANDAMENTO`, a entrega é recusada; se retornar `CONFIRMADA` e o cancelamento começar depois, revogação e entrega disputam a autorização em Retiradas. Se a entrega vencer, aplica-se a transição e o encerramento do cancelamento definidos na seção 9.3. Essa dependência síncrona evita sincronização adicional de estado e mantém os três serviços na SAGA de confirmação.
 
 ## 10. Eventos, Outbox e consistência eventual
 
@@ -380,7 +388,7 @@ Os detalhes de status HTTP, esquemas, parâmetros, autenticação, limites e exe
 - Cada microsserviço pode alterar somente seu banco. Uma integração não pode contornar a API/evento para consultar uma tabela alheia.
 - Dados pessoais são limitados ao identificador estável do cidadão e ao necessário para cumprir a retirada. O sistema não armazena cópia de receita ou documentos de saúde; requisitos são apresentados ao cidadão e conferidos pela unidade. Senhas e tokens nunca são armazenados nos bancos de domínio nem publicados em eventos.
 - Estoque deve impedir alocação superior ao saldo disponível por operação atômica/controle de concorrência no banco de escrita.
-- Retiradas não pode registrar uma entrega sem autorização válida e vinculada à mesma unidade e reserva. Uma entrega só pode ser confirmada uma vez.
+- Retiradas exige consulta canônica de `CONFIRMADA` e autorização local válida, vinculada à mesma unidade e reserva. A transação local revalida revogação e uso; uma entrega só pode ser confirmada uma vez.
 - Reservas registra ator e instante das decisões de unidade, confirmação e cancelamento. Quando o cancelamento for solicitado por profissional da unidade, também registra uma justificativa não vazia.
 - Cada serviço valida novamente os dados e permissões relevantes à própria operação; confiar no BFF como única barreira não é suficiente.
 
@@ -454,6 +462,7 @@ Uma revisão final só termina quando todos estes itens forem verdadeiros:
 - [ ] Os mesmos nomes de estado e transições aparecem em APIs, HATEOAS, SAGA, banco e diagramas, incluindo cancelamento em andamento e expiração da solicitação pendente.
 - [ ] A reserva só fica `CONFIRMADA` depois de alocação no Estoque e autorização em Retiradas.
 - [ ] A retirada física ocorre depois da confirmação e só muda o estado para `RETIRADA` após registro em Retiradas.
+- [ ] Antes da entrega, Retiradas consulta o estado canônico em Reservas e exige `CONFIRMADA`; falha de consulta impede o registro, e a transação local serializa entrega e revogação.
 - [ ] A SAGA tem três participantes — Reservas, Estoque e Retiradas — e as compensações são idempotentes e reversas.
 - [ ] Timeout não é interpretado automaticamente como falha remota; resultado incerto é consultado/repetido com idempotência.
 - [ ] Eventos usam envelope e nomes canônicos; cada produtor usa Outbox quando publica eventos.

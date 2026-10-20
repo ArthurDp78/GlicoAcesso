@@ -2,7 +2,7 @@
 
 **Referências:** [05 — Especificação complementar da SAGA](../05-saga.md), [04 — SAGA de confirmação e cancelamento](../04-saga.md) e contratos OpenAPI de [Reservas](../api/reserva.yaml), [Estoque](../api/estoque.yaml) e [Retiradas](../api/retirada.yaml).
 
-O profissional aceita uma solicitação `SOLICITADA`. Reservas registra a execução e coordena os comandos internos. A reserva só fica `CONFIRMADA` após Estoque confirmar a alocação, Retiradas confirmar a autorização e Reservas persistir a finalização. Este fluxo não inclui a entrega física.
+O profissional aceita uma solicitação `SOLICITADA`. Reservas registra a execução e coordena os comandos internos. A reserva só fica `CONFIRMADA` após Estoque confirmar a alocação, Retiradas persistir a autorização e Reservas gravar a finalização. A autorização criada não basta para entregar: no balcão, Retiradas consulta o estado canônico de Reservas e exige `CONFIRMADA`. Este diagrama mostra somente a SAGA de confirmação.
 
 ```mermaid
 sequenceDiagram
@@ -19,9 +19,9 @@ sequenceDiagram
     P->>G: POST /api/unidade/v1/reservas/{reservaId}/decisao
     G->>B: Encaminhar decisão autorizada
     B->>R: POST decisão, corpo {decisao: ACEITAR}
-    R->>DBR: Transação local: validar SOLICITADA; gravar EM_CONFIRMACAO e SAGA EM_EXECUCAO
+    R->>DBR: Transação local: validar SOLICITADA#59; gravar EM_CONFIRMACAO e SAGA EM_EXECUCAO
     DBR-->>R: Commit confirmado
-    R-->>B: 200 — decisão registrada; confirmação em andamento
+    R-->>B: 200 — decisão registrada#59; confirmação em andamento
     B-->>G: Resultado da decisão
     G-->>P: Reserva em EM_CONFIRMACAO
 
@@ -33,7 +33,7 @@ sequenceDiagram
     DBR-->>R: Commit confirmado
 
     R->>T: POST /internal/v1/autorizacoes (sagaId, reservaId, unidadeId, itemId, quantidade, idempotencyKey)
-    T->>DBT: Persistir autorização vinculada à reserva
+    T->>DBT: Persistir autorização vinculada à reserva (entrega exige consulta posterior)
     DBT-->>T: Commit local confirmado
     T-->>R: 201 — autorização criada
     R->>DBR: Persistir etapa e efeito de autorização confirmados
@@ -46,4 +46,4 @@ sequenceDiagram
     G-->>P: Reserva CONFIRMADA
 ```
 
-Cada persistência ocorre no banco do serviço proprietário; não há transação compartilhada. Se uma chamada interna expirar ou perder a resposta, Reservas trata o resultado como incerto, não avança a etapa e não compensa às cegas. A recuperação depende de repetir o mesmo comando com a chave idempotente estável conforme as decisões arquiteturais e a implementação dos participantes; os contratos atuais não definem endpoint de consulta de estado por `reservaId`.
+Cada persistência ocorre no banco do serviço proprietário; não há transação compartilhada. Timeout nos comandos é resultado incerto e exige repetição idempotente para reconciliar os efeitos. O GET de estado de Reservas valida a entrega posterior e não consulta os resultados de alocação ou autorização nos participantes.

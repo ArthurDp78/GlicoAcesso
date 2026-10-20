@@ -68,8 +68,12 @@ flowchart TD
     K --> M{"Cancelamento antes da entrega?"}
     M -->|"Sim"| N["CANCELAMENTO_EM_ANDAMENTO"]
     N -->|"Cancelamento confirmado"| O["CANCELADA após operações aplicáveis"]
-    M -->|"Não, entrega registrada"| P["Retiradas publica retirada.concluida.v1"]
-    N -->|"Retirada vence o cancelamento"| P
+    M -->|"Não"| V["Retiradas consulta estado canônico em Reservas"]
+    V --> S{"Estado CONFIRMADA?"}
+    V -->|"Timeout ou indisponibilidade"| X["Não registra entrega"]
+    S -->|"Não"| X
+    S -->|"Sim"| P["Retiradas revalida autorização e registra entrega e Outbox"]
+    N -->|"Retirada vence após consulta de CONFIRMADA"| P
     P --> Q["Reservas atualiza para RETIRADA"]
 ```
 
@@ -162,7 +166,7 @@ O sistema não comunica `CANCELADA` antes de confirmar a revogação da autoriza
 ## 9. Fluxo E — retirada física
 
 1. O profissional da unidade apresenta/valida a autorização da reserva no serviço de Retiradas.
-2. Retiradas confirma que a autorização está válida, corresponde à unidade e à reserva e ainda não foi cancelada nem usada.
+2. Retiradas obtém `reservaId` da autorização e consulta `GET /internal/v1/reservas/{reservaId}/estado`. Só prossegue com estado canônico `CONFIRMADA`; timeout, indisponibilidade, reserva inexistente ou outro estado impedem a entrega naquele momento. Na transação local, revalida que a autorização corresponde à unidade e à reserva e não foi revogada nem usada.
 3. Retiradas registra a entrega física uma única vez em seu próprio banco e grava `retirada.concluida.v1` na mesma transação local, pela Outbox.
 4. A Outbox publica o evento no RabbitMQ. Reservas e Estoque recebem cópias por filas duráveis independentes.
 5. Reservas deduplica por `eventId` e atualiza o estado de negócio de `CONFIRMADA` ou `CANCELAMENTO_EM_ANDAMENTO` para `RETIRADA` em seu próprio banco. No segundo caso, encerra a execução de cancelamento como `INTERROMPIDA` e registra a auditoria correspondente, na mesma transação local da deduplicação e da atualização da reserva.
@@ -173,7 +177,7 @@ O evento de retirada contém `retiradaId`, `reservaId`, `unidadeId`, `itemId` e 
 
 Durante o processamento assíncrono pode haver um intervalo em que Retiradas já registrou a entrega, mas Reservas ainda apresenta `CONFIRMADA` ou `CANCELAMENTO_EM_ANDAMENTO`, ou Estoque ainda mantém a alocação ativa. Até o consumidor de Estoque concluir a transação, a quantidade permanece alocada e não pode ser oferecida para outra solicitação.
 
-Se a entrega física for registrada primeiro, um cancelamento concorrente deve ser recusado. Se o cancelamento da autorização concluir primeiro, a autorização não pode ser usada para registrar a entrega. Retiradas serializa essas operações para que somente um resultado vença.
+Se a entrega física for registrada primeiro, um cancelamento concorrente deve ser recusado. Se o cancelamento da autorização concluir primeiro, a autorização não pode ser usada para registrar a entrega. Retiradas serializa essas operações para que somente um resultado vença. A consulta não bloqueia a Reserva: a corrida continua possível se o cancelamento começar depois da leitura de `CONFIRMADA`, conforme o documento 00, seção 9.8.
 
 Quando a retirada vence, Reservas não envia `LiberarAlocacao`: Estoque baixa o físico e encerra a alocação como consumida ao processar o evento. Respostas tardias ou retries não podem retomar a execução de cancelamento encerrada nem mudar a reserva de `RETIRADA` para `CANCELADA`. O tratamento da execução está detalhado no documento 04, seção 5.3.
 

@@ -207,6 +207,7 @@ Reservas:
 - registra a solicitação como SOLICITADA e calcula decisaoAte;
 - autoriza a unidade correspondente a decidir sobre a solicitação;
 - registra aceitação ou rejeição e seus responsáveis;
+- fornece seu estado canônico por consulta interna para Retiradas validar uma entrega;
 - ao aceitar, inicia e coordena a SAGA de confirmação;
 - envia comandos internos idempotentes a Estoque e Retiradas, mantendo o estado durável do processo;
 - altera a reserva para CONFIRMADA somente após a alocação no Estoque e a preparação da autorização em Retiradas terem sido confirmadas;
@@ -258,7 +259,8 @@ Retiradas:
 
 - prepara, de forma idempotente, a autorização solicitada pela SAGA depois que Estoque confirmou a alocação;
 - cancela uma autorização quando Reservas coordena cancelamento ou compensação;
-- valida que a autorização está apta e corresponde à reserva e à unidade envolvidas;
+- consulta o estado canônico em Reservas antes de entregar e exige `CONFIRMADA`; timeout, indisponibilidade ou outro estado impedem o registro naquele momento;
+- revalida, na transação local, que a autorização corresponde à reserva e à unidade e não foi revogada nem utilizada;
 - registra uma única vez a entrega física, com ator e instante;
 - publica o evento retirada.concluida.v1 depois de confirmar localmente a entrega;
 - assegura que cancelamento da autorização e registro da retirada física sejam mutuamente exclusivos.
@@ -313,7 +315,7 @@ Esta seção descreve responsabilidades e direção das chamadas em nível arqui
 | Reservas | Estoque | Verificar permiteReserva e executar alocação ou liberação durante a SAGA. | Comandos REST internos, idempotentes e versionados. |
 | Reservas | Retiradas | Preparar ou cancelar autorização durante confirmação, compensação ou cancelamento. | Comandos REST internos, idempotentes e versionados. |
 | Estoque | Consumidores interessados | Informar alterações persistidas que atualizam disponibilidade e projeções. | Eventos publicados por Outbox no RabbitMQ; consumidores deduplicam por eventId. |
-| Retiradas | Reservas | Informar que a entrega presencial foi registrada. | Evento retirada.concluida.v1 publicado por Outbox; Reservas atualiza seu status ao consumi-lo. |
+| Retiradas | Reservas | Verificar a confirmação antes da entrega e informar a retirada após o registro. | GET interno do estado canônico antes da entrega; evento retirada.concluida.v1 publicado por Outbox depois dela. |
 
 Os clientes chamam o API Gateway, e o Gateway encaminha cada público ao BFF correspondente. Clientes não chamam APIs dos microsserviços de domínio diretamente. Os BFFs podem agregar respostas para uma tela, mas não possuem regras de domínio, não gravam nos bancos dos microsserviços e não orquestram a SAGA.
 
