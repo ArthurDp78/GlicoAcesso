@@ -1,14 +1,14 @@
-# GlicoAcesso — Especificação complementar da SAGA
+# GlicoAcesso - Especificação complementar da SAGA
 
 **Etapa:** 2 — Arquitetura
-**Documento:** 05 — SAGA
+**Documento:** 08 - SAGA
 **Escopo:** confirmação orquestrada de uma reserva
-**Documento normativo:** [00 — Decisões arquiteturais compartilhadas](./00-decisoes-compartilhadas.md)
-**Especificação existente:** [04 — SAGA de confirmação e cancelamento](./04-saga.md)
-**Fluxo de negócio:** [03 — Fluxo de reservas](./03-fluxo-reservas.md)
+**Documento normativo:** [00 - Decisões arquiteturais compartilhadas](./00-decisoes-compartilhadas.md)
+**Especificação existente:** [06 - SAGA de confirmação e cancelamento](./06-saga.md)
+**Fluxo de negócio:** [05 - Fluxo de reservas](./05-fluxo-reservas.md)
 **Contratos:** [Reservas](./api/reserva.yaml), [Estoque](./api/estoque.yaml) e [Retiradas](./api/retirada.yaml)
 
-> Este documento organiza os requisitos de avaliação da SAGA de confirmação em uma especificação complementar. O documento 04 continua sendo a referência detalhada para cancelamento, estados duráveis, concorrência e operação. Em caso de divergência, prevalecem as decisões compartilhadas do documento 00 e os contratos OpenAPI vigentes.
+> Este documento organiza os requisitos de avaliação da SAGA de confirmação em uma especificação complementar. O documento 06 continua sendo a referência detalhada para cancelamento, estados duráveis, concorrência e operação. Em caso de divergência, prevalecem as decisões compartilhadas do documento 00 e os contratos OpenAPI vigentes.
 
 ## 1. Objetivo e limites
 
@@ -73,7 +73,7 @@ Os caminhos abaixo são os declarados nos OpenAPI atuais. Os nomes das operaçõ
 
 **O que o OpenAPI declara:** caminhos, métodos, campos de entrada e códigos/resumos de resposta listados acima. Os schemas atuais não especificam corpos detalhados de resposta para todos os comandos nem descrevem integralmente a semântica de repetição.
 
-**O que as decisões arquiteturais estabelecem:** os comandos devem ser idempotentes; a alocação e a autorização são únicas por reserva; repetir uma liberação ou cancelamento não duplica efeitos; timeout é resultado incerto; compensações seguem ordem inversa. Essas são regras arquiteturais do documento 00 e da especificação 04, não evidência de implementação executável.
+**O que as decisões arquiteturais estabelecem:** os comandos devem ser idempotentes; a alocação e a autorização são únicas por reserva; repetir uma liberação ou cancelamento não duplica efeitos; timeout é resultado incerto; compensações seguem ordem inversa. Essas são regras arquiteturais do documento 00 e da especificação 06, não evidência de implementação executável.
 
 **O que requer implementação ou confirmação de Guilerme:** persistir e aplicar as chaves idempotentes no serviço, devolver resultado compatível em retries, detectar chave igual com conteúdo divergente e harmonizar o uso de `idempotencyKey` no corpo dos comandos de criação com `X-Idempotency-Key` nas compensações. Os YAMLs mostram esses campos, mas não comprovam que o comportamento está implementado.
 
@@ -90,7 +90,7 @@ O `status` da reserva é estado de negócio visível e segue o contrato e as dec
 | Confirmação concluída | `CONFIRMADA` |
 | Falha definitiva com todos os efeitos resolvidos e compensações concluídas | `FALHA_CONFIRMACAO` |
 
-Os estados internos documentados em `04-saga.md` incluem `EM_EXECUCAO`, `COMPENSANDO`, `COMPENSACAO_PENDENTE`, `CONCLUIDA` e `COMPENSADA`. O documento também define estados para o fluxo de cancelamento. Esta especificação não cria novos estados canônicos.
+Os estados internos documentados em `06-saga.md` incluem `EM_EXECUCAO`, `COMPENSANDO`, `COMPENSACAO_PENDENTE`, `CONCLUIDA` e `COMPENSADA`. O documento também define estados para o fluxo de cancelamento. Esta especificação não cria novos estados canônicos.
 
 Estados de negócio da reserva incluem `SOLICITADA`, `EM_CONFIRMACAO`, `CONFIRMADA`, `CANCELAMENTO_EM_ANDAMENTO`, `CANCELADA`, `REJEITADA`, `EXPIRADA`, `FALHA_CONFIRMACAO` e `RETIRADA`. A lista oficial é a do contrato de Reservas. A execução de confirmação não leva a `RETIRADA`; esse estado depende do processo posterior de entrega.
 
@@ -172,8 +172,8 @@ Detalhes internos, credenciais, stack traces e dados pessoais desnecessários n�
 
 ## 11. Referências e diagramas complementares
 
-- [00 — Decisões arquiteturais compartilhadas](./00-decisoes-compartilhadas.md): fronteiras, estados e identificadores canônicos.
-- [03 — Fluxo de reservas](./03-fluxo-reservas.md): fluxo de negócio e estados da reserva.
-- [04 — SAGA de confirmação e cancelamento](./04-saga.md): especificação detalhada vigente, inclusive cancelamento distribuído.
+- [00 - Decisões arquiteturais compartilhadas](./00-decisoes-compartilhadas.md): fronteiras, estados e identificadores canônicos.
+- [05 - Fluxo de reservas](./05-fluxo-reservas.md): fluxo de negócio e estados da reserva.
+- [06 - SAGA de confirmação e cancelamento](./06-saga.md): especificação detalhada vigente, inclusive cancelamento distribuído.
 - [Diagrama de sucesso existente](./diagramas/saga-sucesso.md) e [diagrama de falha existente](./diagramas/saga-falha.md): representações atuais preservadas.
 - [Novo diagrama de caminho feliz](./diagramas/saga-caminho-feliz.md) e [novo diagrama de compensação](./diagramas/saga-compensacao.md): visões focadas nos requisitos desta entrega.

@@ -1,6 +1,6 @@
-# GlicoAcesso — Consistência eventual e dual write
+# GlicoAcesso - Consistência eventual e dual write
 
-**Referências:** [decisões compartilhadas](./00-decisoes-compartilhadas.md), [fluxo de reservas](./03-fluxo-reservas.md), [SAGA](./04-saga.md) e [bancos](./07-bancos.md).
+**Referências:** [decisões compartilhadas](./00-decisoes-compartilhadas.md), [fluxo de reservas](./05-fluxo-reservas.md), [SAGA](./06-saga.md) e [bancos](./09-bancos.md).
 
 ## 1. Limite das transações
 
@@ -44,7 +44,7 @@ A decisão é usar **Transactional Outbox** sempre que um efeito persistido prec
 | Reenvio ou entrega duplicada de evento | Entrega pelo menos uma vez, consumidores idempotentes e deduplicação atômica com os efeitos locais, evitando repetir baixa ou transição. |
 | Evento de retirada incompatível com a alocação | Validar reserva, unidade, item e quantidade; não aplicar baixa parcial ou arbitrária. Registrar a divergência para reconciliação e reprocessamento. |
 
-O detalhamento da Outbox ficará em `09-outbox.md`. Estruturas completas de Outbox/Inbox, publicador, catálogo de eventos e algoritmo do CQRS ficam para os próximos documentos.
+O detalhamento da Outbox ficará em `11-outbox.md`. Estruturas completas de Outbox/Inbox, publicador, catálogo de eventos e algoritmo do CQRS ficam para os próximos documentos.
 
 ## 5. Consulta síncrona antes da entrega e limites da SAGA
 

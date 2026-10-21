@@ -1,8 +1,8 @@
-# GlicoAcesso — Database per Service
+# GlicoAcesso - Database per Service
 
 **Etapa:** 2 — Arquitetura  
 **Responsável:** Lana  
-**Referências:** [decisões compartilhadas](./00-decisoes-compartilhadas.md), [fronteiras dos serviços](./01-microsservicos.md), [fluxo de reservas](./03-fluxo-reservas.md) e [SAGA](./04-saga.md).
+**Referências:** [decisões compartilhadas](./00-decisoes-compartilhadas.md), [fronteiras dos serviços](./01-microsservicos.md), [fluxo de reservas](./05-fluxo-reservas.md) e [SAGA](./06-saga.md).
 
 ## 1. Tecnologia e isolamento
 
@@ -103,7 +103,7 @@ Contrato relacionado: [reserva.yaml](./api/reserva.yaml).
 
 `reservas` representa o negócio; `saga_execucoes` representa a coordenação técnica. Confirmação e cancelamento são execuções distintas da mesma reserva. `saga_etapas` persiste o comando lógico, sua chave, tentativas e evidências necessárias à retomada. Não se cria tabela adicional de tentativas HTTP.
 
-`historico_reserva` modela o histórico de transições e cancelamentos exigido pelo documento 01, seção 7.2, e os registros de auditoria detalhados no documento 03, seção 13. O documento 00, seção 9.3, também exige evidência da retirada e motivo do encerramento quando a entrega vence o cancelamento. Esses documentos exigem a preservação dos dados, sem determinar uma tabela específica; a tabela aqui apresentada atende a esse requisito. O ator vem da identidade autenticada; ações automáticas são identificadas pelo motivo e pela execução ou fato que as originou. Quando o histórico referencia uma SAGA, a aplicação valida que ela pertence à mesma reserva.
+`historico_reserva` modela o histórico de transições e cancelamentos exigido pelo documento 01, seção 7.2, e os registros de auditoria detalhados no documento 05, seção 13. O documento 00, seção 9.3, também exige evidência da retirada e motivo do encerramento quando a entrega vence o cancelamento. Esses documentos exigem a preservação dos dados, sem determinar uma tabela específica; a tabela aqui apresentada atende a esse requisito. O ator vem da identidade autenticada; ações automáticas são identificadas pelo motivo e pela execução ou fato que as originou. Quando o histórico referencia uma SAGA, a aplicação valida que ela pertence à mesma reserva.
 
 ### Estados canônicos
 
@@ -115,7 +115,7 @@ Os estados anterior e posterior do histórico usam o mesmo conjunto, com anterio
 
 `EM_EXECUCAO`, `COMPENSANDO`, `COMPENSACAO_PENDENTE`, `CANCELANDO`, `CANCELAMENTO_PENDENTE`, `INTERROMPIDA`, `CONCLUIDA`, `COMPENSADA`, `CANCELADA`.
 
-Os tipos de execução são confirmação e cancelamento, conforme o documento 04. Os literais persistidos de `tipo`, de `etapaAtual` e de `estadoTecnico` ainda não estão fixados nos contratos; ficam como ponto de alinhamento, sem inventar enums. As operações remotas já nomeadas são `AlocarEstoque`, `PrepararAutorizacao`, `CancelarAutorizacao` e `LiberarAlocacao`.
+Os tipos de execução são confirmação e cancelamento, conforme o documento 06. Os literais persistidos de `tipo`, de `etapaAtual` e de `estadoTecnico` ainda não estão fixados nos contratos; ficam como ponto de alinhamento, sem inventar enums. As operações remotas já nomeadas são `AlocarEstoque`, `PrepararAutorizacao`, `CancelarAutorizacao` e `LiberarAlocacao`.
 
 ### Integridade e recuperação
 
@@ -125,7 +125,7 @@ Os tipos de execução são confirmação e cancelamento, conforme o documento 0
 - `dadosComando` preserva os dados necessários para repetir o mesmo comando, inclusive identificadores e quantidade; `resultado` preserva a resposta conclusiva e identificadores de efeitos confirmados. Erros são sanitizados e não armazenam credenciais ou perfis pessoais.
 - Um índice UNIQUE parcial em `saga_execucoes(reservaId)` para `EM_EXECUCAO`, `COMPENSANDO`, `COMPENSACAO_PENDENTE`, `CANCELANDO` e `CANCELAMENTO_PENDENTE` garante uma única execução ativa. `INTERROMPIDA` é terminal e fica fora desse índice.
 - Aceite, transição para `EM_CONFIRMACAO`, histórico e criação da execução são atômicos no banco de Reservas. A finalização grava `CONFIRMADA`, `CONCLUIDA` e histórico na mesma transação local.
-- Se uma confirmação for interrompida para cancelar, seus efeitos e etapas continuam preservados. A execução de cancelamento usa novo `sagaId` depois do encerramento da anterior, conforme o documento 04.
+- Se uma confirmação for interrompida para cancelar, seus efeitos e etapas continuam preservados. A execução de cancelamento usa novo `sagaId` depois do encerramento da anterior, conforme o documento 06.
 - Quando a retirada vence o cancelamento, a reserva admite `CANCELAMENTO_EM_ANDAMENTO → RETIRADA`; a execução de cancelamento termina em `INTERROMPIDA`, com motivo e evidências. As alterações e a auditoria são atômicas com a deduplicação exigida pelo documento 00. Respostas tardias não podem levar a reserva para `CANCELADA` nem reabrir a execução.
 - Transições usam bloqueio ou atualização condicional pelo estado atual. Um `CHECK` de valores não valida sozinho a máquina de estados. Expiração só atua sobre `SOLICITADA`; justificativa é obrigatória no cancelamento profissional, conforme o contrato vigente, e fica no histórico.
 

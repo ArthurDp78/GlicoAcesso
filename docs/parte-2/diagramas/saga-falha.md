@@ -1,6 +1,6 @@
-# GlicoAcesso — SAGA: falha e compensação
+# GlicoAcesso - SAGA: falha e compensação
 
-**Referência:** [04 — SAGA de confirmação e cancelamento](../04-saga.md)
+**Referência:** [06 - SAGA de confirmação e cancelamento](../06-saga.md)
 
 O diagrama mostra falhas definitivas possíveis. Timeout ou falha transitória não inicia compensação enquanto o resultado estiver incerto: Reservas consulta o participante ou repete o mesmo comando idempotente.
 

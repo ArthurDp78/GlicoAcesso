@@ -1,11 +1,11 @@
-# GlicoAcesso — diagrama da arquitetura
+# GlicoAcesso - diagrama da arquitetura
 
 **Etapa:** 2 — Arquitetura  
-**Documento:** 02 — Diagrama de arquitetura  
+**Documento:** 02 - Diagrama de arquitetura  
 **Versão:** 1.0  
 **Situação:** representação dos componentes e das comunicações definidos nos documentos 00 e 01  
-**Documento normativo:** [00 — Decisões arquiteturais compartilhadas](./00-decisoes-compartilhadas.md)  
-**Documento complementar:** [01 — Decomposição e fronteiras dos microsserviços](./01-microsservicos.md)  
+**Documento normativo:** [00 - Decisões arquiteturais compartilhadas](./00-decisoes-compartilhadas.md)  
+**Documento complementar:** [01 - Decomposição e fronteiras dos microsserviços](./01-microsservicos.md)  
 **Última revisão:** 20 de outubro de 2026
 
 > Este documento representa visualmente a arquitetura lógica do GlicoAcesso. Os limites dos serviços, as responsabilidades, os identificadores, os estados e os eventos são os definidos nos documentos 00 e 01. Se um desenho aqui parecer contradizê-los, prevalecem os documentos 00 e 01.
@@ -28,7 +28,7 @@ O diagrama é lógico e mostra responsabilidades e fluxos. Ele não representa i
 |---|---|---|---|
 | Cliente Cidadão | Cliente | Consultar unidades e disponibilidade; criar, acompanhar e cancelar a própria solicitação conforme as regras de estado. | Não acessa bancos nem microsserviços diretamente. |
 | Cliente da Unidade | Cliente | Consultar solicitações da unidade, decidir sobre elas, administrar estoque e registrar retiradas autorizadas conforme permissões. | Não acessa bancos nem microsserviços diretamente. |
-| API Gateway | Componente de entrada | Receber as chamadas externas e encaminhar cada público ao BFF correspondente; aplicar responsabilidades transversais definidas no documento 06. | Não possui dados de domínio e não coordena a SAGA. |
+| API Gateway | Componente de entrada | Receber as chamadas externas e encaminhar cada público ao BFF correspondente; aplicar responsabilidades transversais definidas no documento 03. | Não possui dados de domínio e não coordena a SAGA. |
 | BFF Cidadão | Backend de apresentação | Compor as consultas e operações necessárias à experiência do cidadão. | Consome APIs dos serviços; não acessa bancos e não é dono de regras de domínio. |
 | BFF Unidade | Backend de apresentação | Compor consultas e operações de trabalho da equipe da unidade. | Consome APIs dos serviços; não acessa bancos e não coordena a SAGA. |
 | Unidades | Microsserviço de domínio | Manter cadastro e informações de atendimento da unidade, além do prazo de análise configurado. | Único proprietário dos dados de Unidades em sua instância PostgreSQL. |
@@ -66,7 +66,7 @@ flowchart TB
 
 O diagrama indica capacidades de comunicação, não que cada tela chame todos os serviços. Cada BFF chama somente os serviços necessários à operação solicitada. A autorização é validada na borda e também pelos serviços responsáveis pela operação; o BFF não é a única barreira de autorização.
 
-As APIs públicas seguem os prefixos /api/cidadao/v1 e /api/unidade/v1. As chamadas entre serviços usam rotas internas versionadas sob /internal/v1, que não são publicadas pelo Gateway. Os endpoints e suas respostas são definidos nos arquivos OpenAPI e nos documentos 05–07.
+As APIs públicas seguem os prefixos /api/cidadao/v1 e /api/unidade/v1. As chamadas entre serviços usam rotas internas versionadas sob /internal/v1, que não são publicadas pelo Gateway. Os endpoints e suas respostas são definidos nos arquivos OpenAPI e nos documentos 03, 04 e 07.
 
 ## 4. Comunicação entre os microsserviços
 
@@ -174,7 +174,7 @@ Não há chave estrangeira entre instâncias. Uma relação com dados de outro s
 3. Reservas solicita a alocação a Estoque.
 4. Se Estoque confirmar a alocação, Reservas solicita a preparação da autorização a Retiradas.
 5. Se as duas operações forem confirmadas, Reservas grava CONFIRMADA.
-6. Se uma etapa posterior falhar, Reservas coordena somente as compensações necessárias, em ordem inversa aos efeitos concluídos. O detalhamento está no documento 04.
+6. Se uma etapa posterior falhar, Reservas coordena somente as compensações necessárias, em ordem inversa aos efeitos concluídos. O detalhamento está no documento 06.
 
 ### 6.3 Cancelamento antes da retirada física
 
@@ -192,11 +192,11 @@ Retiradas consulta `GET /internal/v1/reservas/{reservaId}/estado` e exige o esta
 - Todo consumidor deve deduplicar pelo eventId e executar seus efeitos de forma idempotente.
 - O consumidor de Estoque deve gravar a deduplicação, a baixa física, o encerramento da alocação e a nova linha de Outbox na mesma transação local.
 - Se a alocação não corresponder ao evento de retirada, Estoque não faz uma baixa parcial ou arbitrária; a ocorrência deve ficar observável para reconciliação e reprocessamento.
-- Se um serviço estiver temporariamente indisponível, a mensagem permanece recuperável por retry/backoff ou pelo mecanismo de falha operacional definido no documento 10.
+- Se um serviço estiver temporariamente indisponível, a mensagem permanece recuperável por retry/backoff ou pelo mecanismo de falha operacional definido no documento 11.
 - A disponibilidade de leitura pode ficar defasada em relação ao modelo de escrita. A resposta deve informar atualizadoEm; a alocação sempre valida o saldo canônico no modelo de escrita de Estoque.
 - Depois da retirada, a alocação permanece ativa até Estoque consumir o evento. Durante esse intervalo, a quantidade não pode voltar a ser oferecida para outra reserva.
 
-O objetivo para atualização de projeções é até 5 segundos em condições normais. Atrasos acima desse limite devem ser sinalizados e monitorados, conforme os documentos 09–11.
+O objetivo para atualização de projeções é até 5 segundos em condições normais. Atrasos acima desse limite devem ser sinalizados e monitorados, conforme os documentos 10–12.
 
 ## 8. Convenções de leitura do diagrama
 
@@ -239,8 +239,8 @@ O diagrama está de acordo com a arquitetura quando:
 
 ## 11. Referências
 
-- [00 — Decisões arquiteturais compartilhadas](./00-decisoes-compartilhadas.md): contrato normativo de serviços, estados, identificadores, SAGA, eventos, Outbox e CQRS.
-- [01 — Decomposição e fronteiras dos microsserviços](./01-microsservicos.md): justificativa e responsabilidades detalhadas dos serviços.
-- [03 — Fluxo de reservas](./03-fluxo-reservas.md): fluxo de negócio e estados, previsto na estrutura da Etapa 2.
-- [04 — SAGA](./04-saga.md): confirmação, falhas, compensações e recuperação, previsto na estrutura da Etapa 2.
-- [06 — API Gateway](./06-api-gateway.md) e [07 — BFFs](./07-bffs.md): roteamento e composição das chamadas dos clientes, previstos na estrutura da Etapa 2.
+- [00 - Decisões arquiteturais compartilhadas](./00-decisoes-compartilhadas.md): contrato normativo de serviços, estados, identificadores, SAGA, eventos, Outbox e CQRS.
+- [01 - Decomposição e fronteiras dos microsserviços](./01-microsservicos.md): justificativa e responsabilidades detalhadas dos serviços.
+- [05 - Fluxo de reservas](./05-fluxo-reservas.md): fluxo de negócio e estados, previsto na estrutura da Etapa 2.
+- [06 - SAGA](./06-saga.md): confirmação, falhas, compensações e recuperação, previsto na estrutura da Etapa 2.
+- [03 - API Gateway](./03-api-gateway.md) e [04 - BFFs](./04-bffs.md): roteamento e composição das chamadas dos clientes, previstos na estrutura da Etapa 2.

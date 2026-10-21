@@ -1,6 +1,6 @@
-# GlicoAcesso — CQRS no serviço Estoque
+# GlicoAcesso - CQRS no serviço Estoque
 
-**Referências:** [decisões compartilhadas](./00-decisoes-compartilhadas.md), [bancos](./07-bancos.md), [consistência](./08-consistencia.md) e [Outbox e eventos](./09-outbox.md).
+**Referências:** [decisões compartilhadas](./00-decisoes-compartilhadas.md), [bancos](./09-bancos.md), [consistência](./10-consistencia.md) e [Outbox e eventos](./11-outbox.md).
 
 ## 1. Escopo e escolha arquitetural
 
@@ -38,7 +38,7 @@ O endpoint existente `GET /api/cidadao/v1/estoque/disponibilidade` lê essa proj
 
 O fluxo é: **alteração canônica + Outbox na mesma transação → worker → RabbitMQ → consumidor da projeção → `disponibilidade`**. A transação de domínio não atualiza diretamente a projeção; a atualização assíncrona demonstra a consistência eventual planejada, mesmo com os dois modelos no mesmo PostgreSQL.
 
-O consumidor usa os seis eventos de Estoque definidos em `09-outbox.md`: `estoque.alocacao-criada.v1`, `estoque.alocacao-liberada.v1`, `estoque.entrada-registrada.v1`, `estoque.ajustado.v1`, `estoque.retirada-baixada.v1` e `estoque.permissao-reserva-alterada.v1`.
+O consumidor usa os seis eventos de Estoque definidos em `11-outbox.md`: `estoque.alocacao-criada.v1`, `estoque.alocacao-liberada.v1`, `estoque.entrada-registrada.v1`, `estoque.ajustado.v1`, `estoque.retirada-baixada.v1` e `estoque.permissao-reserva-alterada.v1`.
 
 Cada evento traz `unidadeId`, `itemId`, `estoqueVersion` e o estado resultante: `estoqueFisicoAtual`, `quantidadeAlocada` e `permiteReserva`. O consumidor calcula a disponibilidade e grava o estado correspondente, sem acumular deltas. A projeção não baixa estoque diretamente ao receber `retirada.concluida.v1`: esse evento primeiro provoca o processamento canônico da retirada em Estoque, que produz `estoque.retirada-baixada.v1`.
 

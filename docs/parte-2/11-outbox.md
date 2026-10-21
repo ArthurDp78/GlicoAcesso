@@ -1,6 +1,6 @@
-# GlicoAcesso — Transactional Outbox, Inbox e eventos
+# GlicoAcesso - Transactional Outbox, Inbox e eventos
 
-**Referências:** [decisões compartilhadas](./00-decisoes-compartilhadas.md), [fluxo de reservas](./03-fluxo-reservas.md), [bancos](./07-bancos.md) e [consistência](./08-consistencia.md).
+**Referências:** [decisões compartilhadas](./00-decisoes-compartilhadas.md), [fluxo de reservas](./05-fluxo-reservas.md), [bancos](./09-bancos.md) e [consistência](./10-consistencia.md).
 
 ## 1. Tabelas técnicas por serviço
 

@@ -1,11 +1,11 @@
-# GlicoAcesso — SAGA de confirmação e cancelamento
+# GlicoAcesso - SAGA de confirmação e cancelamento
 
 **Etapa:** 2 — Arquitetura  
-**Documento:** 04 — SAGA  
+**Documento:** 06 - SAGA  
 **Versão:** 1.0  
 **Responsável:** Marcos — arquitetura e fluxo  
-**Documento normativo:** [00 — Decisões arquiteturais compartilhadas](./00-decisoes-compartilhadas.md)  
-**Fluxo de negócio:** [03 — Fluxo de reservas](./03-fluxo-reservas.md)  
+**Documento normativo:** [00 - Decisões arquiteturais compartilhadas](./00-decisoes-compartilhadas.md)  
+**Fluxo de negócio:** [05 - Fluxo de reservas](./05-fluxo-reservas.md)  
 **Diagramas:** [sucesso](./diagramas/saga-sucesso.md) e [falha](./diagramas/saga-falha.md)  
 **Última revisão:** 20 de outubro de 2026
 
@@ -18,7 +18,7 @@ A SAGA cobre:
 1. a confirmação iniciada quando um profissional aceita uma solicitação;
 2. o cancelamento de uma confirmação em andamento ou já concluída, desde que a entrega física ainda não tenha sido registrada.
 
-A retirada física não é uma etapa da SAGA de confirmação. Ela acontece posteriormente em Retiradas e é comunicada por `retirada.concluida.v1`. Reservas e Estoque consomem esse evento independentemente, conforme os documentos 00 e 03.
+A retirada física não é uma etapa da SAGA de confirmação. Ela acontece posteriormente em Retiradas e é comunicada por `retirada.concluida.v1`. Reservas e Estoque consomem esse evento independentemente, conforme os documentos 00 e 05.
 
 ## 2. Decisão arquitetural e participantes
 
@@ -232,8 +232,8 @@ Intervenção manual não grava diretamente nos bancos de Estoque ou Retiradas. 
 
 ## 13. Referências
 
-- [00 — Decisões arquiteturais compartilhadas](./00-decisoes-compartilhadas.md): estados, comandos, compensações e identificadores canônicos.
-- [01 — Decomposição e fronteiras dos microsserviços](./01-microsservicos.md): responsabilidades dos participantes.
-- [02 — Diagrama de arquitetura](./02-diagrama-arquitetura.md): componentes e comunicações.
-- [03 — Fluxo de reservas](./03-fluxo-reservas.md): fluxo de negócio e estados visíveis.
+- [00 - Decisões arquiteturais compartilhadas](./00-decisoes-compartilhadas.md): estados, comandos, compensações e identificadores canônicos.
+- [01 - Decomposição e fronteiras dos microsserviços](./01-microsservicos.md): responsabilidades dos participantes.
+- [02 - Diagrama de arquitetura](./02-diagrama-arquitetura.md): componentes e comunicações.
+- [05 - Fluxo de reservas](./05-fluxo-reservas.md): fluxo de negócio e estados visíveis.
 - [Diagrama de sucesso](./diagramas/saga-sucesso.md) e [diagrama de falha](./diagramas/saga-falha.md): sequências dos caminhos da SAGA.
