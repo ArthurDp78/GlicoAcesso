@@ -5,7 +5,7 @@
 - **Nome:** GlicoAcesso
 - **Slogan:** Encontre. Reserve. Continue seu cuidado.
 - **Definição:** plataforma que facilita a localização, a solicitação de reserva e o acompanhamento da retirada de medicamentos e insumos para diabetes em unidades públicas de saúde participantes.
-- **Identidade visual:** logotipo em [`/identidade-visual/logo.png`](./identidade-visual/logo.png)
+- **Identidade visual:** logotipo em [`/identidade-visual/logo.png`](../identidade-visual/logo.png)
 
 ### Em uma frase
 
@@ -13,9 +13,9 @@ O **GlicoAcesso conecta cidadãos e unidades públicas de saúde participantes**
 
 ### Cenário ilustrativo
 
-> **Cenário fictício:** Ana depende da rede pública para retirar regularmente um insumo relacionado ao tratamento do diabetes. Antes de sair de casa, ela precisa saber qual unidade próxima fornece o item, se há disponibilidade, em que horário pode retirá-lo e quais documentos precisa levar. Sem uma forma simples de consultar essas informações, ela pode não conseguir contato por telefone ou descobrir, apenas ao chegar, que o item não está disponível ou que a retirada depende de outro procedimento.
+> **Cenário fictício:** Ana depende da rede pública para retirar regularmente um insumo relacionado ao tratamento do diabetes. Antes de sair de casa, ela precisa saber qual unidade participante fornece o item, se há disponibilidade, em que horário pode retirá-lo e quais documentos precisa levar. Sem uma forma simples de consultar essas informações, ela pode não conseguir contato por telefone ou descobrir, apenas ao chegar, que o item não está disponível ou que a retirada depende de outro procedimento.
 >
-> No GlicoAcesso, Ana pesquisa o item, visualiza as unidades participantes próximas, consulta a data de atualização da disponibilidade e as orientações para retirada. Quando a unidade permitir, solicita uma reserva e acompanha a confirmação antes de se deslocar.
+> No GlicoAcesso, Ana pesquisa o item, visualiza as unidades participantes, consulta a data de atualização da disponibilidade e as orientações para retirada. Quando a unidade permitir, solicita uma reserva e acompanha a confirmação antes de se deslocar.
 
 Esse cenário representa a dificuldade que a plataforma pretende reduzir. O GlicoAcesso organiza a informação e o fluxo de acesso, mas não garante que o item exista em estoque nem substitui o funcionamento da rede pública.
 
@@ -34,13 +34,13 @@ O problema que o GlicoAcesso enfrenta **não é a existência do direito ao aten
 
 Na prática, o cidadão precisa descobrir:
 
-- qual unidade próxima fornece o medicamento ou insumo;
+- qual unidade participante fornece o medicamento ou insumo;
 - se a disponibilidade foi informada recentemente;
 - quando essa informação foi atualizada;
 - qual é o horário de retirada;
 - quais documentos ou requisitos são necessários;
 - se é possível solicitar uma reserva;
-- quais alternativas próximas existem caso aquela unidade não possa atender.
+- quais outras unidades participantes existem caso aquela unidade não possa atender.
 
 Quando esses dados estão dispersos, desatualizados ou difíceis de localizar, podem ocorrer deslocamentos sem sucesso, gasto desnecessário de tempo e transporte e atraso na retirada. O impacto tende a ser maior para pessoas de baixa renda, sem plano de saúde, com mobilidade reduzida ou que vivem longe das unidades de dispensação.
 
@@ -86,7 +86,7 @@ A unidade participante mantém informações sobre os itens que disponibiliza, h
 O usuário informa o medicamento ou insumo previamente prescrito e visualiza as unidades participantes que o disponibilizam.
 
 **3. O sistema apresenta as opções.**  
-Para cada unidade, são exibidos endereço, distância, horário, disponibilidade informada, data da última atualização e requisitos para retirada.
+Para cada unidade, são exibidos endereço, horário, disponibilidade informada, data da última atualização e requisitos para retirada.
 
 **4. Quando permitido, o cidadão solicita uma reserva.**  
 A solicitação é enviada à unidade, que pode confirmá-la ou rejeitá-la conforme a disponibilidade e as regras locais.
@@ -97,7 +97,7 @@ Após a confirmação, o usuário visualiza o status da solicitação e as orien
 ### Jornada do cidadão
 
 1. Informa o medicamento ou insumo prescrito.
-2. Compara unidades participantes próximas e os dados de disponibilidade, atualização, endereço, horário e requisitos.
+2. Compara unidades participantes e os dados de disponibilidade, atualização, endereço, horário e requisitos.
 3. Quando permitido, solicita uma reserva e acompanha a confirmação.
 4. Realiza a retirada na unidade ou consulta alternativas participantes caso ela não possa atender.
 
@@ -105,7 +105,7 @@ Após a confirmação, o usuário visualiza o status da solicitação e as orien
 
 1. Mantém disponibilidade, horários e requisitos atualizados.
 2. Visualiza solicitações recebidas e confirma ou rejeita cada uma conforme as regras locais.
-3. Registra as retiradas e acompanha demanda, indisponibilidades e itens próximos do vencimento.
+3. Registra as retiradas e acompanha as solicitações pendentes e a disponibilidade dos itens.
 
 ### Origem e atualização das informações
 
@@ -184,7 +184,7 @@ A duração-alvo continua entre **4min30s e 4min50s**, permitindo pequena margem
 
 > O GlicoAcesso possui dois lados.
 >
-> Para o cidadão, a experiência começa com uma busca pelo medicamento ou insumo previamente prescrito. A plataforma mostra as unidades participantes próximas, a disponibilidade informada, a data da última atualização, endereço, horário e requisitos para retirada.
+> Para o cidadão, a experiência começa com uma busca pelo medicamento ou insumo previamente prescrito. A plataforma mostra as unidades participantes, a disponibilidade informada, a data da última atualização, endereço, horário e requisitos para retirada.
 >
 > Quando a unidade permitir, o cidadão também poderá solicitar uma reserva e acompanhar sua confirmação antes de se deslocar.
 >

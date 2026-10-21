@@ -44,7 +44,7 @@ A decisão é usar **Transactional Outbox** sempre que um efeito persistido prec
 | Reenvio ou entrega duplicada de evento | Entrega pelo menos uma vez, consumidores idempotentes e deduplicação atômica com os efeitos locais, evitando repetir baixa ou transição. |
 | Evento de retirada incompatível com a alocação | Validar reserva, unidade, item e quantidade; não aplicar baixa parcial ou arbitrária. Registrar a divergência para reconciliação e reprocessamento. |
 
-O detalhamento da Outbox ficará em `11-outbox.md`. Estruturas completas de Outbox/Inbox, publicador, catálogo de eventos e algoritmo do CQRS ficam para os próximos documentos.
+O modelo de Outbox está detalhado em [11-outbox.md](./11-outbox.md), incluindo persistência, publicação, retry e deduplicação. A projeção de disponibilidade e sua atualização por eventos estão detalhadas em [12-cqrs.md](./12-cqrs.md). Este documento consolida os riscos de dual write e as fronteiras de consistência descritas nesses documentos.
 
 ## 5. Consulta síncrona antes da entrega e limites da SAGA
 
@@ -52,4 +52,4 @@ Antes da entrega física, Retiradas consulta `GET /internal/v1/reservas/{reserva
 
 Essa dependência síncrona é deliberada: aceita-se depender da disponibilidade de Reservas naquele momento para evitar sincronização adicional de estado e mecanismo de ativação da autorização. A consulta não bloqueia a reserva; se um cancelamento começar depois, entrega e revogação disputam a autorização local em Retiradas, conforme o documento 00, seção 9.8.
 
-Timeout de comando da SAGA não prova ausência de efeito remoto. Permanecem as decisões de persistir o progresso, reutilizar a chave idempotente e manter resultados incertos pendentes de reconciliação. As consultas de resultados de alocação/autorização ainda ausentes dos contratos continuam como pendência de alinhamento; este documento não define novos endpoints nem mecanismos de recuperação.
+Timeout de comando da SAGA não prova ausência de efeito remoto. Reservas persiste o progresso e repete o mesmo comando com a mesma `Idempotency-Key` e conteúdo para recuperar o resultado original, mantendo a etapa pendente enquanto não houver resposta conclusiva. `GET /internal/v1/autorizacoes/{reservaId}` existe para a agregação operacional do BFF Unidade; não substitui o replay idempotente do comando. Não há uma consulta de resultado de alocação no contrato de Estoque, pois a recuperação da alocação também usa replay idempotente.

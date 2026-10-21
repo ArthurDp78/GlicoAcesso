@@ -8,7 +8,7 @@
 **Fluxo de negócio:** [05 - Fluxo de reservas](./05-fluxo-reservas.md)
 **Contratos:** [Reservas](./api/reserva.yaml), [Estoque](./api/estoque.yaml) e [Retiradas](./api/retirada.yaml)
 
-> Este documento organiza os requisitos de avaliação da SAGA de confirmação em uma especificação complementar. O documento 06 continua sendo a referência detalhada para cancelamento, estados duráveis, concorrência e operação. Em caso de divergência, prevalecem as decisões compartilhadas do documento 00 e os contratos OpenAPI vigentes.
+> Este documento é material complementar para consulta. Para apresentar a SAGA exigida na Parte 2, bastam o fluxo do documento 06 e os diagramas de sucesso e falha ali referenciados. Em caso de divergência, prevalecem as decisões compartilhadas do documento 00 e os contratos OpenAPI vigentes.
 
 ## 1. Objetivo e limites
 
@@ -64,20 +64,20 @@ Os caminhos abaixo são os declarados nos OpenAPI atuais. Os nomes das operaçõ
 
 | Operação | Contrato e método | Dados documentados | Respostas documentadas |
 |---|---|---|---|
-| Aceitar solicitação | Reservas: `POST /api/unidade/v1/reservas/{reservaId}/decisao` | Path `reservaId`; corpo com `decisao: ACEITAR` ou `REJEITAR` | `200`; `403` se o profissional não pertence à unidade |
-| Alocar estoque | Estoque: `POST /internal/v1/alocacoes` | `sagaId`, `reservaId`, `unidadeId`, `itemId`, `quantidade`, `idempotencyKey` | `201`; `409` para saldo insuficiente ou conflito |
-| Liberar alocação | Estoque: `DELETE /internal/v1/alocacoes/{reservaId}` | Path `reservaId`; header `X-Idempotency-Key` | `204` |
-| Preparar autorização | Retiradas: `POST /internal/v1/autorizacoes` | `sagaId`, `reservaId`, `unidadeId`, `itemId`, `quantidade`, `idempotencyKey` | `201` |
-| Cancelar autorização | Retiradas: `POST /internal/v1/autorizacoes/{reservaId}/cancelar` | Path `reservaId`; header `X-Idempotency-Key` | `200`; `409` se a entrega já foi registrada |
+| Aceitar solicitação | Reservas: `POST /api/unidade/v1/reservas/{reservaId}/decisao` | Path `reservaId`; corpo com `decisao: ACEITAR` ou `REJEITAR`; cabeçalho `Idempotency-Key` | `200`; `403` se o profissional não pertence à unidade |
+| Alocar estoque | Estoque: `POST /internal/v1/alocacoes` | Corpo: `sagaId`, `reservaId`, `unidadeId`, `itemId`, `quantidade`; cabeçalho `Idempotency-Key` | `201`; `409` para saldo insuficiente ou conflito |
+| Liberar alocação | Estoque: `DELETE /internal/v1/alocacoes/{reservaId}` | Path `reservaId`; cabeçalho `Idempotency-Key` | `204`; repetição devolve o resultado original |
+| Preparar autorização | Retiradas: `POST /internal/v1/autorizacoes` | Corpo: `sagaId`, `reservaId`, `unidadeId`, `itemId`, `quantidade`; cabeçalho `Idempotency-Key` | `201`; repetição devolve o resultado original |
+| Cancelar autorização | Retiradas: `POST /internal/v1/autorizacoes/{reservaId}/cancelar` | Path `reservaId`; cabeçalho `Idempotency-Key` | `200`; `409` se a entrega já foi registrada |
 | Consultar estado para retirada (fora da SAGA) | Reservas: `GET /internal/v1/reservas/{reservaId}/estado` | Path `reservaId`; identidade de serviço de Retiradas; `X-Correlation-Id` opcional; sem chave idempotente | `200` com `reservaId` e `status`; `401`; `403`; `404`; `503` |
 
 **O que o OpenAPI declara:** caminhos, métodos, campos de entrada e códigos/resumos de resposta listados acima. Os schemas atuais não especificam corpos detalhados de resposta para todos os comandos nem descrevem integralmente a semântica de repetição.
 
 **O que as decisões arquiteturais estabelecem:** os comandos devem ser idempotentes; a alocação e a autorização são únicas por reserva; repetir uma liberação ou cancelamento não duplica efeitos; timeout é resultado incerto; compensações seguem ordem inversa. Essas são regras arquiteturais do documento 00 e da especificação 06, não evidência de implementação executável.
 
-**O que requer implementação ou confirmação de Guilerme:** persistir e aplicar as chaves idempotentes no serviço, devolver resultado compatível em retries, detectar chave igual com conteúdo divergente e harmonizar o uso de `idempotencyKey` no corpo dos comandos de criação com `X-Idempotency-Key` nas compensações. Os YAMLs mostram esses campos, mas não comprovam que o comportamento está implementado.
+**Requisito de implementação:** cada participante persiste a chave, o fingerprint do conteúdo e o resultado HTTP conclusivo atomicamente com o efeito; repetições com o mesmo conteúdo reproduzem status e corpo originais, e conteúdo divergente retorna `409`. A convenção de transporte e recuperação é única e está definida no documento 00. Os contratos especificam o comportamento esperado, mas não comprovam sua implementação executável.
 
-Os YAMLs não especificam consulta do resultado de alocação em Estoque ou de autorização em Retiradas por `reservaId`; após timeout desses comandos, a recuperação depende da repetição idempotente. O GET de estado em Reservas valida a entrega e não reconcilia esses efeitos remotos.
+Após timeout dos comandos, a recuperação depende do replay idempotente com a chave e o conteúdo persistidos. `GET /internal/v1/autorizacoes/{reservaId}` atende à agregação do painel operacional; ele não substitui a recuperação do resultado HTTP original. O GET de estado em Reservas valida a entrega e não reconcilia efeitos de alocação ou autorização.
 
 ## 5. Estados de negócio e estados da execução
 
@@ -140,7 +140,7 @@ Para qualquer compensação:
 
 ### Timeout ou perda de resposta
 
-Timeout, conexão interrompida ou resposta perdida nos comandos da SAGA significam resultado desconhecido. Reservas não presume falha nem compensa às cegas: repete o comando idempotente para reconciliar os efeitos em Estoque ou Retiradas. O GET de estado da Reserva não substitui essa recuperação. Se a consulta falhar no balcão, Retiradas não registra a entrega e uma nova tentativa exige nova consulta.
+Timeout, conexão interrompida ou resposta perdida nos comandos da SAGA significam resultado desconhecido. Reservas não presume falha nem compensa às cegas: repete o mesmo comando em Estoque ou Retiradas com a mesma `Idempotency-Key` e conteúdo para recuperar a resposta original. O GET de estado da Reserva não substitui essa recuperação. Se a consulta falhar no balcão, Retiradas não registra a entrega e uma nova tentativa exige nova consulta.
 
 ### Queda e reinício do orquestrador
 
@@ -167,7 +167,7 @@ Detalhes internos, credenciais, stack traces e dados pessoais desnecessários n�
 ## 10. Pendências de alinhamento
 
 - **Marcos:** confirmar que este complemento permanece subordinado ao documento normativo 00 e alinhado ao fluxo e aos diagramas existentes.
-- **Guilerme:** confirmar a semântica e a implementação da idempotência dos comandos; avaliar consultas dos resultados de alocação/autorização, ainda ausentes nos contratos dos participantes; harmonizar `idempotencyKey` no corpo das criações com `X-Idempotency-Key` nas compensações. O GET de estado de Reservas é exclusivo da validação de entrega.
+- **Implementação:** aplicar e verificar a semântica de idempotência estabelecida no documento 00, com persistência atômica do efeito e da resposta. A consulta da autorização é para agregação operacional; a recuperação da SAGA usa replay do mesmo comando. O GET de estado de Reservas é exclusivo da validação de entrega.
 - **Lana:** confirmar como o serviço de Reservas persistirá execução, efeitos confirmados, chaves idempotentes, tentativas, compensações pendentes e retomada após reinício.
 
 ## 11. Referências e diagramas complementares

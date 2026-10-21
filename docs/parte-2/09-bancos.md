@@ -10,14 +10,20 @@ Cada microsserviço possui um banco PostgreSQL próprio e é o único responsáv
 
 Não existem JOINs, consultas diretas, FKs ou transações ACID entre bancos de serviços diferentes. Identificadores externos são referências opacas; validações entre serviços acontecem pelas APIs e pelos fatos de integração já definidos no documento 00.
 
-| Banco / fonte canônica | Tabelas de domínio |
+| Banco / fonte canônica | Tabelas de domínio e operação |
 |---|---|
-| Unidades: cadastro e atendimento | `unidades`, `contatos_unidade`, `horarios_unidade` |
-| Estoque: catálogo, saldo e alocações | `itens`, `saldos`, `alocacoes`, `movimentacoes` |
-| Reservas: solicitação e orquestração | `reservas`, `saga_execucoes`, `saga_etapas`, `historico_reserva` |
-| Retiradas: autorização e entrega física | `autorizacoes`, `retiradas` |
+| Unidades: cadastro e atendimento | `unidades`, `contatos_unidade`, `horarios_unidade`, `idempotencia_comandos` |
+| Estoque: catálogo, saldo e alocações | `itens`, `saldos`, `alocacoes`, `movimentacoes`, `idempotencia_comandos` |
+| Reservas: solicitação e orquestração | `reservas`, `saga_execucoes`, `saga_etapas`, `historico_reserva`, `idempotencia_comandos` |
+| Retiradas: autorização e entrega física | `autorizacoes`, `retiradas`, `idempotencia_comandos` |
 
-Este documento modela a persistência de domínio. Estruturas técnicas de idempotência, deduplicação, publicação e projeção serão detalhadas nos documentos próprios de consistência, Outbox e CQRS; sua ausência nas tabelas abaixo não dispensa as garantias do documento 00.
+Este documento modela a persistência de domínio e as estruturas necessárias para idempotência. Inbox, Outbox e a projeção CQRS são detalhadas nos documentos 10, 11 e 12; sua implementação mantém as mesmas garantias locais descritas aqui.
+
+### Registro de idempotência dos comandos
+
+Cada serviço mantém em seu próprio banco `idempotencia_comandos`, com `operacao text`, `principalId text`, `idempotencyKey text`, `requestHash text`, `httpStatus integer`, `responseBody jsonb` e `createdAt timestamptz`, todos obrigatórios. A chave primária é `(operacao, principalId, idempotencyKey)`. O resultado HTTP conclusivo e o efeito de domínio são confirmados na mesma transação local. Reservas persiste também a chave da etapa da SAGA antes do envio; participantes guardam o resultado para replay. O conteúdo sensível da resposta segue os controles de acesso e retenção do recurso correspondente.
+
+Os campos `idempotencyKey` em `reservas`, `alocacoes` e `autorizacoes` identificam o comando de criação daquele registro. Comandos posteriores, como cancelamento e compensação, têm chaves próprias em `idempotencia_comandos`; não sobrescrevem a chave de criação.
 
 ### Convenções
 
@@ -33,7 +39,7 @@ Contrato relacionado: [unidade.yaml](./api/unidade.yaml).
 
 | Tabela | Campos e tipos | PK / FKs internas |
 |---|---|---|
-| `unidades` | `unidadeId uuid`; `nome`, `logradouro`, `numero`, `bairro`, `cidade`, `estado`, `cep text`; `prazoAnaliseHoras integer`; `ativa boolean`; `createdAt`, `updatedAt timestamptz`. Todos obrigatórios. | PK `unidadeId`. |
+| `unidades` | `unidadeId uuid`; `nome`, `logradouro`, `numero`, `bairro`, `cidade`, `estado`, `cep`, `orientacoesRetirada text`; `prazoAnaliseHoras integer`; `ativa boolean`; `createdAt`, `updatedAt timestamptz`. Todos obrigatórios. | PK `unidadeId`. |
 | `contatos_unidade` | `unidadeId uuid`; `tipo`, `valor text`. Todos obrigatórios. | PK composta `(unidadeId, tipo, valor)`; FK `unidadeId → unidades.unidadeId`. |
 | `horarios_unidade` | `unidadeId uuid`; `diaSemana smallint`; `horarioInicial`, `horarioFinal time`. Todos obrigatórios. Cada linha representa um intervalo de atendimento. | PK composta `(unidadeId, diaSemana, horarioInicial, horarioFinal)`; FK `unidadeId → unidades.unidadeId`. |
 
@@ -56,10 +62,10 @@ Contrato relacionado: [estoque.yaml](./api/estoque.yaml).
 |---|---|---|
 | `itens` | `itemId uuid`; `nome`, `tipo text`; `createdAt`, `updatedAt timestamptz`, obrigatórios. `descricao text`, opcional. | PK `itemId`. |
 | `saldos` | `unidadeId`, `itemId uuid`; `estoqueFisicoAtual`, `quantidadeAlocada integer`; `permiteReserva boolean`; `estoqueVersion bigint`; `createdAt`, `updatedAt timestamptz`. Todos obrigatórios. | PK composta `(unidadeId, itemId)`; FK `itemId → itens.itemId`. |
-| `alocacoes` | `alocacaoId`, `reservaId`, `sagaId`, `unidadeId`, `itemId uuid`; `quantidade integer`; `idempotencyKey text`; `correlationId uuid`; `createdAt`, `updatedAt timestamptz`, obrigatórios. `liberadaEm`, `consumidaEm timestamptz`, opcionais. | PK `alocacaoId`; FK composta `(unidadeId, itemId) → saldos`. |
+| `alocacoes` | `alocacaoId`, `reservaId`, `sagaId`, `unidadeId`, `itemId uuid`; `quantidade integer`; `idempotencyKey text`; `correlationId uuid`; `createdAt`, `updatedAt timestamptz`, obrigatórios. `liberadaEm`, `consumidaEm timestamptz`, opcionais. | PK `alocacaoId`; `UNIQUE (reservaId)`; FK composta `(unidadeId, itemId) → saldos`. |
 | `movimentacoes` | `movimentacaoId`, `unidadeId`, `itemId uuid`; `variacaoFisica integer`; `ocorridaEm timestamptz`, obrigatórios. `alocacaoId`, `retiradaId uuid`, opcionais conforme a origem; `atorId`, `motivo text`, opcionais quando não aplicáveis. | PK `movimentacaoId`; FK composta `(unidadeId, itemId) → saldos`; FK opcional `alocacaoId → alocacoes.alocacaoId`. |
 
-`itens` separa o cadastro canônico do item de suas quantidades em cada unidade. `tipo` representa medicamento ou insumo; os contratos ainda não fixam os literais de um enum, portanto não se introduz um novo enum SQL.
+`itens` separa o cadastro canônico do item de suas quantidades em cada unidade. A API limita `tipo` a `MEDICAMENTO` ou `INSUMO`; o banco pode armazená-lo como `text` com constraint equivalente, sem exigir um tipo ENUM específico do PostgreSQL.
 
 ### Saldo, alocação e movimentação
 
@@ -72,7 +78,7 @@ A situação da alocação é representada pelos fatos já previstos no fluxo: e
 ### Integridade e transações locais
 
 - Em `saldos`: `CHECK (estoqueFisicoAtual >= 0)`, `CHECK (quantidadeAlocada >= 0)`, `CHECK (quantidadeAlocada <= estoqueFisicoAtual)` e `CHECK (estoqueVersion >= 0)`.
-- Em `alocacoes`: `CHECK (quantidade > 0)` e exclusão entre `liberadaEm` e `consumidaEm`; ambos não podem estar preenchidos. Deve haver no máximo uma alocação ativa por `reservaId`, conforme o documento 00; a restrição de unicidade no banco depende do alinhamento do ciclo de realocação descrito abaixo.
+- Em `alocacoes`: `CHECK (quantidade > 0)`, `UNIQUE (reservaId)` e exclusão entre `liberadaEm` e `consumidaEm`; ambos não podem estar preenchidos. Uma reserva terminal não é reaberta nem realocada; uma nova solicitação recebe novo `reservaId`.
 - Em `movimentacoes`: `CHECK (variacaoFisica <> 0)` e `UNIQUE (retiradaId)` para as linhas com esse identificador. Uma baixa de retirada exige `alocacaoId` e variação negativa.
 - Criar uma alocação e aumentar `quantidadeAlocada` ocorre na mesma transação local, após validar disponibilidade e permissão no saldo de escrita. Liberar uma alocação reduz apenas a quantidade alocada, na mesma transação de seu encerramento.
 - Consumir uma alocação reduz `estoqueFisicoAtual` e `quantidadeAlocada` pela mesma quantidade e grava a movimentação e `consumidaEm`, na mesma transação. Os dados da retirada devem corresponder à reserva, unidade, item e quantidade alocados.
@@ -88,7 +94,7 @@ Além das PKs e da unicidade de `retiradaId`, propõem-se:
 - Índice de `alocacoes(reservaId)` para recuperar também registros encerrados da reserva.
 - Índice de `movimentacoes(unidadeId, itemId, ocorridaEm)` para consultar o histórico físico de um saldo.
 
-A escolha entre `UNIQUE (reservaId)` sobre todo o histórico e um UNIQUE parcial para alocações ativas fica pendente de alinhamento: os contratos não definem se a mesma reserva pode ser realocada após liberação ou consumo. O limite de uma alocação ativa não autoriza recriar uma alocação encerrada. A recuperação de comandos antigos deve preservar o resultado original.
+`UNIQUE (reservaId)` vale para todo o histórico. Retries da mesma etapa recuperam a alocação e a resposta originais pelo registro idempotente; uma reserva liberada ou consumida não recebe outra alocação. Uma nova tentativa de negócio cria outra reserva.
 
 ## 4. Banco de Reservas
 
@@ -115,13 +121,13 @@ Os estados anterior e posterior do histórico usam o mesmo conjunto, com anterio
 
 `EM_EXECUCAO`, `COMPENSANDO`, `COMPENSACAO_PENDENTE`, `CANCELANDO`, `CANCELAMENTO_PENDENTE`, `INTERROMPIDA`, `CONCLUIDA`, `COMPENSADA`, `CANCELADA`.
 
-Os tipos de execução são confirmação e cancelamento, conforme o documento 06. Os literais persistidos de `tipo`, de `etapaAtual` e de `estadoTecnico` ainda não estão fixados nos contratos; ficam como ponto de alinhamento, sem inventar enums. As operações remotas já nomeadas são `AlocarEstoque`, `PrepararAutorizacao`, `CancelarAutorizacao` e `LiberarAlocacao`.
+`tipo` distingue `CONFIRMACAO` e `CANCELAMENTO`. `saga_execucoes.estado` usa os estados da máquina descrita no documento 06. `saga_etapas.operacao` identifica os comandos `AlocarEstoque`, `PrepararAutorizacao`, `CancelarAutorizacao` e `LiberarAlocacao`; `etapaAtual` referencia a etapa correspondente. `estadoTecnico` acompanha o envio, a incerteza, a conclusão e a compensação de cada comando. Esse detalhe técnico não cria estados de negócio adicionais para a Reserva nem substitui os estados canônicos da execução.
 
 ### Integridade e recuperação
 
 - Em `reservas`: `CHECK (quantidade > 0)`, `CHECK (prazoAnaliseHoras > 0)` e `decisaoAte = criadaEm + prazoAnaliseHoras` em horas. O prazo é uma cópia da configuração aplicada na criação; mudar o cadastro de Unidades não altera o vencimento já registrado.
 - `decisao`, quando preenchida, aceita apenas `ACEITAR` ou `REJEITAR`, conforme o comando HTTP, acompanhada de ator e instante. Esses três campos são preenchidos juntos; `REJEITADA` é estado da reserva, não valor do comando.
-- `tentativas >= 0` em `saga_etapas`. A PK composta mantém uma linha por operação lógica da execução; retries atualizam essa linha e reutilizam `idempotencyKey`. Operações diferentes têm chaves diferentes dentro da execução, com `UNIQUE (sagaId, idempotencyKey)`.
+- `tentativas >= 0` em `saga_etapas`. A PK composta mantém uma linha por operação lógica da execução; retries atualizam essa linha e reutilizam a `Idempotency-Key` armazenada em `idempotencyKey`. Cada operação lógica tem chave própria, além do resultado armazenado pelo participante.
 - `dadosComando` preserva os dados necessários para repetir o mesmo comando, inclusive identificadores e quantidade; `resultado` preserva a resposta conclusiva e identificadores de efeitos confirmados. Erros são sanitizados e não armazenam credenciais ou perfis pessoais.
 - Um índice UNIQUE parcial em `saga_execucoes(reservaId)` para `EM_EXECUCAO`, `COMPENSANDO`, `COMPENSACAO_PENDENTE`, `CANCELANDO` e `CANCELAMENTO_PENDENTE` garante uma única execução ativa. `INTERROMPIDA` é terminal e fica fora desse índice.
 - Aceite, transição para `EM_CONFIRMACAO`, histórico e criação da execução são atômicos no banco de Reservas. A finalização grava `CONFIRMADA`, `CONCLUIDA` e histórico na mesma transação local.
@@ -142,7 +148,7 @@ Além das PKs e dos UNIQUE indicados:
 - Índice parcial de `saga_execucoes(updatedAt)` nos cinco estados ativos para recuperar a orquestração após reinício.
 - `historico_reserva(reservaId, ocorridoEm)` para auditoria da reserva.
 
-A PK de `saga_etapas` permite carregar as etapas da execução. A recuperação lê somente dados locais persistidos; registrar que uma chamada foi enviada não prova seu sucesso. Consultas de resultados incertos em Estoque e Retiradas continuam pendentes de alinhamento, sem novos endpoints neste documento.
+A PK de `saga_etapas` permite carregar as etapas da execução. A recuperação lê somente dados locais persistidos; registrar que uma chamada foi enviada não prova seu sucesso. Reservas repete o comando com a mesma `Idempotency-Key` e conteúdo para que o participante devolva a resposta conclusiva gravada com o efeito local. O GET da autorização documentado em `retirada.yaml` serve à agregação operacional, não substitui esse replay.
 
 ## 5. Banco de Retiradas
 
@@ -174,13 +180,8 @@ Referências externas sem FK em `autorizacoes`: `reservaId` e `sagaId → Reserv
 
 As PKs e os UNIQUE atendem às consultas por autorização e reserva e à detecção de entrega anterior. Não há consulta adicional definida que justifique outro índice neste banco.
 
-## 6. Pontos de alinhamento ainda abertos
+## 6. Decisões alinhadas
 
-| Ponto | Limite deste modelo |
-|---|---|
-| Unicidade e realocação | Alinhar se uma reserva pode receber nova alocação após liberação ou consumo antes de definir a restrição de unicidade por `reservaId`. O limite de uma alocação ativa permanece obrigatório; o índice UNIQUE parcial não é uma decisão fechada. |
-| Vocabulário técnico da SAGA | Alinhar com Marcos os literais persistidos para tipo, etapa atual e estado técnico das etapas. Os estados canônicos de Reserva e execução já estão definidos e foram preservados. |
-| Idempotência dos comandos | Alinhar com Guilerme o escopo das chaves, comparação de conteúdo e armazenamento dos resultados repetíveis nos serviços, incluindo operações de criação e compensação. Os campos `idempotencyKey` aqui preservam a identidade do comando; não substituem sozinhos essas garantias. |
-| Resultado remoto incerto | As consultas dos resultados de alocação e autorização continuam ausentes dos OpenAPI. Este modelo preserva comando, chave e evidências para recuperação; não define endpoint nem resolve a pendência contratual. |
+Os contratos e este modelo definem uma convenção única para idempotência, armazenamento de resultados repetíveis e unicidade histórica da alocação por `reservaId`. Os estados técnicos da SAGA seguem os nomes definidos em 00 e 06; qualquer alteração exige atualizar contratos, banco, diagramas e documentos dependentes no mesmo conjunto de mudanças.
 
-O detalhamento de consistência eventual, Inbox/Outbox e CQRS permanece para os documentos próprios. Esta modelagem não introduz ativação posterior de autorização nem muda os contratos HTTP ou os estados canônicos existentes.
+Consistência, Outbox e CQRS estão detalhados em [10](./10-consistencia.md), [11](./11-outbox.md) e [12](./12-cqrs.md). A autorização consultada pelo BFF Unidade é uma projeção operacional, não uma autorização para registrar entrega; o fluxo de entrega permanece protegido pela validação canônica em Reservas.

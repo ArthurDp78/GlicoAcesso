@@ -21,18 +21,18 @@ sequenceDiagram
     B->>R: POST decisão, corpo {decisao: ACEITAR}
     R->>DBR: Transação local: gravar EM_CONFIRMACAO e SAGA EM_EXECUCAO
     DBR-->>R: Commit confirmado
-    R-->>B: 200 — decisão registrada#59; confirmação em andamento
+    R-->>B: 200 — decisão registrada, confirmação em andamento
     B-->>G: Resultado da decisão
     G-->>P: Reserva em EM_CONFIRMACAO
 
-    R->>E: POST /internal/v1/alocacoes (sagaId, reservaId, unidadeId, itemId, quantidade, idempotencyKey)
+    R->>E: POST /internal/v1/alocacoes (body: sagaId, reservaId, unidadeId, itemId, quantidade; Idempotency-Key header)
     E->>DBE: Validar saldo canônico e persistir alocação
     DBE-->>E: Commit local confirmado
     E-->>R: 201 — alocação criada/confirmada
     R->>DBR: Persistir efeito de alocação confirmado
     DBR-->>R: Commit confirmado
 
-    R->>T: POST /internal/v1/autorizacoes (sagaId, reservaId, unidadeId, itemId, quantidade, idempotencyKey)
+    R->>T: POST /internal/v1/autorizacoes (body: sagaId, reservaId, unidadeId, itemId, quantidade; Idempotency-Key header)
     T->>DBT: Persistir autorização vinculada à reserva
     DBT-->>T: Commit local confirmado
     T-->>R: 201 — autorização criada
@@ -42,47 +42,47 @@ sequenceDiagram
     R->>DBR: Tentar finalizar reserva CONFIRMADA e SAGA CONCLUIDA
     DBR-->>R: Falha definitiva de persistência
     R->>DBR: Reconciliar estado local e confirmar que CONFIRMADA não foi gravada
-    DBR-->>R: Reserva segue EM_CONFIRMACAO#59; confirmação não persistida
+    DBR-->>R: Reserva segue EM_CONFIRMACAO, confirmação não persistida
     R->>DBR: Persistir SAGA COMPENSANDO e etapa CancelarAutorizacao
     DBR-->>R: Compensação registrada
 
-    R->>T: POST /internal/v1/autorizacoes/{reservaId}/cancelar (X-Idempotency-Key)
+    R->>T: POST /internal/v1/autorizacoes/{reservaId}/cancelar (Idempotency-Key header)
     alt Retiradas confirma cancelamento
         T->>DBT: Revogar autorização, preservando histórico
         DBT-->>T: Commit da revogação confirmado
         T-->>R: 200 — autorização revogada
         R->>DBR: Persistir cancelamento confirmado e próxima etapa LiberarAlocacao
         DBR-->>R: Commit confirmado
-        R->>E: DELETE /internal/v1/alocacoes/{reservaId} (X-Idempotency-Key)
+        R->>E: DELETE /internal/v1/alocacoes/{reservaId} (Idempotency-Key header)
         E->>DBE: Liberar somente a alocação desta reserva
         DBE-->>E: Commit da liberação confirmado
         E-->>R: 204 — alocação liberada
-        R->>DBR: Persistir liberação confirmada#59; SAGA COMPENSADA#59; reserva FALHA_CONFIRMACAO
+        R->>DBR: Persistir liberação confirmada, SAGA COMPENSADA e reserva FALHA_CONFIRMACAO
         DBR-->>R: Commit confirmado
-        R-->>B: Resultado final FALHA_CONFIRMACAO
-        B-->>G: Resultado conforme representação pública
-        G-->>P: Confirmação não concluída
     else Cancelamento temporariamente indisponível ou resultado incerto
         T--xR: Sem resposta conclusiva ou falha transitória
         R->>DBR: Persistir COMPENSACAO_PENDENTE e tentativa de cancelamento
-        DBR-->>R: Pendência durável#59; reserva continua EM_CONFIRMACAO
+        DBR-->>R: Pendência durável, reserva continua EM_CONFIRMACAO
         Note over R,E: Não liberar estoque enquanto o cancelamento não estiver confirmado.
-        R->>T: Repetir POST cancelar com a mesma X-Idempotency-Key
+        R->>T: Repetir POST cancelar com a mesma Idempotency-Key
         T->>DBT: Confirmar/repetir revogação idempotente
         DBT-->>T: Revogação confirmada
         T-->>R: 200 — autorização revogada
         R->>DBR: Persistir cancelamento confirmado e próxima etapa LiberarAlocacao
         DBR-->>R: Commit confirmado
-        R->>E: DELETE /internal/v1/alocacoes/{reservaId} (X-Idempotency-Key)
+        R->>E: DELETE /internal/v1/alocacoes/{reservaId} (Idempotency-Key header)
         E->>DBE: Liberar somente a alocação desta reserva
         DBE-->>E: Commit da liberação confirmado
         E-->>R: 204 — alocação liberada
-        R->>DBR: Persistir liberação confirmada#59; SAGA COMPENSADA#59; reserva FALHA_CONFIRMACAO
+        R->>DBR: Persistir liberação confirmada, SAGA COMPENSADA e reserva FALHA_CONFIRMACAO
         DBR-->>R: Commit confirmado
-        R-->>B: Resultado final FALHA_CONFIRMACAO
-        B-->>G: Resultado conforme representação pública
-        G-->>P: Confirmação não concluída
     end
+    P->>G: GET /api/unidade/v1/painel/reservas/{reservaId}
+    G->>B: Consultar reserva
+    B->>R: Consultar estado da reserva
+    R-->>B: Reserva FALHA_CONFIRMACAO
+    B-->>G: Reserva FALHA_CONFIRMACAO
+    G-->>P: Confirmação não concluída
 ```
 
-Timeout ou perda de resposta em qualquer comando deixa o resultado incerto. Reservas não presume que a operação falhou nem inicia a etapa seguinte sem reconciliação. A repetição usa a mesma chave idempotente; os contratos atuais não oferecem consulta dos resultados de alocação/autorização nos participantes. O GET de estado em Reservas valida somente a entrega posterior. A reserva só passa de `EM_CONFIRMACAO` para `FALHA_CONFIRMACAO` depois que os resultados relevantes estiverem resolvidos e as compensações obrigatórias tiverem sido confirmadas. A entrega física não faz parte deste fluxo.
+Timeout ou perda de resposta em qualquer comando deixa o resultado incerto. Reservas não presume que a operação falhou nem inicia a etapa seguinte sem reconciliação: repete o mesmo comando com a mesma `Idempotency-Key` e conteúdo para recuperar status e corpo originais. O GET de estado em Reservas valida somente a entrega posterior. A reserva só passa de `EM_CONFIRMACAO` para `FALHA_CONFIRMACAO` depois que os resultados relevantes estiverem resolvidos e as compensações obrigatórias tiverem sido confirmadas. A entrega física não faz parte deste fluxo.

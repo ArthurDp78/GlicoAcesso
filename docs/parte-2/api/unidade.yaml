@@ -2,7 +2,7 @@ openapi: 3.0.3
 info:
   title: API de Unidades
   version: "1.0.0"
-  description: Gestão de informações institucionais, horários e prazos de análise.
+  description: Cadastro, atendimento, horários e prazos de análise das unidades.
 servers:
   - url: /
 components:
@@ -11,38 +11,109 @@ components:
       type: http
       scheme: bearer
       bearerFormat: JWT
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: Chave estável para repetir o mesmo comando com o mesmo resultado.
+      schema: { type: string, minLength: 1 }
   schemas:
-    Erro:
+    Horario:
       type: object
+      required: [diaSemana, horarioInicial, horarioFinal]
       properties:
-        codigo: { type: string }
-        mensagem: { type: string }
+        diaSemana: { type: integer, minimum: 1, maximum: 7 }
+        horarioInicial: { type: string, format: time }
+        horarioFinal: { type: string, format: time }
     Unidade:
       type: object
+      required: [unidadeId, nome, endereco, horarioAtendimento, orientacoesRetirada, contatos, horarios, prazoAnaliseHoras, ativa]
+      properties:
+        unidadeId: { type: string, format: uuid }
+        nome: { type: string, minLength: 1 }
+        endereco: { type: string }
+        horarioAtendimento: { type: string }
+        orientacoesRetirada: { type: string, minLength: 1, description: Orientações públicas sobre requisitos e documentos para retirada. }
+        contatos:
+          type: array
+          items:
+            type: object
+            required: [tipo, valor]
+            properties:
+              tipo: { type: string, minLength: 1 }
+              valor: { type: string, minLength: 1 }
+        horarios:
+          type: array
+          items: { $ref: '#/components/schemas/Horario' }
+        prazoAnaliseHoras: { type: integer, minimum: 1 }
+        ativa: { type: boolean }
+    UnidadeResumo:
+      type: object
+      required: [unidadeId, nome, endereco, horarioAtendimento, orientacoesRetirada]
       properties:
         unidadeId: { type: string, format: uuid }
         nome: { type: string }
         endereco: { type: string }
         horarioAtendimento: { type: string }
+        orientacoesRetirada: { type: string, minLength: 1 }
+    UnidadeInput:
+      type: object
+      required: [nome, logradouro, numero, bairro, cidade, estado, cep, orientacoesRetirada, contatos, horarios, prazoAnaliseHoras]
+      properties:
+        nome: { type: string, minLength: 1 }
+        logradouro: { type: string, minLength: 1 }
+        numero: { type: string, minLength: 1 }
+        bairro: { type: string, minLength: 1 }
+        cidade: { type: string, minLength: 1 }
+        estado: { type: string, minLength: 1 }
+        cep: { type: string, minLength: 1 }
+        orientacoesRetirada: { type: string, minLength: 1 }
+        contatos:
+          type: array
+          items:
+            type: object
+            required: [tipo, valor]
+            properties:
+              tipo: { type: string, minLength: 1 }
+              valor: { type: string, minLength: 1 }
+        horarios:
+          type: array
+          items: { $ref: '#/components/schemas/Horario' }
+        prazoAnaliseHoras: { type: integer, minimum: 1 }
 paths:
   /api/cidadao/v1/unidades:
     get:
-      summary: Listar unidades
-      description: Retorna as unidades disponíveis para consulta.
+      summary: Listar unidades disponíveis
       responses:
         '200':
-          description: Sucesso.
+          description: Unidades ativas para consulta.
           content:
             application/json:
               schema:
                 type: array
-                items:
-                  $ref: '#/components/schemas/Unidade'
-        '500':
-          description: Erro interno.
-  /internal/v1/unidades/{unidadeId}/prazo-analise:
+                items: { $ref: '#/components/schemas/UnidadeResumo' }
+  /internal/v1/unidades:
+    post:
+      summary: Cadastrar unidade
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UnidadeInput' }
+      responses:
+        '201':
+          description: Unidade cadastrada; a repetição idêntica reproduz a resposta original.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Unidade' }
+        '409': { description: Chave idempotente reutilizada com conteúdo diferente ou cadastro conflitante. }
+  /internal/v1/unidades/{unidadeId}:
     get:
-      summary: Obter prazo de análise (Comando Interno SAGA)
+      summary: Consultar cadastro completo da unidade
+      security: [{ bearerAuth: [] }]
       parameters:
         - name: unidadeId
           in: path
@@ -50,12 +121,116 @@ paths:
           schema: { type: string, format: uuid }
       responses:
         '200':
-          description: Sucesso.
+          description: Cadastro, contatos, horários e prazo vigente.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Unidade' }
+        '404': { description: Unidade não encontrada. }
+    put:
+      summary: Atualizar cadastro e informações de atendimento da unidade
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: unidadeId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UnidadeInput' }
+      responses:
+        '200': { description: Cadastro atualizado. }
+        '404': { description: Unidade não encontrada. }
+        '409': { description: Chave idempotente reutilizada com conteúdo diferente. }
+  /internal/v1/unidades/{unidadeId}/horarios:
+    put:
+      summary: Substituir horários de atendimento da unidade
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: unidadeId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [horarios]
+              properties:
+                horarios:
+                  type: array
+                  items: { $ref: '#/components/schemas/Horario' }
+      responses:
+        '200': { description: Horários substituídos. }
+        '404': { description: Unidade não encontrada. }
+        '409': { description: Chave idempotente reutilizada com conteúdo diferente. }
+  /internal/v1/unidades/{unidadeId}/status:
+    patch:
+      summary: Ativar ou desativar a unidade
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: unidadeId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ativa]
+              properties:
+                ativa: { type: boolean }
+      responses:
+        '200': { description: Situação operacional atualizada; cadastro e referências históricas são preservados. }
+        '404': { description: Unidade não encontrada. }
+        '409': { description: Chave idempotente reutilizada com conteúdo diferente. }
+  /internal/v1/unidades/{unidadeId}/prazo-analise:
+    get:
+      summary: Obter prazo de análise para Reservas
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: unidadeId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Prazo vigente.
           content:
             application/json:
               schema:
                 type: object
+                required: [prazoAnaliseHoras]
                 properties:
-                  prazoAnaliseHoras: { type: integer }
-        '404':
-          description: Unidade não encontrada.
+                  prazoAnaliseHoras: { type: integer, minimum: 1 }
+        '404': { description: Unidade não encontrada ou inativa. }
+    put:
+      summary: Configurar prazo de análise
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: unidadeId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [prazoAnaliseHoras]
+              properties:
+                prazoAnaliseHoras: { type: integer, minimum: 1 }
+      responses:
+        '200': { description: Prazo atualizado; reservas existentes mantêm o prazo já aplicado. }
+        '404': { description: Unidade não encontrada. }
+        '409': { description: Chave idempotente reutilizada com conteúdo diferente. }

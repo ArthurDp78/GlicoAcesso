@@ -12,6 +12,8 @@
 
 O padrão HATEOAS (Hypermedia as the Engine of Application State) foi aplicado ao recurso **Reserva** do microsserviço de Reservas. O objetivo é fornecer ao cliente (através dos BFFs) não apenas os dados da solicitação, mas também os links para as transições de estado permitidas no momento da consulta.
 
+Os comandos vinculados usam o cabeçalho obrigatório `Idempotency-Key`, conforme os contratos dos BFFs. O cliente gera uma chave por ação lógica e reutiliza a mesma chave e corpo em retries; ela não faz parte do corpo JSON mostrado no link.
+
 Desta forma, os clientes frontend não precisam de embutir regras de negócio complexas (ex: "se o estado for X, mostra o botão Y"). O cliente apenas verifica a presença do link no objeto `_links` da resposta JSON e renderiza a ação correspondente.
 
 ## 2. Mapeamento de Links por Estado de Negócio
@@ -21,32 +23,37 @@ Os links disponíveis dependem do estado atual da reserva e do ator que faz a co
 ### 2.1. Estado: `SOLICITADA`
 A solicitação foi criada, mas a unidade ainda não tomou uma decisão.
 *   **Links para o Cidadão:**
-    *   `self`: Link para recarregar a reserva.
-    *   `cancelar`: Ação para o cidadão cancelar o próprio pedido.
+    *   `self`: `GET /api/cidadao/v1/reservas/{reservaId}`.
+    *   `cancelar`: `POST /api/cidadao/v1/reservas/{reservaId}/cancelar`, sem corpo.
 *   **Links para o Profissional da Unidade:**
-    *   `self`: Link para recarregar a reserva.
-    *   `aceitar`: Ação para dar início à SAGA de confirmação.
-    *   `rejeitar`: Ação para rejeitar o pedido.
-    *   `cancelar`: Ação para cancelar (exige o envio de justificativa no corpo da requisição).
+    *   `self`: `GET /api/unidade/v1/painel/reservas/{reservaId}`.
+    *   `aceitar`: `POST /api/unidade/v1/reservas/{reservaId}/decisao`, com `{"decisao":"ACEITAR"}`.
+    *   `rejeitar`: `POST /api/unidade/v1/reservas/{reservaId}/decisao`, com `{"decisao":"REJEITAR"}`.
+    *   `cancelar`: `POST /api/unidade/v1/reservas/{reservaId}/cancelar`, com `justificativa` no corpo.
 
 ### 2.2. Estado: `EM_CONFIRMACAO`
 A unidade aceitou o pedido e a SAGA está em andamento.
-*   **Links (Comuns):**
-    *   `self`: Link para recarregar a reserva.
-    *   `cancelar`: Interrompe a SAGA e inicia a compensação.
+*   **Links para o Cidadão (BFF Cidadão):**
+    *   `self`: `GET /api/cidadao/v1/reservas/{reservaId}`.
+    *   `cancelar`: `POST /api/cidadao/v1/reservas/{reservaId}/cancelar`, sem corpo.
+*   **Links para o Profissional da Unidade (BFF Unidade):**
+    *   `self`: `GET /api/unidade/v1/painel/reservas/{reservaId}`.
+    *   `cancelar`: `POST /api/unidade/v1/reservas/{reservaId}/cancelar`, com `justificativa` no corpo. A operação interrompe a SAGA e inicia a compensação.
 
 ### 2.3. Estado: `CONFIRMADA`
 A alocação de estoque e a preparação da autorização de retirada foram concluídas com sucesso.
 
 O link de consulta da autorização não substitui a validação da entrega: ao registrar a retirada, Retiradas consulta o estado canônico de Reservas e exige `CONFIRMADA`, além de revalidar a autorização local. Falha na consulta impede a entrega naquele momento, conforme o documento 00, seção 9.8.
 
+O BFF Unidade consulta a autorização por `GET /internal/v1/autorizacoes/{reservaId}` para compor a visão operacional. Esse GET não é uma ação oferecida ao cliente: o affordance HATEOAS para registrar a entrega é o `POST /api/unidade/v1/retiradas` abaixo.
+
 *   **Links para o Cidadão:**
-    *   `self`: Link para recarregar a reserva.
-    *   `cancelar`: Inicia o cancelamento e a reversão de efeitos.
+    *   `self`: `GET /api/cidadao/v1/reservas/{reservaId}`.
+    *   `cancelar`: `POST /api/cidadao/v1/reservas/{reservaId}/cancelar`, sem corpo; inicia o cancelamento e a reversão de efeitos.
 *   **Links para o Profissional da Unidade:**
-    *   `self`: Link para recarregar a reserva.
-    *   `autorizacao-retirada`: Link (GET) para consultar os dados da autorização no microsserviço de Retiradas e proceder com o registo de entrega no balcão.
-    *   `cancelar`: Inicia o cancelamento (exige justificativa).
+    *   `self`: `GET /api/unidade/v1/painel/reservas/{reservaId}`.
+    *   `autorizacao-retirada`: Link (POST) para registrar a entrega pela rota do BFF Unidade `/api/unidade/v1/retiradas`, enviando no corpo o `autorizacaoId` apresentado na visão operacional. Retiradas consulta Reservas e revalida a autorização antes de registrar a entrega.
+    *   `cancelar`: `POST /api/unidade/v1/reservas/{reservaId}/cancelar`, com `justificativa` no corpo.
 
 ### 2.4. Estados em Transição e Terminais
 Para os estados `CANCELAMENTO_EM_ANDAMENTO`, `RETIRADA`, `REJEITADA`, `CANCELADA`, `EXPIRADA` e `FALHA_CONFIRMACAO`, **nenhuma ação adicional é oferecida** além da própria consulta.
@@ -55,38 +62,37 @@ Para os estados `CANCELAMENTO_EM_ANDAMENTO`, `RETIRADA`, `REJEITADA`, `CANCELADA
 
 ## 3. Exemplos de Respostas JSON
 
-Abaixo estão exemplos de como o microsserviço de Reservas devolve as informações incorporando a hipermedia.
+Abaixo estão exemplos de representações devolvidas pelos BFFs, incorporando a hipermedia. Os métodos, caminhos e corpos dos links correspondem às operações declaradas nos contratos OpenAPI dos BFFs.
 
 ### Exemplo 1: Reserva `SOLICITADA` (Visão do Profissional)
 ```json
 {
-  "reservaId": "a1b2c3d4-5678-90ab-cdef-1234567890ab",
-  "cidadaoId": "user-123",
-  "unidadeId": "unidade-456",
-  "itemId": "item-789",
+  "reservaId": "a1b2c3d4-5678-4abc-8def-1234567890ab",
+  "unidadeId": "b2c3d4e5-6789-40ab-8cde-2345678901bc",
+  "itemId": "c3d4e5f6-7890-41bc-9def-3456789012cd",
   "quantidade": 2,
   "status": "SOLICITADA",
   "criadaEm": "2026-10-10T10:00:00Z",
   "decisaoAte": "2026-10-12T10:00:00Z",
   "_links": {
     "self": {
-      "href": "/api/unidade/v1/reservas/a1b2c3d4-5678-90ab-cdef-1234567890ab",
+      "href": "/api/unidade/v1/painel/reservas/a1b2c3d4-5678-4abc-8def-1234567890ab",
       "method": "GET"
     },
     "aceitar": {
-      "href": "/api/unidade/v1/reservas/a1b2c3d4-5678-90ab-cdef-1234567890ab/decisao",
+      "href": "/api/unidade/v1/reservas/a1b2c3d4-5678-4abc-8def-1234567890ab/decisao",
       "method": "POST",
       "body": { "decisao": "ACEITAR" }
     },
     "rejeitar": {
-      "href": "/api/unidade/v1/reservas/a1b2c3d4-5678-90ab-cdef-1234567890ab/decisao",
+      "href": "/api/unidade/v1/reservas/a1b2c3d4-5678-4abc-8def-1234567890ab/decisao",
       "method": "POST",
       "body": { "decisao": "REJEITAR" }
     },
     "cancelar": {
-      "href": "/api/unidade/v1/reservas/a1b2c3d4-5678-90ab-cdef-1234567890ab/cancelar",
+      "href": "/api/unidade/v1/reservas/a1b2c3d4-5678-4abc-8def-1234567890ab/cancelar",
       "method": "POST",
-      "notas": "Corpo da requisição deve conter 'justificativa'."
+      "body": { "justificativa": "Solicitação cancelada pela unidade" }
     }
   }
 }
@@ -95,20 +101,19 @@ Abaixo estão exemplos de como o microsserviço de Reservas devolve as informaç
 ### Exemplo 2: Reserva `CONFIRMADA` (Visão do Cidadão)
 ```json
 {
-  "reservaId": "a1b2c3d4-5678-90ab-cdef-1234567890ab",
-  "cidadaoId": "user-123",
-  "unidadeId": "unidade-456",
-  "itemId": "item-789",
+  "reservaId": "a1b2c3d4-5678-4abc-8def-1234567890ab",
+  "unidadeId": "b2c3d4e5-6789-40ab-8cde-2345678901bc",
+  "itemId": "c3d4e5f6-7890-41bc-9def-3456789012cd",
   "quantidade": 2,
   "status": "CONFIRMADA",
   "criadaEm": "2026-10-10T10:00:00Z",
   "_links": {
     "self": {
-      "href": "/api/cidadao/v1/reservas/a1b2c3d4-5678-90ab-cdef-1234567890ab",
+      "href": "/api/cidadao/v1/reservas/a1b2c3d4-5678-4abc-8def-1234567890ab",
       "method": "GET"
     },
     "cancelar": {
-      "href": "/api/cidadao/v1/reservas/a1b2c3d4-5678-90ab-cdef-1234567890ab/cancelar",
+      "href": "/api/cidadao/v1/reservas/a1b2c3d4-5678-4abc-8def-1234567890ab/cancelar",
       "method": "POST"
     }
   }
@@ -119,6 +124,6 @@ Abaixo estão exemplos de como o microsserviço de Reservas devolve as informaç
 Os clientes (aplicação do cidadão ou portal da unidade, via BFF) processam as ações da seguinte forma:
 1. Fazem um `GET` para consultar a reserva.
 2. Lêem o objeto `_links`.
-3. Se existir a chave `cancelar`, o frontend apresenta um botão "Cancelar Pedido". Se o link possuir a anotação para adicionar uma justificativa (no caso do profissional), o frontend exibe o campo de texto obrigatório.
-4. Ao clicar no botão, o frontend extrai o `href` e o `method` do objeto e executa a chamada HTTP para o BFF correspondente, sem precisar de saber a URL exata previamente.
+3. Se existir a chave `cancelar`, o frontend apresenta um botão "Cancelar Pedido". Quando o link exigir um corpo, como no cancelamento pela unidade, o frontend coleta a justificativa obrigatória e envia o corpo indicado pelo contrato.
+4. Ao clicar no botão, o frontend usa o `href`, o `method` e, quando aplicável, o `body` do link, acrescenta `Idempotency-Key` e executa a chamada HTTP ao BFF correspondente.
 5. Em estados como `RETIRADA` ou `CANCELADA`, o objeto `_links` apenas conterá `self`, logo, nenhum botão de ação será renderizado no ecrã.

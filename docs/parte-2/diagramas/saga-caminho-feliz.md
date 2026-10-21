@@ -19,20 +19,20 @@ sequenceDiagram
     P->>G: POST /api/unidade/v1/reservas/{reservaId}/decisao
     G->>B: Encaminhar decisão autorizada
     B->>R: POST decisão, corpo {decisao: ACEITAR}
-    R->>DBR: Transação local: validar SOLICITADA#59; gravar EM_CONFIRMACAO e SAGA EM_EXECUCAO
+    R->>DBR: Transação local: validar SOLICITADA, gravar EM_CONFIRMACAO e SAGA EM_EXECUCAO
     DBR-->>R: Commit confirmado
-    R-->>B: 200 — decisão registrada#59; confirmação em andamento
+    R-->>B: 200 — decisão registrada, confirmação em andamento
     B-->>G: Resultado da decisão
     G-->>P: Reserva em EM_CONFIRMACAO
 
-    R->>E: POST /internal/v1/alocacoes (sagaId, reservaId, unidadeId, itemId, quantidade, idempotencyKey)
+    R->>E: POST /internal/v1/alocacoes (body: sagaId, reservaId, unidadeId, itemId, quantidade; Idempotency-Key header)
     E->>DBE: Validar saldo canônico e persistir alocação
     DBE-->>E: Commit local confirmado
     E-->>R: 201 — alocação criada/confirmada
     R->>DBR: Persistir etapa e efeito de alocação confirmados
     DBR-->>R: Commit confirmado
 
-    R->>T: POST /internal/v1/autorizacoes (sagaId, reservaId, unidadeId, itemId, quantidade, idempotencyKey)
+    R->>T: POST /internal/v1/autorizacoes (body: sagaId, reservaId, unidadeId, itemId, quantidade; Idempotency-Key header)
     T->>DBT: Persistir autorização vinculada à reserva (entrega exige consulta posterior)
     DBT-->>T: Commit local confirmado
     T-->>R: 201 — autorização criada
@@ -41,9 +41,12 @@ sequenceDiagram
 
     R->>DBR: Transação local: gravar reserva CONFIRMADA e SAGA CONCLUIDA
     DBR-->>R: Commit confirmado
-    R-->>B: Resultado final CONFIRMADA
-    B-->>G: Resposta conforme representação pública da reserva
+    P->>G: GET /api/unidade/v1/painel/reservas/{reservaId}
+    G->>B: Consultar reserva
+    B->>R: Consultar estado da reserva
+    R-->>B: Reserva CONFIRMADA
+    B-->>G: Reserva CONFIRMADA
     G-->>P: Reserva CONFIRMADA
 ```
 
-Cada persistência ocorre no banco do serviço proprietário; não há transação compartilhada. Timeout nos comandos é resultado incerto e exige repetição idempotente para reconciliar os efeitos. O GET de estado de Reservas valida a entrega posterior e não consulta os resultados de alocação ou autorização nos participantes.
+Cada persistência ocorre no banco do serviço proprietário; não há transação compartilhada. Timeout nos comandos é resultado incerto e exige repetição do mesmo comando com a mesma `Idempotency-Key` e conteúdo para recuperar o resultado original. O GET de estado de Reservas valida a entrega posterior e não consulta os resultados dos comandos de alocação ou autorização.

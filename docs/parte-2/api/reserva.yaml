@@ -10,15 +10,23 @@ components:
     bearerAuth:
       type: http
       scheme: bearer
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: Chave estável para repetir o mesmo comando com o mesmo resultado.
+      schema: { type: string, minLength: 1 }
   schemas:
     Reserva:
       type: object
+      required: [reservaId, cidadaoId, unidadeId, itemId, quantidade, status]
       properties:
         reservaId: { type: string, format: uuid }
         cidadaoId: { type: string }
         unidadeId: { type: string, format: uuid }
         itemId: { type: string, format: uuid }
-        quantidade: { type: integer }
+        quantidade: { type: integer, minimum: 1 }
         status: { type: string, enum: [SOLICITADA, EM_CONFIRMACAO, CONFIRMADA, CANCELAMENTO_EM_ANDAMENTO, CANCELADA, REJEITADA, EXPIRADA, FALHA_CONFIRMACAO, RETIRADA] }
         _links:
           type: object
@@ -41,7 +49,7 @@ paths:
         projeção eventualmente consistente. Retiradas só pode prosseguir com
         uma nova entrega se receber 200 com o mesmo reservaId e status CONFIRMADA.
         Não modifica a Reserva, não a bloqueia durante a entrega e não exige
-        X-Idempotency-Key. A revogação e a entrega são serializadas em Retiradas.
+        Idempotency-Key. A revogação e a entrega são serializadas em Retiradas.
       security:
         - bearerAuth: []
       parameters:
@@ -76,22 +84,43 @@ paths:
           description: Reserva não encontrada; não autoriza entrega.
         '503':
           description: Estado canônico indisponível; não autoriza entrega.
+  /internal/v1/reservas/{reservaId}:
+    get:
+      summary: Consultar reserva para agregação pelos BFFs
+      description: Retorna dados canônicos da solicitação. A autorização verifica se o ator é o cidadão proprietário ou profissional vinculado à unidade; o BFF aplica a projeção apropriada ao público.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: reservaId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Solicitação encontrada e visível ao ator autenticado.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Reserva' }
+        '403': { description: Ator sem acesso à reserva. }
+        '404': { description: Reserva não encontrada. }
   /api/cidadao/v1/reservas:
     post:
       summary: Criar solicitação
       security:
         - bearerAuth: []
+      parameters:
+        - { $ref: '#/components/parameters/IdempotencyKey' }
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
+              required: [unidadeId, itemId, quantidade]
               properties:
                 unidadeId: { type: string, format: uuid }
                 itemId: { type: string, format: uuid }
                 quantidade: { type: integer, minimum: 1 }
-                idempotencyKey: { type: string }
       responses:
         '201':
           description: Criada com status SOLICITADA.
@@ -100,7 +129,9 @@ paths:
               schema:
                 $ref: '#/components/schemas/Reserva'
         '422':
-          description: Unidade não permite reserva.
+          description: Unidade inexistente/inativa ou combinação unidade/item sem permissão para reserva.
+        '409':
+          description: `Idempotency-Key` reutilizada com conteúdo diferente.
   /api/cidadao/v1/reservas/{reservaId}/cancelar:
     post:
       summary: Cancelar reserva pelo cidadão
@@ -111,11 +142,26 @@ paths:
           in: path
           required: true
           schema: { type: string, format: uuid }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
       responses:
         '202':
           description: Cancelamento em andamento.
         '409':
-          description: Reserva em estado terminal.
+          description: Reserva em estado terminal ou `Idempotency-Key` reutilizada com conteúdo diferente.
+  /api/unidade/v1/reservas:
+    get:
+      summary: Listar solicitações pendentes da unidade do profissional
+      description: Retorna somente reservas SOLICITADA da unidade vinculada ao ator autenticado, sem exigir unidadeId fornecido pelo cliente.
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Solicitações aguardando decisão.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Reserva' }
+        '403': { description: Profissional sem unidade vinculada. }
   /api/unidade/v1/reservas/{reservaId}/decisao:
     post:
       summary: Registar decisão da unidade (Aceitar/Rejeitar)
@@ -126,12 +172,14 @@ paths:
           in: path
           required: true
           schema: { type: string, format: uuid }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
+              required: [decisao]
               properties:
                 decisao: { type: string, enum: [ACEITAR, REJEITAR] }
       responses:
@@ -139,6 +187,8 @@ paths:
           description: Decisão registada.
         '403':
           description: Profissional não pertence à unidade.
+        '409':
+          description: `Idempotency-Key` reutilizada com conteúdo diferente ou transição concorrente incompatível.
   /api/unidade/v1/reservas/{reservaId}/cancelar:
     post:
       summary: Cancelar reserva pela unidade
@@ -149,12 +199,14 @@ paths:
           in: path
           required: true
           schema: { type: string, format: uuid }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
+              required: [justificativa]
               properties:
                 justificativa: { type: string, minLength: 5 }
       responses:

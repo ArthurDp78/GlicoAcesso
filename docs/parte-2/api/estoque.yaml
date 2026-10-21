@@ -2,7 +2,7 @@ openapi: 3.0.3
 info:
   title: API de Estoque
   version: "1.0.0"
-  description: Catálogo, saldo físico, alocações e projeção de disponibilidade.
+  description: Catálogo, saldo físico, movimentações, alocações e projeção de disponibilidade.
 servers:
   - url: /
 components:
@@ -10,44 +10,139 @@ components:
     bearerAuth:
       type: http
       scheme: bearer
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: Chave estável para repetir o mesmo comando com o mesmo resultado.
+      schema: { type: string, minLength: 1 }
   schemas:
+    Item:
+      type: object
+      required: [itemId, nome, tipo]
+      properties:
+        itemId: { type: string, format: uuid }
+        nome: { type: string, minLength: 1 }
+        tipo: { type: string, enum: [MEDICAMENTO, INSUMO] }
+        descricao: { type: string }
+    Alocacao:
+      type: object
+      required: [alocacaoId, reservaId, sagaId, unidadeId, itemId, quantidade]
+      properties:
+        alocacaoId: { type: string, format: uuid }
+        reservaId: { type: string, format: uuid }
+        sagaId: { type: string, format: uuid }
+        unidadeId: { type: string, format: uuid }
+        itemId: { type: string, format: uuid }
+        quantidade: { type: integer, minimum: 1 }
+    MovimentacaoEstoque:
+      type: object
+      required: [movimentacaoId, unidadeId, itemId, variacaoFisica, ocorridaEm, estoqueVersion]
+      properties:
+        movimentacaoId: { type: string, format: uuid }
+        unidadeId: { type: string, format: uuid }
+        itemId: { type: string, format: uuid }
+        variacaoFisica: { type: integer }
+        ocorridaEm: { type: string, format: date-time }
+        estoqueVersion: { type: integer, format: int64, minimum: 0 }
     DisponibilidadeItem:
       type: object
       required: [itemId, unidadeId, quantidadeDisponivel, permiteReserva, atualizadoEm]
       properties:
         itemId: { type: string, format: uuid }
         unidadeId: { type: string, format: uuid }
-        quantidadeDisponivel: { type: integer }
+        quantidadeDisponivel: { type: integer, minimum: 0 }
         permiteReserva: { type: boolean }
         atualizadoEm:
           type: string
           format: date-time
-          description: Instante do estado refletido pela projeção de Estoque, não o horário da consulta.
+          description: Instante do estado refletido pela projeção, não o horário da consulta.
+    PermissaoReserva:
+      type: object
+      required: [unidadeId, itemId, permiteReserva]
+      properties:
+        unidadeId: { type: string, format: uuid }
+        itemId: { type: string, format: uuid }
+        permiteReserva: { type: boolean }
+    EstoqueUnidadeItem:
+      type: object
+      required: [itemId, unidadeId, itemNome, estoqueFisicoAtual, quantidadeAlocada, quantidadeDisponivel, permiteReserva, atualizadoEm]
+      properties:
+        itemId: { type: string, format: uuid }
+        unidadeId: { type: string, format: uuid }
+        itemNome: { type: string }
+        estoqueFisicoAtual: { type: integer, minimum: 0 }
+        quantidadeAlocada: { type: integer, minimum: 0 }
+        quantidadeDisponivel: { type: integer, minimum: 0 }
+        permiteReserva: { type: boolean }
+        atualizadoEm: { type: string, format: date-time }
 paths:
-  /api/cidadao/v1/estoque/disponibilidade:
+  /api/cidadao/v1/estoque/itens:
     get:
-      summary: Consulta de disponibilidade (Projeção)
-      parameters:
-        - name: unidadeId
-          in: query
-          required: true
-          schema: { type: string, format: uuid }
-        - name: itemId
-          in: query
-          required: true
-          schema: { type: string, format: uuid }
+      summary: Listar catálogo público de itens
       responses:
         '200':
-          description: Sucesso.
+          description: Itens para seleção na consulta de disponibilidade, sem dados de saldo.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/DisponibilidadeItem'
-  /api/unidade/v1/estoque/{unidadeId}/itens/{itemId}/permissao:
-    put:
-      summary: Configurar se item permite reserva
-      security:
-        - bearerAuth: []
+                type: array
+                items: { $ref: '#/components/schemas/Item' }
+  /api/cidadao/v1/estoque/disponibilidade:
+    get:
+      summary: Consultar disponibilidade projetada
+      parameters:
+        - name: unidadeId
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+        - name: itemId
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Disponibilidade informativa; alocação valida o saldo canônico.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DisponibilidadeItem' }
+  /api/unidade/v1/estoque/itens:
+    get:
+      summary: Listar catálogo de itens
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Catálogo canônico de medicamentos e insumos.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Item' }
+  /api/unidade/v1/estoque/{unidadeId}/itens:
+    get:
+      summary: Consultar catálogo e saldos projetados de uma unidade
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: unidadeId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Itens e disponibilidade com o instante da projeção aplicado.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/EstoqueUnidadeItem' }
+        '403': { description: Ator sem acesso à unidade. }
+        '404': { description: Unidade não encontrada. }
+  /internal/v1/unidades/{unidadeId}/itens/{itemId}/permissao-reserva:
+    get:
+      summary: Consultar permissão canônica de reserva
+      description: Leitura do modelo de escrita usada por Reservas ao criar uma solicitação; não depende da projeção de disponibilidade.
+      security: [{ bearerAuth: [] }]
       parameters:
         - name: unidadeId
           in: path
@@ -57,54 +152,197 @@ paths:
           in: path
           required: true
           schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Permissão atual da combinação unidade/item.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PermissaoReserva' }
+        '404': { description: Unidade, item ou configuração de saldo não encontrada. }
+        '503': { description: Modelo canônico de Estoque indisponível. }
+  /internal/v1/itens:
+    post:
+      summary: Cadastrar item no catálogo
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
+              required: [nome, tipo]
+              properties:
+                nome: { type: string, minLength: 1 }
+                tipo: { type: string, enum: [MEDICAMENTO, INSUMO] }
+                descricao: { type: string }
+      responses:
+        '201':
+          description: Item cadastrado; a repetição idêntica reproduz a resposta original.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Item' }
+        '409': { description: Chave idempotente reutilizada com conteúdo diferente ou conflito de cadastro. }
+  /internal/v1/itens/{itemId}:
+    put:
+      summary: Atualizar cadastro de item
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: itemId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [nome, tipo]
+              properties:
+                nome: { type: string, minLength: 1 }
+                tipo: { type: string, enum: [MEDICAMENTO, INSUMO] }
+                descricao: { type: string }
+      responses:
+        '200': { description: Cadastro do item atualizado. }
+        '404': { description: Item não encontrado. }
+        '409': { description: Chave idempotente reutilizada com conteúdo diferente. }
+  /api/unidade/v1/estoque/{unidadeId}/itens/{itemId}/permissao:
+    put:
+      summary: Configurar se item permite reserva
+      description: Atualiza a permissão do saldo existente ou inicializa a relação unidade/item com saldo físico e alocado iguais a zero antes de aplicar a configuração.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: unidadeId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: itemId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [permiteReserva]
               properties:
                 permiteReserva: { type: boolean }
       responses:
-        '200':
-          description: Configuração atualizada.
-        '401':
-          description: Não autenticado.
-        '403':
-          description: Sem permissão.
-  /internal/v1/alocacoes:
+        '200': { description: Configuração atualizada. }
+        '401': { description: Não autenticado. }
+        '403': { description: Sem permissão para a unidade. }
+        '404': { description: Unidade ou item não encontrado. }
+        '409': { description: Chave idempotente reutilizada com conteúdo diferente. }
+  /api/unidade/v1/estoque/{unidadeId}/itens/{itemId}/entradas:
     post:
-      summary: Alocar Estoque (SAGA)
+      summary: Registrar entrada física no estoque
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: unidadeId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: itemId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
+              required: [quantidade, motivo]
+              properties:
+                quantidade: { type: integer, minimum: 1 }
+                motivo: { type: string, minLength: 1 }
+      responses:
+        '201':
+          description: Entrada, movimento e evento de projeção registrados atomicamente; repetição idêntica reproduz a resposta original.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MovimentacaoEstoque' }
+        '403': { description: Ator sem permissão para a unidade. }
+        '404': { description: Unidade, item ou saldo não encontrado. }
+        '409': { description: Chave idempotente reutilizada com conteúdo diferente. }
+  /api/unidade/v1/estoque/{unidadeId}/itens/{itemId}/ajustes:
+    post:
+      summary: Ajustar saldo físico por variação
+      description: Variação positiva acrescenta saldo; negativa reduz saldo. O ajuste não pode reduzir o físico abaixo da quantidade já alocada.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: unidadeId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: itemId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [variacaoFisica, motivo]
+              properties:
+                variacaoFisica:
+                  oneOf:
+                    - { type: integer, maximum: -1 }
+                    - { type: integer, minimum: 1 }
+                motivo: { type: string, minLength: 1 }
+      responses:
+        '201':
+          description: Ajuste, movimento e evento de projeção registrados atomicamente; repetição idêntica reproduz a resposta original.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MovimentacaoEstoque' }
+        '403': { description: Ator sem permissão para a unidade. }
+        '404': { description: Unidade, item ou saldo não encontrado. }
+        '409': { description: Ajuste incompatível com alocações ativas ou chave reutilizada com conteúdo diferente. }
+  /internal/v1/alocacoes:
+    post:
+      summary: Alocar estoque para a SAGA
+      security: [{ bearerAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [sagaId, reservaId, unidadeId, itemId, quantidade]
               properties:
                 sagaId: { type: string, format: uuid }
                 reservaId: { type: string, format: uuid }
                 unidadeId: { type: string, format: uuid }
                 itemId: { type: string, format: uuid }
                 quantidade: { type: integer, minimum: 1 }
-                idempotencyKey: { type: string }
       responses:
         '201':
-          description: Alocação criada/confirmada.
-        '409':
-          description: Saldo insuficiente ou conflito.
+          description: Alocação criada; resposta repetida reproduz o resultado original.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Alocacao' }
+        '409': { description: Saldo insuficiente, comando conflitante ou mesma chave com conteúdo diferente. }
   /internal/v1/alocacoes/{reservaId}:
     delete:
-      summary: Liberar Alocação (Compensação SAGA)
+      summary: Liberar alocação (compensação SAGA)
+      security: [{ bearerAuth: [] }]
       parameters:
         - name: reservaId
           in: path
           required: true
           schema: { type: string, format: uuid }
-        - name: X-Idempotency-Key
-          in: header
-          required: true
-          schema: { type: string }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
       responses:
-        '204':
-          description: Alocação libertada de forma idempotente.
+        '204': { description: Liberação confirmada; repetição devolve o resultado original. }
+        '409': { description: Chave idempotente reutilizada com conteúdo diferente ou alocação já consumida. }

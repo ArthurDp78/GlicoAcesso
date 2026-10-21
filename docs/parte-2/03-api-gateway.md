@@ -30,13 +30,29 @@ Os contratos dos BFFs usam os prefixos `/api/cidadao/v1` e `/api/unidade/v1` em 
 | Cliente | Método e rota externa | Destino |
 |---|---|---|
 | Cidadão | `GET /api/cidadao/v1/explorar` | BFF Cidadão. Consulta exige `itemId` como parâmetro de query. |
+| Cidadão | `GET /api/cidadao/v1/itens` | BFF Cidadão. Lista o catálogo público para selecionar o `itemId`. |
+| Cidadão | `GET /api/cidadao/v1/unidades` | BFF Cidadão. Lista dados públicos das unidades ativas. |
 | Cidadão | `GET /api/cidadao/v1/reservas/{reservaId}` | BFF Cidadão. |
+| Cidadão | `POST /api/cidadao/v1/reservas` | BFF Cidadão. Cria uma solicitação autenticada. |
+| Cidadão | `POST /api/cidadao/v1/reservas/{reservaId}/cancelar` | BFF Cidadão. Solicita o cancelamento da própria reserva. |
 | Unidade | `GET /api/unidade/v1/painel/reservas/{reservaId}` | BFF Unidade. |
+| Unidade | `GET /api/unidade/v1/painel/reservas` | BFF Unidade. Lista solicitações pendentes para decisão. |
 | Unidade | `GET /api/unidade/v1/painel/estoque` | BFF Unidade. |
+| Unidade | `GET /api/unidade/v1/unidade` | BFF Unidade. Consulta cadastro da unidade vinculada ao profissional. |
+| Unidade | `PUT /api/unidade/v1/unidade` | BFF Unidade. Atualiza cadastro e informações de atendimento da unidade autenticada. |
+| Unidade | `PUT /api/unidade/v1/unidade/horarios` | BFF Unidade. Atualiza horários da unidade autenticada. |
+| Unidade | `PUT /api/unidade/v1/unidade/prazo-analise` | BFF Unidade. Atualiza o prazo de análise para novas solicitações. |
+| Unidade | `PATCH /api/unidade/v1/unidade/status` | BFF Unidade. Ativa ou desativa a participação da unidade. |
+| Unidade | `PUT /api/unidade/v1/painel/estoque/{unidadeId}/itens/{itemId}/permissao` | BFF Unidade. Configura se o item permite reserva. |
+| Unidade | `POST /api/unidade/v1/painel/estoque/{unidadeId}/itens/{itemId}/entradas` | BFF Unidade. Registra entrada física no estoque. |
+| Unidade | `POST /api/unidade/v1/painel/estoque/{unidadeId}/itens/{itemId}/ajustes` | BFF Unidade. Registra ajuste físico por variação assinada. |
+| Unidade | `POST /api/unidade/v1/reservas/{reservaId}/decisao` | BFF Unidade. Aceita ou rejeita a solicitação. |
+| Unidade | `POST /api/unidade/v1/reservas/{reservaId}/cancelar` | BFF Unidade. Solicita cancelamento com justificativa. |
+| Unidade | `POST /api/unidade/v1/retiradas` | BFF Unidade. Registra a entrega presencial. |
 
 Fontes: [contrato do BFF Cidadão](./api/bff-cidadao.yaml) e [contrato do BFF Unidade](./api/bff-unidade.yaml). Os prefixos identificam a família e seu destino lógico; métodos, parâmetros e respostas seguem o contrato de cada operação.
 
-Os contratos dos serviços também declaram operações públicas nesses prefixos, como `POST /api/cidadao/v1/reservas` e `POST /api/unidade/v1/retiradas`. Elas ainda não estão descritas nos YAMLs dos BFFs, embora o fluxo arquitetural determine sua passagem pelo BFF correspondente. Essa cobertura contratual permanece pendente de alinhamento; o Gateway continua expondo somente os BFFs.
+Os contratos de domínio também descrevem as operações que os BFFs encaminham aos serviços responsáveis. No tráfego externo, o Gateway expõe somente as rotas dos BFFs listadas acima; os clientes não acessam diretamente os serviços de domínio.
 
 ## 3. Rotas internas
 
@@ -46,7 +62,14 @@ Os endpoints sob `/internal/v1` pertencem à comunicação entre serviços e nã
 |---|---|
 | Reservas → Estoque | `POST /internal/v1/alocacoes` e `DELETE /internal/v1/alocacoes/{reservaId}`. |
 | Reservas → Retiradas | `POST /internal/v1/autorizacoes` e `POST /internal/v1/autorizacoes/{reservaId}/cancelar`. |
+| Reservas → Unidades | `GET /internal/v1/unidades/{unidadeId}` para validar unidade ativa e obter prazo de análise. |
+| Reservas → Estoque | `GET /internal/v1/unidades/{unidadeId}/itens/{itemId}/permissao-reserva` para ler a permissão canônica antes de criar a solicitação. |
 | Retiradas → Reservas | `GET /internal/v1/reservas/{reservaId}/estado`, antes de registrar uma entrega. |
+| BFFs → Reservas | `GET /internal/v1/reservas/{reservaId}` para agregar a consulta da reserva com autorização por ator. |
+| BFFs → Unidades | `GET /api/cidadao/v1/unidades` para listagem pública e `GET /internal/v1/unidades/{unidadeId}` para compor detalhes autorizados. |
+| BFF Cidadão → Estoque | `GET /api/cidadao/v1/estoque/itens` para listar itens pesquisáveis. |
+| BFF Unidade → Retiradas | `GET /internal/v1/autorizacoes/{reservaId}` para agregar a situação operacional da autorização. |
+| BFF Unidade → Estoque | `GET /api/unidade/v1/estoque/{unidadeId}/itens` para compor o painel e os dados do item da reserva. |
 
 Assim, a entrada externa segue **cliente → Gateway → BFF**; as integrações internas seguem **serviço → serviço**. A publicação e o consumo de eventos RabbitMQ também pertencem aos serviços, fora do encaminhamento HTTP do Gateway.
 
@@ -54,7 +77,7 @@ Assim, a entrada externa segue **cliente → Gateway → BFF**; as integrações
 
 O diagrama de arquitetura prevê validação na borda e nos serviços responsáveis. Nas operações autenticadas, o Gateway participa da validação do token recebido e encaminha o contexto autenticado necessário ao BFF e ao serviço adequado. A identidade do cidadão vem desse contexto confiável, conforme o documento 05; um identificador arbitrário no corpo não substitui a autenticação.
 
-Os YAMLs utilizam o esquema HTTP Bearer `bearerAuth`. Nos BFFs, ele é exigido na consulta da reserva do cidadão e nas duas operações da unidade; `GET /api/cidadao/v1/explorar` não declara `security`. A exigência deve respeitar cada operação, sem tratar todos os endpoints como autenticados por uma regra global não definida.
+Os YAMLs utilizam o esquema HTTP Bearer `bearerAuth`. Ele é exigido nas operações de reserva do cidadão e nas operações da unidade; as consultas públicas de itens, unidades e disponibilidade permanecem sem autenticação. A exigência respeita cada operação, sem tratar todos os endpoints como autenticados por uma regra global não definida.
 
 A autorização de negócio continua no serviço responsável, com os BFFs apresentando apenas os dados e ações adequados ao ator. Por exemplo, Reservas valida a propriedade da solicitação ou o vínculo do profissional com a unidade. A proteção da borda não substitui essas verificações.
 
@@ -67,7 +90,7 @@ Os documentos não fixam um provedor de identidade, a configuração de validaç
 | Roteamento externo | Encaminhar cada família de rotas ao BFF do público correspondente. |
 | Proteção da borda | Participar da autenticação e das verificações de acesso previstas, mantendo a validação específica nos serviços. |
 | Rastreabilidade | Preservar o `correlationId` do fluxo. O documento 00 prevê sua geração na entrada, pelo BFF/Gateway, quando não recebido. |
-| Convenções HTTP | Preservar métodos, parâmetros, corpos e respostas definidos nos contratos, incluindo JSON UTF-8 e o versionamento dos caminhos. |
+| Convenções HTTP | Preservar métodos, parâmetros, corpos, respostas e `Idempotency-Key` definidos nos contratos, incluindo JSON UTF-8 e o versionamento dos caminhos. |
 | Separação das APIs | Impedir a exposição pública dos endpoints internos dos serviços. |
 
 O header `X-Correlation-Id` está explicitamente documentado como opcional na consulta interna do estado da reserva. O formato geral de transporte da correlação nas demais operações ainda não está detalhado nos OpenAPI. A tecnologia do Gateway, os endereços dos BFFs e a configuração física do roteamento também permanecem indefinidos.
@@ -93,7 +116,7 @@ Exemplo: `GET /api/cidadao/v1/explorar?itemId={itemId}`.
 1. O cliente envia a consulta ao Gateway.
 2. O Gateway aplica as responsabilidades de borda pertinentes e encaminha a chamada ao BFF Cidadão, preservando o parâmetro e a correlação do fluxo.
 3. O BFF consulta as informações necessárias de Unidades e da projeção de disponibilidade de Estoque, conforme o documento 05.
-4. O BFF compõe os itens da resposta com `unidadeId`, `nomeUnidade`, `disponivel` e `atualizadoEm`, conforme seu contrato. O timestamp é o recebido da projeção, não o horário de montagem da resposta.
+4. O BFF compõe os itens da resposta com identificação, endereço, horário e orientações da unidade, além de `disponivel`, `permiteReserva` e `atualizadoEm`, conforme seu contrato. `disponivel` deriva de quantidade projetada maior que zero; `permiteReserva` é uma regra independente. O timestamp é o recebido da projeção, não o horário de montagem da resposta.
 5. O Gateway devolve a resposta do BFF ao cliente, preservando seu status e sua representação HTTP.
 
 Essa consulta é informativa; as regras de validação e alocação continuam no modelo canônico de Estoque. A composição da resposta e suas diferenças por público são detalhadas no documento 04.

@@ -10,7 +10,45 @@ components:
     bearerAuth:
       type: http
       scheme: bearer
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: Chave estável para repetir o mesmo comando com o mesmo resultado.
+      schema: { type: string, minLength: 1 }
+  schemas:
+    Autorizacao:
+      type: object
+      required: [autorizacaoId, reservaId, sagaId, unidadeId, itemId, quantidade, status]
+      properties:
+        autorizacaoId: { type: string, format: uuid }
+        reservaId: { type: string, format: uuid }
+        sagaId: { type: string, format: uuid }
+        unidadeId: { type: string, format: uuid }
+        itemId: { type: string, format: uuid }
+        quantidade: { type: integer, minimum: 1 }
+        status: { type: string, enum: [ATIVA, CANCELADA, UTILIZADA] }
 paths:
+  /internal/v1/autorizacoes/{reservaId}:
+    get:
+      summary: Consultar autorização vinculada à reserva
+      description: Consulta interna usada pelo BFF Unidade para montar a visão operacional. Não substitui o replay idempotente do comando de preparação ou cancelamento.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: reservaId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Autorização encontrada, inclusive se cancelada ou utilizada.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Autorizacao' }
+        '404': { description: Não existe autorização para a reserva. }
+        '503': { description: Estado da autorização indisponível. }
   /api/unidade/v1/retiradas:
     post:
       summary: Registar entrega presencial
@@ -22,8 +60,41 @@ paths:
         Timeout, indisponibilidade ou resposta inconclusiva impedem a entrega,
         sem fallback para cache. Na transação local, revalida a autorização
         contra revogação ou uso concorrente e grava entrega e Outbox juntas.
-        A unicidade por autorização impede entrega duplicada em retentativas;
-        autorização já utilizada continua retornando 409, sem nova entrega.
+        Repetir a mesma ação com a mesma chave reproduz a resposta original;
+        uma nova ação com outra chave encontra a autorização já utilizada e recebe 409.
+      security:
+        - bearerAuth: []
+      parameters:
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [autorizacaoId]
+              properties:
+                autorizacaoId: { type: string, format: uuid }
+      responses:
+        '201':
+          description: Entrega física registada. Dispara evento retirada.concluida.v1. Repetições idênticas reproduzem esta resposta.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [retiradaId, autorizacaoId, realizadaEm]
+                properties:
+                  retiradaId: { type: string, format: uuid }
+                  autorizacaoId: { type: string, format: uuid }
+                  realizadaEm: { type: string, format: date-time }
+        '409':
+          description: Autorização cancelada, já usada ou inexistente; Reserva não encontrada ou estado consultado diferente de CONFIRMADA; ou `Idempotency-Key` reutilizada com conteúdo diferente. Nenhuma nova entrega é registrada.
+        '503':
+          description: Não foi possível obter o estado canônico de Reservas, inclusive por timeout ou falha técnica na consulta. Nenhuma nova entrega é registrada; uma nova tentativa exige nova consulta.
+  /internal/v1/autorizacoes:
+    post:
+      summary: Preparar Autorização (SAGA)
+      description: A criação conclui a etapa de Retiradas na SAGA, mas não autoriza entrega por si só. O registro da retirada exige consulta posterior ao estado canônico de Reservas.
       security:
         - bearerAuth: []
       requestBody:
@@ -32,49 +103,36 @@ paths:
           application/json:
             schema:
               type: object
-              properties:
-                autorizacaoId: { type: string, format: uuid }
-      responses:
-        '201':
-          description: Entrega física registada. Dispara evento retirada.concluida.v1.
-        '409':
-          description: Autorização cancelada, já usada ou inexistente; Reserva não encontrada ou estado consultado diferente de CONFIRMADA. Nenhuma nova entrega é registrada.
-        '503':
-          description: Não foi possível obter o estado canônico de Reservas, inclusive por timeout ou falha técnica na consulta. Nenhuma nova entrega é registrada; uma nova tentativa exige nova consulta.
-  /internal/v1/autorizacoes:
-    post:
-      summary: Preparar Autorização (SAGA)
-      description: A criação conclui a etapa de Retiradas na SAGA, mas não autoriza entrega por si só. O registro da retirada exige consulta posterior ao estado canônico de Reservas.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
+              required: [sagaId, reservaId, unidadeId, itemId, quantidade]
               properties:
                 sagaId: { type: string, format: uuid }
                 reservaId: { type: string, format: uuid }
                 unidadeId: { type: string, format: uuid }
                 itemId: { type: string, format: uuid }
                 quantidade: { type: integer, minimum: 1 }
-                idempotencyKey: { type: string }
+      parameters:
+        - { $ref: '#/components/parameters/IdempotencyKey' }
       responses:
         '201':
-          description: Autorização criada.
+          description: Autorização criada; repetição idêntica reproduz o status e corpo originais.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Autorizacao' }
+        '409':
+          description: `Idempotency-Key` reutilizada com conteúdo diferente ou autorização incompatível já existente.
   /internal/v1/autorizacoes/{reservaId}/cancelar:
     post:
       summary: Cancelar Autorização (Compensação SAGA)
+      security:
+        - bearerAuth: []
       parameters:
         - name: reservaId
           in: path
           required: true
           schema: { type: string, format: uuid }
-        - name: X-Idempotency-Key
-          in: header
-          required: true
-          schema: { type: string }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
       responses:
         '200':
           description: Autorização revogada.
         '409':
-          description: Entrega já registada (conflito).
+          description: Entrega já registrada ou `Idempotency-Key` reutilizada com conteúdo diferente.

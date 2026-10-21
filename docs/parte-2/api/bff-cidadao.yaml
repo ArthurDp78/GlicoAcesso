@@ -10,7 +10,129 @@ components:
     bearerAuth:
       type: http
       scheme: bearer
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: Reutilize a mesma chave ao repetir a mesma ação.
+      schema: { type: string, minLength: 1 }
+  schemas:
+    Link:
+      type: object
+      required: [href, method]
+      properties:
+        href: { type: string, minLength: 1 }
+        method: { type: string, enum: [GET, POST, PUT, PATCH, DELETE] }
+        body:
+          type: object
+          additionalProperties: true
+    ReservaCidadao:
+      type: object
+      required: [reservaId, unidadeId, itemId, quantidade, status]
+      properties:
+        reservaId: { type: string, format: uuid }
+        unidadeId: { type: string, format: uuid }
+        itemId: { type: string, format: uuid }
+        quantidade: { type: integer, minimum: 1 }
+        status:
+          type: string
+          enum: [SOLICITADA, EM_CONFIRMACAO, CONFIRMADA, CANCELAMENTO_EM_ANDAMENTO, CANCELADA, REJEITADA, EXPIRADA, FALHA_CONFIRMACAO, RETIRADA]
+        itemNome: { type: string }
+        unidadeNome: { type: string }
+        enderecoLocal: { type: string }
+        orientacoesRetirada: { type: string, minLength: 1 }
+        criadaEm: { type: string, format: date-time }
+        decisaoAte: { type: string, format: date-time }
+        _links:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/Link'
+    UnidadeCidadao:
+      type: object
+      required: [unidadeId, nome, endereco, horarioAtendimento, orientacoesRetirada]
+      properties:
+        unidadeId: { type: string, format: uuid }
+        nome: { type: string }
+        endereco: { type: string }
+        horarioAtendimento: { type: string }
+        orientacoesRetirada: { type: string, minLength: 1 }
+    ItemCidadao:
+      type: object
+      required: [itemId, nome, tipo]
+      properties:
+        itemId: { type: string, format: uuid }
+        nome: { type: string }
+        tipo: { type: string, enum: [MEDICAMENTO, INSUMO] }
 paths:
+  /itens:
+    get:
+      summary: Listar itens disponíveis para pesquisa
+      responses:
+        '200':
+          description: Catálogo público de itens; não informa saldo.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/ItemCidadao' }
+  /unidades:
+    get:
+      summary: Listar unidades para consulta
+      responses:
+        '200':
+          description: Unidades ativas com informações públicas de atendimento.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/UnidadeCidadao' }
+  /reservas:
+    post:
+      summary: Criar solicitação de reserva
+      description: Encaminha a solicitação autenticada do cidadão ao serviço Reservas.
+      security:
+        - bearerAuth: []
+      parameters:
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [unidadeId, itemId, quantidade]
+              properties:
+                unidadeId: { type: string, format: uuid }
+                itemId: { type: string, format: uuid }
+                quantidade: { type: integer, minimum: 1 }
+      responses:
+        '201':
+          description: Solicitação criada com status SOLICITADA.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReservaCidadao'
+        '422':
+          description: Unidade inexistente/inativa ou combinação unidade/item sem permissão para reserva.
+        '409':
+          description: `Idempotency-Key` reutilizada com conteúdo diferente.
+  /reservas/{reservaId}/cancelar:
+    post:
+      summary: Solicitar cancelamento da reserva pelo cidadão
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: reservaId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      responses:
+        '202':
+          description: Cancelamento aceito e em andamento, quando houver efeitos a compensar.
+        '409':
+          description: Reserva em estado terminal ou cancelamento não permitido.
   /reservas/{reservaId}:
     get:
       summary: Consultar reserva agregada (Cidadão)
@@ -27,15 +149,7 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  reservaId: { type: string, format: uuid }
-                  status: { type: string }
-                  itemNome: { type: string }
-                  unidadeNome: { type: string }
-                  enderecoLocal: { type: string }
-                  _links:
-                    type: object
+                $ref: '#/components/schemas/ReservaCidadao'
   /explorar:
     get:
       summary: Explorar disponibilidade agregada
@@ -53,11 +167,15 @@ paths:
                 type: array
                 items:
                   type: object
-                  required: [unidadeId, nomeUnidade, disponivel, atualizadoEm]
+                  required: [unidadeId, nomeUnidade, endereco, horarioAtendimento, orientacoesRetirada, disponivel, permiteReserva, atualizadoEm]
                   properties:
                     unidadeId: { type: string, format: uuid }
                     nomeUnidade: { type: string }
-                    disponivel: { type: boolean }
+                    endereco: { type: string }
+                    horarioAtendimento: { type: string }
+                    orientacoesRetirada: { type: string, minLength: 1 }
+                    disponivel: { type: boolean, description: true quando quantidadeDisponivel da projeção for maior que zero. }
+                    permiteReserva: { type: boolean, description: Permissão de negócio da combinação unidade/item; não é inferida do saldo. }
                     atualizadoEm:
                       type: string
                       format: date-time

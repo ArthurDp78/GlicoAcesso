@@ -39,7 +39,7 @@ Unidades fornece o prazo de análise na criação da solicitação, mas não par
 | `reservaId` | Liga a solicitação, a SAGA, a alocação e a autorização. É criado por Reservas. |
 | `sagaId` | Identifica uma execução. Confirmação e cancelamento são execuções distintas, vinculadas ao mesmo `reservaId`. Retentativas da mesma execução reutilizam o mesmo `sagaId`. |
 | `correlationId` | Permite localizar chamadas e logs do fluxo. É propagado aos participantes. |
-| `idempotencyKey` | Identifica o comando lógico de uma etapa. Retentativas reutilizam a chave; operações diferentes usam chaves diferentes. |
+| `Idempotency-Key` | Cabeçalho que identifica o comando lógico de uma etapa. Reservas o persiste antes do envio; retentativas reutilizam chave e conteúdo, enquanto comandos lógicos diferentes usam chaves diferentes. |
 | `eventId` | Identifica eventos assíncronos e é usado por consumidores para deduplicação. Não coordena a confirmação. |
 
 Só pode existir **uma execução ativa por `reservaId`**. Atualizações de estado em Reservas devem ser condicionais para impedir duas confirmações ou dois cancelamentos ativos ao mesmo tempo.
@@ -63,8 +63,8 @@ Se uma condição falhar, nenhum participante é chamado. Durante o processament
 | Ordem | Serviço | Comando ou ação | Condição para avançar |
 |---:|---|---|---|
 | 0 | Reservas | Registra o aceite, muda `SOLICITADA` para `EM_CONFIRMACAO`, cria `sagaId` e persiste a execução como `EM_EXECUCAO`. | A transação local foi confirmada. Se não foi, não envia comandos. |
-| 1 | Reservas → Estoque | `AlocarEstoque`(`reservaId`, `unidadeId`, `itemId`, quantidade). | Estoque confirma uma alocação ativa no próprio banco. |
-| 2 | Reservas → Retiradas | `PrepararAutorizacao`(`reservaId`, `unidadeId`, `itemId`, quantidade). Só ocorre após confirmação da alocação. | Retiradas persiste a autorização; uma entrega futura ainda exige consulta canônica de `CONFIRMADA` em Reservas. |
+| 1 | Reservas → Estoque | `AlocarEstoque`(`sagaId`, `reservaId`, `unidadeId`, `itemId`, quantidade) com `Idempotency-Key`. | Estoque confirma uma alocação ativa no próprio banco. |
+| 2 | Reservas → Retiradas | `PrepararAutorizacao`(`sagaId`, `reservaId`, `unidadeId`, `itemId`, quantidade) com `Idempotency-Key`. Só ocorre após confirmação da alocação. | Retiradas persiste a autorização; uma entrega futura ainda exige consulta canônica de `CONFIRMADA` em Reservas. |
 | 3 | Reservas | Grava `CONFIRMADA` e a execução `CONCLUIDA` em transação local. | Só após a confirmação local a reserva é apresentada como confirmada. |
 
 Os comandos internos são síncronos e versionados pelos contratos internos. Uma resposta de sucesso significa que o participante confirmou o efeito em seu próprio banco, não que Reservas alterou o banco dele.
@@ -73,8 +73,8 @@ Os comandos internos são síncronos e versionados pelos contratos internos. Uma
 
 | Efeito confirmado | Compensação | Regra |
 |---|---|---|
-| Alocação ativa em Estoque | `LiberarAlocacao`(`reservaId`) | Libera somente a alocação dessa reserva. Repetir a liberação ou liberar uma alocação já inexistente é idempotente e não altera outras reservas. |
-| Autorização preparada em Retiradas | `CancelarAutorizacao`(`reservaId`) | Revoga a autorização sem apagar o histórico. Repetir o cancelamento mantém o mesmo resultado. |
+| Alocação ativa em Estoque | `LiberarAlocacao`(`reservaId`) com `Idempotency-Key` | Libera somente a alocação dessa reserva. Repetir a liberação com a mesma chave devolve o resultado original e não altera outras reservas. |
+| Autorização preparada em Retiradas | `CancelarAutorizacao`(`reservaId`) com `Idempotency-Key` | Revoga a autorização sem apagar o histórico. Repetir o cancelamento com a mesma chave devolve o resultado original. |
 
 As compensações ocorrem na ordem inversa dos efeitos: cancelar a autorização em Retiradas e depois liberar a alocação em Estoque. Não liberar o estoque enquanto a autorização ainda puder ser usada.
 
@@ -85,7 +85,7 @@ As compensações ocorrem na ordem inversa dos efeitos: cancelar a autorização
 | Estoque rejeita por regra de negócio, como saldo insuficiente | Não houve alocação. | Não chama Retiradas. Finaliza a SAGA como `COMPENSADA` e a reserva como `FALHA_CONFIRMACAO`. |
 | Retiradas rejeita por regra de negócio após a alocação | A alocação existe; autorização não foi criada. | Libera a alocação. Após confirmação, finaliza como `COMPENSADA`/`FALHA_CONFIRMACAO`. |
 | Erro temporário do participante | O processo pode continuar. | Mantém execução ativa e aplica retry; não marca falha final apenas por erro temporário. |
-| Timeout, conexão interrompida ou resposta perdida | O comando pode ter sido confirmado sem que Reservas receba a resposta. | Trata como resultado desconhecido. Consulta pelo `reservaId` se houver consulta contratada ou reenvia o mesmo comando idempotente. Não compensa às cegas. |
+| Timeout, conexão interrompida ou resposta perdida | O comando pode ter sido confirmado sem que Reservas receba a resposta. | Trata como resultado desconhecido e reenvia o mesmo comando com a mesma `Idempotency-Key` e conteúdo para recuperar o resultado original. Não compensa às cegas. |
 | Falha temporária ao persistir a finalização em Reservas | Efeitos dos participantes podem estar confirmados, mas o estado local não. | Repete a finalização local. Não inicia compensação por falha temporária de banco. |
 
 `FALHA_CONFIRMACAO` só é final depois que todos os efeitos confirmados tiverem sido compensados. Enquanto uma etapa ou compensação estiver pendente, a reserva permanece `EM_CONFIRMACAO` e a SAGA não é terminal.
@@ -106,7 +106,7 @@ Nenhum efeito da SAGA existe. Reservas valida o ator, verifica condicionalmente 
 
 1. Reservas valida o ator e registra, em transação local, `CANCELAMENTO_EM_ANDAMENTO`, ator, instante e justificativa quando aplicável.
 2. A transição impede o início de etapas novas da confirmação.
-3. Se houver comando em voo ou resultado desconhecido, Reservas primeiro reconcilia o resultado no participante com `reservaId` e a mesma chave idempotente. Não presume que o comando falhou.
+3. Se houver comando em voo ou resultado desconhecido, Reservas repete o mesmo comando ao participante com `reservaId` e a mesma `Idempotency-Key`. O participante devolve o resultado persistido sem repetir o efeito. Não presume que o comando falhou.
 4. A execução de confirmação passa para `INTERROMPIDA` após Reservas reconciliar todas as chamadas em voo ou com resultado desconhecido. Nenhuma nova etapa de confirmação pode ser iniciada. Os efeitos confirmados permanecem registrados.
 5. Depois que a execução de confirmação deixa de estar ativa, Reservas inicia uma execução de cancelamento com novo `sagaId`.
 6. A execução de cancelamento compensa apenas efeitos confirmados, na ordem inversa: cancela autorização, se existente; depois libera alocação, se existente.
@@ -150,7 +150,7 @@ O estado da SAGA não substitui o estado de negócio da reserva. Uma execução 
 | `COMPENSADA` | Efeitos da confirmação foram desfeitos após falha definitiva. | `FALHA_CONFIRMACAO` |
 | `CANCELADA` | Efeitos aplicáveis foram desfeitos após solicitação de cancelamento. | `CANCELADA` |
 
-O registro durável deve permitir recuperar, no mínimo: `sagaId`, `reservaId`, tipo da execução (confirmação ou cancelamento), estado, etapa atual, efeitos confirmados, compensações concluídas, tentativas, próximo instante elegível para retry, erro técnico sanitizado, `correlationId`, timestamps de criação/atualização e controle de concorrência. Não deve armazenar tokens, credenciais ou dados pessoais desnecessários.
+O registro durável deve permitir recuperar, no mínimo: `sagaId`, `reservaId`, tipo da execução (`CONFIRMACAO` ou `CANCELAMENTO`), estado, etapa atual, efeitos confirmados, compensações concluídas, tentativas, próximo instante elegível para retry, erro técnico sanitizado, `correlationId`, timestamps de criação/atualização e controle de concorrência. `etapaAtual` referencia um dos comandos nomeados nesta seção; os detalhes técnicos por etapa não alteram os estados canônicos da execução nem da Reserva. Não deve armazenar tokens, credenciais ou dados pessoais desnecessários.
 
 Para o cancelamento interrompido por retirada, preserva também o motivo do encerramento e as referências `eventId` e `retiradaId` que comprovam o fato, junto da auditoria da transação descrita na seção 5.3.
 
@@ -160,7 +160,7 @@ Para o cancelamento interrompido por retirada, preserva também o motivo do ence
 2. Antes de enviar um comando, Reservas persiste a etapa a executar e sua chave idempotente.
 3. Após a confirmação de um participante, Reservas persiste o efeito confirmado e a próxima etapa. O fluxo não depende somente da memória do servidor nem da conexão HTTP original.
 4. Após falha ou reinício, Reservas busca no próprio banco as execuções não terminais e retoma a partir do último estado durável.
-5. Se a resposta não chegou, consulta o estado por `reservaId` quando o contrato interno suportar essa consulta. Caso contrário, reenvia o comando original com a mesma chave idempotente.
+5. Se a resposta não chegou, reenvia o comando original com a mesma `Idempotency-Key` e conteúdo para recuperar o resultado persistido pelo participante.
 6. Se o banco de Reservas estiver indisponível antes de gravar o aceite, nenhum comando é enviado. Se ficar indisponível depois de um participante confirmar, o coordenador reconcilia a etapa após a recuperação.
 7. O histórico de tentativas, efeitos e compensações é preservado. Correções operacionais são auditáveis.
 
@@ -182,9 +182,9 @@ Backoff, limite de tentativas automáticas, alertas e procedimento de fila de fa
 |---|---|---|---|
 | Antes de persistir o aceite | Nenhum | Não chama participantes. Só permite nova tentativa se a reserva continuar `SOLICITADA`. | Estado original ou `EM_CONFIRMACAO` se a transação foi confirmada. |
 | Estoque rejeita por saldo/regra de negócio | Nenhum | Encerra sem chamar Retiradas. | `FALHA_CONFIRMACAO`; SAGA `COMPENSADA`. |
-| Resposta de Estoque perdida | Desconhecido | Consulta por `reservaId` ou reenvia alocação idempotente; não libera às cegas. | `EM_CONFIRMACAO` até resolução. |
+| Resposta de Estoque perdida | Desconhecido | Reenvia a alocação com a mesma `Idempotency-Key` e conteúdo para recuperar a resposta original; não libera às cegas. | `EM_CONFIRMACAO` até resolução. |
 | Retiradas rejeita após alocação | Alocação | Libera a alocação em Estoque e aguarda confirmação. | Após liberar: `FALHA_CONFIRMACAO`; SAGA `COMPENSADA`. |
-| Timeout ao preparar autorização | Alocação; autorização possivelmente criada | Consulta ou repete preparação idempotente. Se não puder preparar, cancela eventual autorização e libera alocação. | Pendente até reconciliação; depois `CONFIRMADA` ou `FALHA_CONFIRMACAO`. |
+| Timeout ao preparar autorização | Alocação; autorização possivelmente criada | Repete `POST /internal/v1/autorizacoes` com a mesma `Idempotency-Key` e o mesmo conteúdo para recuperar o resultado original. Se a resposta conclusiva for uma falha de negócio, cancela eventual autorização e libera a alocação. | Pendente até replay conclusivo; depois `CONFIRMADA` ou `FALHA_CONFIRMACAO`. |
 | Falha temporária ao finalizar em Reservas | Alocação e autorização | Repete a finalização local. | Pendente enquanto transitória; após falha definitiva e compensação, `FALHA_CONFIRMACAO`. |
 | Retiradas indisponível ao cancelar | Autorização possivelmente ativa | Mantém `CANCELAMENTO_EM_ANDAMENTO`; não libera estoque antes de resolver a autorização. | `CANCELADA` após confirmar operações aplicáveis, ou `RETIRADA` se o evento comprovar que a entrega venceu. |
 | Estoque indisponível ao liberar alocação | Autorização cancelada; alocação possivelmente ativa | Mantém cancelamento pendente e repete liberação idempotente. | `CANCELADA` após liberação confirmada. |
@@ -220,7 +220,7 @@ Intervenção manual não grava diretamente nos bancos de Estoque ou Retiradas. 
 - A confirmação segue Reservas → Estoque → Retiradas → Reservas.
 - A reserva só passa a `CONFIRMADA` após alocação e autorização confirmadas.
 - Falhas definitivas compensam somente efeitos confirmados, em ordem inversa.
-- Timeout é resultado incerto, tratado com consulta ou retry idempotente.
+- Timeout é resultado incerto, tratado com retry do mesmo comando, chave e conteúdo idempotentes.
 - Confirmação e cancelamento são execuções distintas, ligadas ao mesmo `reservaId`; ao cancelar durante a confirmação, a execução de confirmação é reconciliada e encerrada como `INTERROMPIDA` antes da execução de cancelamento.
 - Só existe uma execução ativa por reserva.
 - O cancelamento bem-sucedido só leva a `CANCELADA` depois de revogar autorização e liberar alocação, quando aplicável.

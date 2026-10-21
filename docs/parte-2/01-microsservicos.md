@@ -84,6 +84,7 @@ Unidades é a fonte de verdade para:
 - contatos institucionais;
 - horários;
 - informações de atendimento;
+- orientações públicas sobre requisitos e documentos para retirada (`orientacoesRetirada`);
 - prazo de análise das solicitações daquela unidade, prazoAnalise.
 
 O prazoAnalise é uma configuração da unidade. Ao criar uma solicitação, Reservas consulta esse prazo e registra o instante limite aplicável àquela solicitação como decisaoAte. Assim, Unidades controla a configuração vigente e Reservas controla o prazo efetivamente aplicado a cada reserva.
@@ -96,6 +97,8 @@ Unidades:
 - disponibiliza informações de unidade para consultas apropriadas aos clientes;
 - mantém o prazo de análise configurado para a unidade;
 - responde às consultas internas necessárias para a criação de uma reserva e para as telas da unidade ou do cidadão.
+
+O contrato [unidade.yaml](./api/unidade.yaml) cobre listagem pública, cadastro e atualização, contatos e horários, ativação da unidade e configuração/consulta do prazo de análise. As rotas internas são consumidas pelos BFFs ou por Reservas; o Gateway não as publica diretamente.
 
 ### 5.4 Limites explícitos
 
@@ -138,13 +141,15 @@ O nome, o tipo e a descrição canônicos do item pertencem a Estoque. Reservas 
 Estoque:
 
 - administra o catálogo de medicamentos e insumos;
-- registra entrada, saída ou ajuste de quantidade física;
+- registra entradas e ajustes manuais de quantidade física; a saída por retirada é registrada pelo consumo da alocação ao processar `retirada.concluida.v1`;
 - mantém a configuração que permite ou impede reserva para um item em uma unidade;
 - calcula e apresenta a disponibilidade para consulta;
 - valida a quantidade solicitada contra o modelo de escrita atual;
 - cria uma alocação atômica quando há quantidade suficiente e as regras permitem;
 - libera somente a alocação vinculada à reserva indicada quando uma compensação ou um cancelamento válido é solicitado;
 - publica eventos de estoque por meio de Outbox quando uma alteração persistida precisar atualizar projeções ou outros consumidores.
+
+O contrato [estoque.yaml](./api/estoque.yaml) cobre catálogo, permissão de reserva, entradas, ajustes, disponibilidade projetada, alocação e compensação. Entradas e ajustes alteram o saldo físico e registram movimentação; alocar ou liberar não é movimentação física.
 
 ### 6.4 Distinção entre estoque físico, alocação e disponibilidade
 
@@ -203,7 +208,7 @@ Reservas:
 
 - recebe e valida a solicitação quanto à estrutura mínima exigida;
 - consulta Estoque para verificar se a combinação de item e unidade permite reservas;
-- consulta Unidades para obter o prazoAnalise configurado;
+- consulta Unidades para confirmar que a unidade está ativa e obter o prazoAnalise configurado;
 - registra a solicitação como SOLICITADA e calcula decisaoAte;
 - autoriza a unidade correspondente a decidir sobre a solicitação;
 - registra aceitação ou rejeição e seus responsáveis;
@@ -214,6 +219,8 @@ Reservas:
 - processa cancelamentos de reserva conforme os estados permitidos e coordena a reversão dos efeitos distribuídos, quando houver;
 - expira automaticamente somente solicitações SOLICITADA cujo prazo decisaoAte venceu, conforme a regra do documento 00;
 - atualiza o status de negócio para RETIRADA após processar o evento canônico de retirada concluída publicado por Retiradas.
+
+O contrato [reserva.yaml](./api/reserva.yaml) inclui `GET /internal/v1/reservas/{reservaId}` para as consultas agregadas dos BFFs e `GET /internal/v1/reservas/{reservaId}/estado`, separado e sem cache, para a validação feita por Retiradas antes da entrega.
 
 ### 7.4 Limites explícitos
 
@@ -265,6 +272,8 @@ Retiradas:
 - publica o evento retirada.concluida.v1 depois de confirmar localmente a entrega;
 - assegura que cancelamento da autorização e registro da retirada física sejam mutuamente exclusivos.
 
+O contrato [retirada.yaml](./api/retirada.yaml) inclui `GET /internal/v1/autorizacoes/{reservaId}` para compor a visão operacional do BFF Unidade. Esse GET é uma consulta de dados; o registro da entrega continua sendo `POST /api/unidade/v1/retiradas` e exige a validação canônica em Reservas.
+
 ### 8.4 Limites explícitos
 
 Retiradas não:
@@ -311,8 +320,8 @@ Esta seção descreve responsabilidades e direção das chamadas em nível arqui
 | BFF Cidadão ou BFF Unidade | Estoque | Consultar disponibilidade ou executar ações de estoque permitidas ao perfil da unidade. | API do serviço Estoque; a disponibilidade é projeção e o comando de alocação é autoridade. |
 | BFF Cidadão ou BFF Unidade | Reservas | Criar e acompanhar solicitações; permitir decisão e ações da equipe autorizada. | API do serviço Reservas; clientes não coordenam diretamente a SAGA. |
 | BFF Unidade | Retiradas | Consultar autorização e registrar uma entrega presencial por profissional autorizado. | API do serviço Retiradas. |
-| Reservas | Unidades | Obter prazoAnalise para definir decisaoAte ao criar uma solicitação. | Chamada interna ao serviço proprietário do prazo. |
-| Reservas | Estoque | Verificar permiteReserva e executar alocação ou liberação durante a SAGA. | Comandos REST internos, idempotentes e versionados. |
+| Reservas | Unidades | Validar que a unidade está ativa e obter prazoAnalise para definir decisaoAte ao criar uma solicitação. | `GET /internal/v1/unidades/{unidadeId}` no serviço proprietário. |
+| Reservas | Estoque | Consultar a permissão canônica `permiteReserva` ao criar a solicitação; executar alocação ou liberação durante a SAGA. | `GET /internal/v1/unidades/{unidadeId}/itens/{itemId}/permissao-reserva`, além dos comandos REST internos idempotentes e versionados. |
 | Reservas | Retiradas | Preparar ou cancelar autorização durante confirmação, compensação ou cancelamento. | Comandos REST internos, idempotentes e versionados. |
 | Estoque | Consumidores interessados | Informar alterações persistidas que atualizam disponibilidade e projeções. | Eventos publicados por Outbox no RabbitMQ; consumidores deduplicam por eventId. |
 | Retiradas | Reservas | Verificar a confirmação antes da entrega e informar a retirada após o registro. | GET interno do estado canônico antes da entrega; evento retirada.concluida.v1 publicado por Outbox depois dela. |
@@ -337,7 +346,7 @@ Reservas controla a solicitação e sua confirmação administrativa. Retiradas 
 
 ### 11.4 Por que Retiradas não é incorporado a Estoque
 
-O Estoque registra quantidades e alocações; Retiradas registra a autorização e o fato operacional de entrega a uma pessoa na unidade. A alocação reduz o que está disponível para novas reservas, mas não é baixa física nem comprovação de entrega. Retiradas não pode editar diretamente o saldo ou a alocação no banco de Estoque. O contrato atual ainda não especifica qual operação de integração efetua a baixa física e encerra a alocação depois da entrega; essa lacuna está registrada na seção 13.1 e precisa ser resolvida antes de os contratos e a persistência serem considerados fechados.
+O Estoque registra quantidades e alocações; Retiradas registra a autorização e o fato operacional de entrega a uma pessoa na unidade. A alocação reduz o que está disponível para novas reservas, mas não é baixa física nem comprovação de entrega. Retiradas não pode editar diretamente o saldo ou a alocação no banco de Estoque. A integração está definida por `retirada.concluida.v1`: Estoque consome o evento, valida a alocação e registra baixa física e encerramento como consumida em sua transação local, conforme a seção 13.1.
 
 ### 11.5 Por que Reservas coordena a SAGA
 
@@ -404,7 +413,7 @@ Uma proposta de API, banco, evento, Gateway, BFF ou diagrama está de acordo com
 - Reservas é a autoridade da solicitação e coordenador da SAGA;
 - Retiradas é a autoridade da autorização e da entrega física;
 - Unidades é a autoridade dos dados institucionais e do prazoAnalise configurado;
-- o processamento de retirada não altera o banco de Estoque diretamente; a integração que baixa o estoque e encerra a alocação precisa estar definida no contrato compartilhado antes do fechamento dos documentos dependentes;
+- o processamento de retirada não altera o banco de Estoque diretamente; `retirada.concluida.v1` atualiza Reservas e Estoque por filas independentes, e Estoque baixa o saldo e encerra a alocação na própria transação local, conforme os documentos 00, 02, 05, 09 e 11;
 - Gateway e BFFs permanecem componentes de borda e não se tornam donos ou coordenadores do domínio;
 - o diagrama de arquitetura do documento 02 mostra as mesmas fronteiras e os caminhos de comunicação descritos aqui.
 
@@ -417,4 +426,4 @@ Se qualquer item falhar, a proposta deve ser corrigida ou a decisão compartilha
 - [05 - Fluxo de reservas](./05-fluxo-reservas.md): fluxo de negócio, atores, decisões e transições da reserva.
 - [06 - SAGA](./06-saga.md): orquestração, etapas, compensações, falhas, recuperação e idempotência.
 
-Os arquivos especializados acima são referências previstas na estrutura da Etapa 2. Se algum deles ainda não existir na branch, o link deve passar a funcionar quando a respectiva frente for integrada.
+Os arquivos especializados acima estão presentes na estrutura atual da Etapa 2. Alterações em fronteiras ou fluxos exigem atualizar essas referências e os contratos dependentes no mesmo conjunto de mudanças.

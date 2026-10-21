@@ -2,7 +2,7 @@ openapi: 3.0.3
 info:
   title: BFF Unidade
   version: "1.0.0"
-  description: Agrega informações operacionais para o staff da unidade de saúde.
+  description: Agrega informações operacionais para a equipe da unidade.
 servers:
   - url: /api/unidade/v1
 components:
@@ -10,12 +10,411 @@ components:
     bearerAuth:
       type: http
       scheme: bearer
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: Reutilize a mesma chave ao repetir a mesma ação.
+      schema: { type: string, minLength: 1 }
+  schemas:
+    Link:
+      type: object
+      required: [href, method]
+      properties:
+        href: { type: string, minLength: 1 }
+        method: { type: string, enum: [GET, POST, PUT, PATCH, DELETE] }
+        body:
+          type: object
+          additionalProperties: true
+    ReservaPainel:
+      type: object
+      required: [reservaId, unidadeId, itemId, quantidade, status]
+      properties:
+        reservaId: { type: string, format: uuid }
+        unidadeId: { type: string, format: uuid }
+        itemId: { type: string, format: uuid }
+        quantidade: { type: integer, minimum: 1 }
+        cidadaoId: { type: string }
+        status: { type: string, enum: [SOLICITADA, EM_CONFIRMACAO, CONFIRMADA, CANCELAMENTO_EM_ANDAMENTO, CANCELADA, REJEITADA, EXPIRADA, FALHA_CONFIRMACAO, RETIRADA] }
+        itemNome: { type: string }
+        orientacoesRetirada: { type: string, minLength: 1 }
+        estoqueFisicoAtual: { type: integer, minimum: 0 }
+        criadaEm: { type: string, format: date-time }
+        decisaoAte: { type: string, format: date-time }
+        dadosAutorizacao:
+          type: object
+          required: [autorizacaoId, status]
+          properties:
+            autorizacaoId: { type: string, format: uuid }
+            status: { type: string, enum: [ATIVA, CANCELADA, UTILIZADA] }
+        _links:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/Link'
+    EstoquePainelItem:
+      type: object
+      required: [itemId, unidadeId, itemNome, estoqueFisicoAtual, quantidadeAlocada, quantidadeDisponivel, permiteReserva, atualizadoEm]
+      properties:
+        itemId: { type: string, format: uuid }
+        unidadeId: { type: string, format: uuid }
+        itemNome: { type: string }
+        estoqueFisicoAtual: { type: integer, minimum: 0 }
+        quantidadeAlocada: { type: integer, minimum: 0 }
+        quantidadeDisponivel: { type: integer, minimum: 0 }
+        permiteReserva: { type: boolean }
+        atualizadoEm:
+          type: string
+          format: date-time
+          description: Instante do estado da projeção exibido, não o horário da consulta.
+    UnidadeOperacional:
+      type: object
+      required: [unidadeId, nome, endereco, horarioAtendimento, orientacoesRetirada, contatos, horarios, prazoAnaliseHoras, ativa]
+      properties:
+        unidadeId: { type: string, format: uuid }
+        nome: { type: string }
+        endereco: { type: string }
+        horarioAtendimento: { type: string }
+        orientacoesRetirada: { type: string, minLength: 1 }
+        contatos:
+          type: array
+          items:
+            type: object
+            required: [tipo, valor]
+            properties:
+              tipo: { type: string }
+              valor: { type: string }
+        horarios:
+          type: array
+          items:
+            type: object
+            required: [diaSemana, horarioInicial, horarioFinal]
+            properties:
+              diaSemana: { type: integer, minimum: 1, maximum: 7 }
+              horarioInicial: { type: string, format: time }
+              horarioFinal: { type: string, format: time }
+        prazoAnaliseHoras: { type: integer, minimum: 1 }
+        ativa: { type: boolean }
+    MovimentacaoResumo:
+      type: object
+      required: [movimentacaoId, unidadeId, itemId, variacaoFisica, ocorridaEm, estoqueVersion]
+      properties:
+        movimentacaoId: { type: string, format: uuid }
+        unidadeId: { type: string, format: uuid }
+        itemId: { type: string, format: uuid }
+        variacaoFisica: { type: integer }
+        ocorridaEm: { type: string, format: date-time }
+        estoqueVersion: { type: integer, format: int64, minimum: 0 }
+    RetiradaRegistrada:
+      type: object
+      required: [retiradaId, autorizacaoId, realizadaEm]
+      properties:
+        retiradaId: { type: string, format: uuid }
+        autorizacaoId: { type: string, format: uuid }
+        realizadaEm: { type: string, format: date-time }
 paths:
+  /unidade:
+    get:
+      summary: Consultar cadastro e informações da unidade autenticada
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Cadastro atual da unidade vinculada ao profissional.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UnidadeOperacional' }
+        '403': { description: Ator sem unidade vinculada. }
+    put:
+      summary: Atualizar cadastro e informações de atendimento da unidade autenticada
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [nome, logradouro, numero, bairro, cidade, estado, cep, orientacoesRetirada, contatos, horarios, prazoAnaliseHoras]
+              properties:
+                nome: { type: string, minLength: 1 }
+                logradouro: { type: string, minLength: 1 }
+                numero: { type: string, minLength: 1 }
+                bairro: { type: string, minLength: 1 }
+                cidade: { type: string, minLength: 1 }
+                estado: { type: string, minLength: 1 }
+                cep: { type: string, minLength: 1 }
+                orientacoesRetirada: { type: string, minLength: 1 }
+                contatos:
+                  type: array
+                  items:
+                    type: object
+                    required: [tipo, valor]
+                    properties:
+                      tipo: { type: string, minLength: 1 }
+                      valor: { type: string, minLength: 1 }
+                horarios:
+                  type: array
+                  items:
+                    type: object
+                    required: [diaSemana, horarioInicial, horarioFinal]
+                    properties:
+                      diaSemana: { type: integer, minimum: 1, maximum: 7 }
+                      horarioInicial: { type: string, format: time }
+                      horarioFinal: { type: string, format: time }
+                prazoAnaliseHoras: { type: integer, minimum: 1 }
+      responses:
+        '200': { description: Cadastro atualizado. }
+        '403': { description: Ator não pertence à unidade correspondente. }
+        '409': { description: `Idempotency-Key` reutilizada com conteúdo diferente. }
+  /unidade/horarios:
+    put:
+      summary: Atualizar horários da unidade autenticada
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [horarios]
+              properties:
+                horarios:
+                  type: array
+                  items:
+                    type: object
+                    required: [diaSemana, horarioInicial, horarioFinal]
+                    properties:
+                      diaSemana: { type: integer, minimum: 1, maximum: 7 }
+                      horarioInicial: { type: string, format: time }
+                      horarioFinal: { type: string, format: time }
+      responses:
+        '200': { description: Horários atualizados. }
+        '403': { description: Ator não pertence à unidade correspondente. }
+        '409': { description: `Idempotency-Key` reutilizada com conteúdo diferente. }
+  /unidade/status:
+    patch:
+      summary: Ativar ou desativar a unidade autenticada
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ativa]
+              properties:
+                ativa: { type: boolean }
+      responses:
+        '200': { description: Situação operacional atualizada. }
+        '403': { description: Ator não pertence à unidade correspondente. }
+        '409': { description: `Idempotency-Key` reutilizada com conteúdo diferente. }
+  /unidade/prazo-analise:
+    put:
+      summary: Atualizar prazo de análise da unidade autenticada
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [prazoAnaliseHoras]
+              properties:
+                prazoAnaliseHoras: { type: integer, minimum: 1 }
+      responses:
+        '200': { description: Prazo atualizado; reservas existentes mantêm o prazo aplicado. }
+        '403': { description: Ator não pertence à unidade correspondente. }
+        '409': { description: `Idempotency-Key` reutilizada com conteúdo diferente. }
+  /painel/estoque/{unidadeId}/itens/{itemId}/permissao:
+    put:
+      summary: Configurar se o item permite reserva
+      description: Encaminha ao Estoque; quando a relação unidade/item ainda não existe, inicializa saldo físico e alocado em zero.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: unidadeId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: itemId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [permiteReserva]
+              properties:
+                permiteReserva: { type: boolean }
+      responses:
+        '200': { description: Configuração atualizada. }
+        '403': { description: Ator sem permissão para a unidade. }
+        '404': { description: Item ou saldo não encontrado. }
+        '409': { description: `Idempotency-Key` reutilizada com conteúdo diferente. }
+  /painel/estoque/{unidadeId}/itens/{itemId}/entradas:
+    post:
+      summary: Registrar entrada de estoque
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: unidadeId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: itemId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [quantidade, motivo]
+              properties:
+                quantidade: { type: integer, minimum: 1 }
+                motivo: { type: string, minLength: 1 }
+      responses:
+        '201':
+          description: Entrada registrada.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MovimentacaoResumo' }
+        '403': { description: Ator sem permissão para a unidade. }
+        '409': { description: `Idempotency-Key` reutilizada com conteúdo diferente. }
+  /painel/estoque/{unidadeId}/itens/{itemId}/ajustes:
+    post:
+      summary: Ajustar saldo físico
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: unidadeId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - name: itemId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [variacaoFisica, motivo]
+              properties:
+                variacaoFisica:
+                  oneOf:
+                    - { type: integer, maximum: -1 }
+                    - { type: integer, minimum: 1 }
+                motivo: { type: string, minLength: 1 }
+      responses:
+        '201':
+          description: Ajuste registrado.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MovimentacaoResumo' }
+        '403': { description: Ator sem permissão para a unidade. }
+        '409': { description: Ajuste reduz o físico abaixo das alocações ativas ou chave idempotente conflitante. }
+  /reservas/{reservaId}/decisao:
+    post:
+      summary: Aceitar ou rejeitar uma solicitação
+      description: Encaminha a decisão do profissional autorizado ao serviço Reservas.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: reservaId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [decisao]
+              properties:
+                decisao: { type: string, enum: [ACEITAR, REJEITAR] }
+      responses:
+        '200': { description: Decisão registrada; retries reproduzem o resultado original. }
+        '403': { description: Profissional não pertence à unidade da reserva. }
+        '409': { description: Chave idempotente reutilizada com conteúdo diferente ou transição inválida. }
+  /reservas/{reservaId}/cancelar:
+    post:
+      summary: Solicitar cancelamento da reserva pela unidade
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: reservaId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [justificativa]
+              properties:
+                justificativa: { type: string, minLength: 5 }
+      responses:
+        '202': { description: Cancelamento aceito e em andamento. }
+        '409': { description: Chave idempotente conflitante ou reserva em estado terminal. }
+  /retiradas:
+    post:
+      summary: Registrar entrega presencial
+      description: Encaminha o registro ao serviço Retiradas, que valida a reserva canônica e revalida a autorização.
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [autorizacaoId]
+              properties:
+                autorizacaoId: { type: string, format: uuid }
+      responses:
+        '201':
+          description: Entrega registrada; a repetição com a mesma chave reproduz o resultado original.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RetiradaRegistrada' }
+        '409': { description: Autorização inexistente, cancelada ou já utilizada, reserva sem estado CONFIRMADA ou `Idempotency-Key` reutilizada com conteúdo diferente. }
+        '503': { description: Não foi possível consultar o estado canônico; nenhuma nova entrega foi registrada. }
+  /painel/reservas:
+    get:
+      summary: Listar solicitações pendentes da unidade autenticada
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Reservas SOLICITADA que aguardam decisão da unidade, em vista resumida.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/ReservaPainel' }
+        '403': { description: Profissional sem unidade vinculada. }
   /painel/reservas/{reservaId}:
     get:
-      summary: Consultar reserva agregada (Operacional)
-      security:
-        - bearerAuth: []
+      summary: Consultar reserva agregada para a unidade
+      security: [{ bearerAuth: [] }]
       parameters:
         - name: reservaId
           in: path
@@ -23,28 +422,21 @@ paths:
           schema: { type: string, format: uuid }
       responses:
         '200':
-          description: Vista completa com dados operacionais e de alocação.
+          description: Vista operacional composta com dados da reserva, estoque e autorização.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReservaPainel' }
+        '403': { description: Profissional sem acesso à unidade da reserva. }
+        '404': { description: Reserva não encontrada. }
+  /painel/estoque:
+    get:
+      summary: Consultar estoque operacional da unidade
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Lista de itens com saldo e instante da projeção apresentada.
           content:
             application/json:
               schema:
-                type: object
-                properties:
-                  reservaId: { type: string, format: uuid }
-                  status: { type: string }
-                  itemNome: { type: string }
-                  estoqueFisicoAtual: { type: integer }
-                  dadosAlocacao:
-                    type: object
-                    properties:
-                      alocacaoId: { type: string, format: uuid }
-                      quantidadeReservada: { type: integer }
-                  _links:
-                    type: object
-  /painel/estoque:
-    get:
-      summary: Consultar lista de stock real da unidade
-      security:
-        - bearerAuth: []
-      responses:
-        '200':
-          description: Lista de itens com quantidades canónicas e configuração de reservas.
+                type: array
+                items: { $ref: '#/components/schemas/EstoquePainelItem' }

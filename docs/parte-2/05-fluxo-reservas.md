@@ -44,7 +44,7 @@ O BFF Cidadão envia a Reservas os seguintes dados de negócio:
 | `itemId` | Sim | Medicamento ou insumo escolhido; identificador criado por Estoque. |
 | `quantidade` | Sim | Inteiro positivo, sujeito às regras de Estoque. |
 | Identidade autenticada do cidadão | Sim | Obtida da autenticação confiável; não deve ser aceita como identidade arbitrária enviada no corpo da requisição. |
-| `idempotencyKey` | Recomendado para criação | Chave que permite repetir uma tentativa sem criar solicitações duplicadas. Regras gerais estão no documento 00. |
+| `Idempotency-Key` | Cabeçalho obrigatório nos comandos | Repetições do mesmo comando usam a mesma chave e conteúdo para recuperar o resultado original, conforme a convenção do documento 00. |
 
 Reservas gera o `reservaId`, registra o instante `criadaEm` e calcula `decisaoAte` com base no `prazoAnalise` fornecido por Unidades. O cidadão não escolhe nem altera esse prazo.
 
@@ -83,7 +83,7 @@ O diagrama resume os caminhos de negócio. A ordem técnica da confirmação e d
 
 ### 5.1 Consulta de disponibilidade
 
-1. O cidadão escolhe unidade, item e quantidade pretendida.
+1. O cidadão consulta `GET /api/cidadao/v1/itens` para escolher o `itemId` e informa a quantidade pretendida.
 2. O BFF Cidadão obtém as informações necessárias em Unidades e na projeção de disponibilidade de Estoque.
 3. A resposta de disponibilidade informa `atualizadoEm`, pois a projeção pode estar defasada em relação ao saldo canônico.
 4. A consulta não cria reserva, não aloca quantidade e não garante que ainda haverá saldo quando a solicitação for processada.
@@ -92,8 +92,8 @@ O diagrama resume os caminhos de negócio. A ordem técnica da confirmação e d
 
 1. O cidadão autenticado envia `unidadeId`, `itemId` e `quantidade` ao BFF Cidadão.
 2. O BFF encaminha a operação a Reservas; a identidade do cidadão vem do contexto de autenticação confiável.
-3. Reservas valida a forma dos dados e consulta Estoque para confirmar que a combinação de unidade e item permite reservas (`permiteReserva = true`).
-4. Reservas consulta Unidades para obter o `prazoAnalise` vigente para a unidade. Uma unidade que permite reservas deve ter esse prazo configurado.
+3. Reservas consulta Unidades para confirmar que a unidade existe e está ativa e obter o `prazoAnalise` vigente. Uma unidade ativa que permite reservas deve ter esse prazo configurado.
+4. Reservas consulta `GET /internal/v1/unidades/{unidadeId}/itens/{itemId}/permissao-reserva` em Estoque, que lê a permissão canônica `permiteReserva`, sem depender da projeção de disponibilidade.
 5. Se as validações forem aprovadas, Reservas grava em seu próprio banco:
    - o `reservaId` gerado;
    - a identidade estável do cidadão;
@@ -109,6 +109,8 @@ Se uma validação falhar, Reservas não cria uma solicitação ativa. A API dev
 ## 6. Fluxo B - decisão da unidade
 
 ### 6.1 Autorização e prazo
+
+O profissional consulta `GET /api/unidade/v1/painel/reservas` para encontrar solicitações pendentes da sua unidade e escolhe uma delas para decidir.
 
 Antes de aceitar ou rejeitar, o sistema verifica que:
 
@@ -161,7 +163,7 @@ O cancelamento é permitido antes da retirada física enquanto a reserva estiver
 | `CANCELAMENTO_EM_ANDAMENTO` | Não inicia um segundo cancelamento concorrente. Retorna o estado atual e permite consultar o andamento. |
 | `REJEITADA`, `CANCELADA`, `EXPIRADA`, `FALHA_CONFIRMACAO` ou `RETIRADA` | Recusa o cancelamento adicional porque a reserva está em estado terminal. |
 
-O sistema não comunica `CANCELADA` antes de confirmar a revogação da autorização e a liberação da alocação quando esses efeitos existirem. Timeout de uma chamada não prova que a operação remota falhou; Reservas mantém o cancelamento pendente e reconcilia pelo mesmo identificador idempotente.
+O sistema não comunica `CANCELADA` antes de confirmar a revogação da autorização e a liberação da alocação quando esses efeitos existirem. Timeout de uma chamada não prova que a operação remota falhou; Reservas mantém o cancelamento pendente e repete o mesmo comando com a mesma `Idempotency-Key` e conteúdo para recuperar a resposta original.
 
 ## 9. Fluxo E - retirada física
 
@@ -218,8 +220,7 @@ Os contratos HTTP devem distinguir o resultado de negócio de falhas técnicas. 
 
 | Situação | Resultado de negócio esperado | Efeito na reserva |
 |---|---|---|
-| Unidade não permite reservas para o item | Solicitação não aceita | Não cria reserva ativa. |
-| `unidadeId` ou `itemId` inválido/inexistente | Solicitação não aceita | Não cria reserva ativa. |
+| Unidade inativa/inexistente, item inexistente ou combinação sem permissão de reserva | Solicitação não aceita | Não cria reserva ativa. |
 | Quantidade ausente, não positiva ou fora das regras | Solicitação não aceita | Não cria reserva ativa. |
 | Prazo de análise da unidade não configurado | Configuração inválida; sinalizar falha operacional | Não cria reserva ativa. |
 | Cidadão não autenticado ou sem propriedade da reserva | Acesso não autorizado | Nenhuma alteração. |
@@ -233,7 +234,7 @@ Os contratos HTTP devem distinguir o resultado de negócio de falhas técnicas. 
 
 ## 12. Idempotência e concorrência
 
-- Criação repetida com a mesma `idempotencyKey` e o mesmo conteúdo devolve a solicitação original. A mesma chave com conteúdo diferente é conflito.
+- Criação repetida com a mesma `Idempotency-Key` e o mesmo conteúdo devolve o resultado HTTP original. A mesma chave com conteúdo diferente é `409 Conflict`.
 - A aceitação, rejeição, expiração e cancelamento usam atualização condicional de estado para que apenas uma ação concorrente vença.
 - Os comandos internos da SAGA usam `sagaId`, `reservaId` e chave idempotente estável; detalhes estão no documento 06.
 - Uma entrega é única por autorização/reserva. Retentativas não geram novo `retiradaId` nem nova baixa.
@@ -259,7 +260,7 @@ O cidadão deve conseguir distinguir `SOLICITADA`, `EM_CONFIRMACAO`, `CONFIRMADA
 O fluxo está de acordo com as decisões compartilhadas quando:
 
 - cada reserva contém exatamente um item, uma unidade e uma quantidade positiva;
-- a criação valida `permiteReserva` em Estoque e obtém `prazoAnalise` em Unidades;
+- a criação valida unidade ativa e obtém `prazoAnalise` em Unidades, e valida `permiteReserva` no modelo canônico de Estoque;
 - o estado inicial é `SOLICITADA`, com `decisaoAte` calculado e persistido por Reservas;
 - aceitação e rejeição só podem ser feitas por profissional autorizado da unidade da solicitação;
 - a aceitação inicia a SAGA, mas não informa confirmação antes da alocação e da autorização;

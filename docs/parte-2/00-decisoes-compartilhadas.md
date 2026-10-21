@@ -157,7 +157,17 @@ A tecnologia específica do Gateway, a linguagem dos serviços e bibliotecas/fra
 | `sagaId` | UUID | Reservas | Identifica uma execução da SAGA. Confirmação e cancelamento são execuções distintas, vinculadas ao mesmo `reservaId`; retries da mesma execução reutilizam o mesmo `sagaId`. Só pode haver uma execução ativa por reserva. |
 | `eventId` | UUID | Serviço produtor | Identificador global de uma mensagem; consumidores registram-no para deduplicação. |
 | `correlationId` | UUID | BFF/Gateway na entrada, se não recebido | Agrupa logs e chamadas da mesma requisição ponta a ponta. |
-| `idempotencyKey` | String opaca fornecida pelo chamador ou calculada por operação interna | Chamador da operação | Evita criação/execução duplicada após retry. O mesmo valor com o mesmo corpo retorna o resultado original; o mesmo valor com corpo diferente é conflito. |
+| `Idempotency-Key` | Cabeçalho HTTP com string opaca | Chamador da operação | Identifica um comando lógico e permite repetir o mesmo comando sem duplicar efeitos. O valor recebido é persistido como `idempotencyKey` no banco quando aplicável. |
+
+### 7.1 Convenção de idempotência
+
+Todo comando HTTP que cria ou altera estado exige o cabeçalho `Idempotency-Key`; consultas `GET` não o exigem. O cabeçalho é o único transporte da chave: ela não é repetida no corpo JSON. Seu escopo é o par serviço/operação, o principal autenticado e o valor da chave. Chaves iguais em operações diferentes não colidem.
+
+O chamador cria uma chave para cada comando lógico e a persiste antes do envio. Retries do mesmo comando reutilizam a mesma chave e o mesmo conteúdo canônico; uma nova ação de negócio, inclusive uma compensação ou um cancelamento separado, recebe outra chave. Para cada operação de SAGA, Reservas persiste a chave junto da etapa antes de enviar o comando.
+
+O serviço participante registra atomicamente a chave, a impressão digital do conteúdo canônico e o resultado HTTP conclusivo junto do efeito local. Se duas requisições iguais chegarem ao mesmo tempo, apenas uma aplica o efeito; a outra aguarda ou lê o resultado persistido. A mesma chave com conteúdo diferente retorna `409 Conflict`. Uma repetição idêntica retorna o mesmo status e corpo da resposta original, inclusive depois de timeout ou reinício. Erros transitórios sem resultado conclusivo não são armazenados como resultado final e podem ser repetidos com a mesma chave.
+
+Os registros idempotentes permanecem disponíveis pelo período de retenção do recurso/histórico a que pertencem; não se expiram enquanto uma SAGA ou compensação puder ser recuperada. Compensações mantêm sua própria chave e resultado original: uma resposta repetida não reaplica a liberação nem reativa uma autorização. Eventos usam `eventId` para deduplicação, independente desta convenção HTTP.
 
 Identificadores de outras fronteiras são tratados como referências opacas. Um consumidor não deduz informações de negócio a partir dos caracteres de um UUID.
 
@@ -167,7 +177,7 @@ Identificadores de outras fronteiras são tratados como referências opacas. Um 
 
 1. O cidadão consulta a disponibilidade e escolhe uma unidade e um item (medicamento ou insumo). A consulta é informativa, não uma garantia de estoque.
 2. A solicitação só pode ser criada se a unidade permitir reservas para aquele item (`permiteReserva = true`). O BFF Cidadão envia a Reservas `unidadeId`, `itemId`, `quantidade` e a identidade autenticada do cidadão.
-3. Reservas valida com Estoque que `permiteReserva` está habilitado para aquele `unidadeId` e `itemId`, obtém de Unidades o `prazoAnalise` configurado, registra `SOLICITADA` e `decisaoAte = criadaEm + prazoAnalise` e devolve seu `reservaId`. Uma unidade só pode habilitar reservas se tiver configurado esse prazo.
+3. Reservas consulta Unidades para confirmar que a unidade existe e está ativa e obter seu `prazoAnalise`; consulta em Estoque a permissão canônica `permiteReserva` para a combinação `unidadeId`/`itemId`. Não usa a projeção de disponibilidade para autorizar a criação. Registra `SOLICITADA` e `decisaoAte = criadaEm + prazoAnalise` e devolve seu `reservaId`. Uma unidade só pode habilitar reservas se tiver configurado esse prazo.
 4. Um profissional da unidade analisa a solicitação. Pode rejeitá-la ou aceitá-la. A decisão é autorizada para a unidade indicada na reserva.
 5. Ao aceitar, Reservas grava `EM_CONFIRMACAO`, cria o registro durável da SAGA e inicia o trabalho de confirmação.
 6. Estoque tenta alocar atomicamente a quantidade solicitada para `reservaId`. A verificação é feita no modelo de escrita atual, não na projeção de disponibilidade.
@@ -223,8 +233,8 @@ Escolhemos orquestração porque a sequência e a regra de compensação são co
 | Ordem | Serviço | Comando/resultado | Efeito local | Compensação |
 |---:|---|---|---|---|
 | 0 | Reservas | `AceitarReserva` | Registra decisão da unidade, muda para `EM_CONFIRMACAO` e persiste a SAGA como `EM_EXECUCAO`. | Se a transação local não confirmar, não se envia comando aos participantes. |
-| 1 | Estoque | `AlocarEstoque(reservaId, unidadeId, itemId, quantidade)` | Valida o saldo canônico e cria uma alocação ativa. Uma reserva não pode ter duas alocações ativas. | `LiberarAlocacao(reservaId)`, que libera apenas a alocação da reserva correspondente. |
-| 2 | Retiradas | `PrepararAutorizacao(reservaId, unidadeId, itemId, quantidade)` | Persiste a autorização e conclui sua etapa, sem permitir entrega antes da consulta posterior de `CONFIRMADA` em Reservas. | `CancelarAutorizacao(reservaId)`, idempotente e sem apagar histórico. |
+| 1 | Estoque | `AlocarEstoque(sagaId, reservaId, unidadeId, itemId, quantidade)` com `Idempotency-Key` | Valida o saldo canônico e cria uma alocação ativa. Uma reserva não pode ter duas alocações ativas. | `LiberarAlocacao(reservaId)` com chave própria, que libera apenas a alocação da reserva correspondente. |
+| 2 | Retiradas | `PrepararAutorizacao(sagaId, reservaId, unidadeId, itemId, quantidade)` com `Idempotency-Key` | Persiste a autorização e conclui sua etapa, sem permitir entrega antes da consulta posterior de `CONFIRMADA` em Reservas. | `CancelarAutorizacao(reservaId)` com chave própria, idempotente e sem apagar histórico. |
 | 3 | Reservas | `FinalizarConfirmacao(reservaId)` | Muda a reserva para `CONFIRMADA` e a SAGA para `CONCLUIDA`. | Se a persistência local falhar temporariamente, repetir a finalização idempotente. Se a falha for definitiva, compensar Retiradas e Estoque. |
 
 As operações inversas são executadas na ordem inversa dos efeitos concluídos: cancelar autorização e depois liberar alocação. A SAGA não deve liberar estoque antes de cancelar ou confirmar o estado da autorização.
@@ -237,7 +247,7 @@ O cancelamento após o início da confirmação é coordenado por Reservas e usa
 2. Se existir autorização, Reservas envia a Retiradas `CancelarAutorizacao(reservaId)`.
 3. Se existir alocação ativa e o cancelamento da autorização, quando existente, tiver sido confirmado, Reservas envia ao Estoque `LiberarAlocacao(reservaId)`.
 4. Depois de confirmar todas as operações aplicáveis, Reservas registra `CANCELADA`.
-5. Se um participante estiver indisponível ou o resultado for incerto, manter o cancelamento em andamento e repetir/consultar usando a mesma chave idempotente. Não informar que a reserva foi cancelada antes da reconciliação.
+5. Se um participante estiver indisponível ou o resultado for incerto, manter o cancelamento em andamento e repetir o mesmo comando com a mesma `Idempotency-Key` e conteúdo para recuperar a resposta original. Não informar que a reserva foi cancelada antes da reconciliação.
 6. Retiradas deve tornar mutuamente exclusivos o cancelamento da autorização e o registro da retirada física. Se `RegistrarRetirada` tiver sido confirmado primeiro, o cancelamento falha por conflito de estado; se o cancelamento concluir primeiro, a autorização não pode ser usada para retirar o item.
 
 Se a retirada física vencer o cancelamento de uma reserva confirmada, Reservas não envia `LiberarAlocacao`. Ao consumir `retirada.concluida.v1`, deve, na mesma transação local, deduplicar por `eventId`, mudar a reserva de `CANCELAMENTO_EM_ANDAMENTO` para `RETIRADA`, encerrar a execução de cancelamento como `INTERROMPIDA` e registrar a auditoria correspondente, incluindo a evidência da retirada e o motivo do encerramento. Respostas tardias e retries não podem reativar essa execução nem levar a reserva posteriormente para `CANCELADA`. Estoque consome o evento normalmente, baixa o estoque físico e encerra a alocação como consumida, em vez de liberá-la por cancelamento.
@@ -266,15 +276,15 @@ O registro interno da SAGA usa os estados:
 
 1. **Rejeição de negócio do Estoque** (quantidade insuficiente, item/unidade inexistente ou incompatibilidade): não há alocação. Reservas marca falha final e a SAGA `COMPENSADA`; não chama Retiradas.
 2. **Falha de Retiradas depois da alocação**: Reservas solicita `LiberarAlocacao`. Depois da confirmação da liberação, marca `FALHA_CONFIRMACAO` e `COMPENSADA`.
-3. **Falha temporária ou timeout**: timeout não prova que a operação remota falhou. Reservas mantém a etapa como resultado desconhecido, repete a mesma operação idempotente ou consulta o resultado por `reservaId` antes de decidir compensar.
+3. **Falha temporária ou timeout**: timeout não prova que a operação remota falhou. Reservas mantém a etapa como resultado desconhecido e repete o mesmo comando, com a mesma `Idempotency-Key` e conteúdo, para recuperar o resultado original antes de decidir compensar.
 4. **Serviço participante indisponível antes de produzir efeito**: manter a SAGA em execução e tentar novamente com backoff limitado; não marcar falha final apenas por timeout.
 5. **Compensação indisponível**: marcar `COMPENSACAO_PENDENTE`, persistir a etapa, tentar novamente com backoff e gerar alerta operacional. Não fingir que a reserva está liberada.
 6. **Queda de Reservas**: ao reiniciar, recuperar Sagas não terminais do seu próprio banco e continuar do último passo persistido. Não depender apenas de memória ou de uma requisição HTTP ainda aberta.
-7. **Resultado incerto em etapa concluída**: consultar o participante por `reservaId`; nunca executar uma compensação às cegas que possa liberar estoque alocado por uma execução válida.
+7. **Resultado incerto de comando**: reenviar o mesmo comando ao participante com a mesma `Idempotency-Key` e conteúdo para recuperar a resposta original; nunca executar uma compensação às cegas que possa liberar estoque alocado por uma execução válida.
 
 ### 9.6 Idempotência e duplicidade
 
-- Cada comando da SAGA carrega `sagaId`, `reservaId`, `correlationId` e chave idempotente estável para aquela etapa.
+- Os comandos de alocação e preparação carregam `sagaId` e `reservaId`; cada comando HTTP mutável recebe `Idempotency-Key`. Reservas persiste `correlationId` para rastreamento; a propagação HTTP segue os headers definidos em cada operação OpenAPI.
 - Estoque garante unicidade de alocação ativa por `reservaId`; repetir alocação devolve a alocação existente, sem debitar novamente.
 - Liberar alocação inexistente ou já liberada resulta em sucesso idempotente, sem alterar outras reservas.
 - Retiradas garante uma autorização por `reservaId`; preparar novamente retorna a autorização existente. Cancelar repetidamente preserva o mesmo estado cancelado.
@@ -459,25 +469,30 @@ diagramas/
 
 ## 16. Checklist de consistência antes de integrar
 
-Uma revisão final só termina quando todos estes itens forem verdadeiros:
+Revisão documental estática realizada em 21/10/2026. Os itens marcados foram conferidos contra os documentos e contratos atuais; a renderização dos diagramas no GitHub permanece pendente.
 
-- [ ] Todos os documentos usam os mesmos quatro nomes e responsabilidades de serviço.
-- [ ] Cada serviço tem uma instância de banco própria; nenhum diagrama mostra leitura cruzada de bancos.
-- [ ] Uma reserva contém um único item (medicamento ou insumo), uma unidade e quantidade positiva.
-- [ ] Os mesmos nomes de estado e transições aparecem em APIs, HATEOAS, SAGA, banco e diagramas, incluindo cancelamento em andamento e expiração da solicitação pendente.
-- [ ] A reserva só fica `CONFIRMADA` depois de alocação no Estoque e autorização em Retiradas.
-- [ ] A retirada física ocorre depois da confirmação e só muda o estado para `RETIRADA` após registro em Retiradas.
-- [ ] Antes da entrega, Retiradas consulta o estado canônico em Reservas e exige `CONFIRMADA`; falha de consulta impede o registro, e a transação local serializa entrega e revogação.
-- [ ] A SAGA tem três participantes — Reservas, Estoque e Retiradas — e as compensações são idempotentes e reversas.
-- [ ] Timeout não é interpretado automaticamente como falha remota; resultado incerto é consultado/repetido com idempotência.
-- [ ] Eventos usam envelope e nomes canônicos; cada produtor usa Outbox quando publica eventos.
-- [ ] Mensagens podem chegar duplicadas; todo consumidor de evento é idempotente.
-- [ ] Disponibilidade de leitura é marcada com instante de atualização; a escrita do Estoque é autoridade.
-- [ ] Profissional da unidade informa justificativa ao cancelar; nenhuma reserva pode ser cancelada após a retirada física ser registrada.
-- [ ] Gateway expõe os BFFs, não as APIs internas dos microsserviços.
-- [ ] O BFF Cidadão e o BFF Unidade apresentam respostas e ações apropriadas a públicos diferentes.
-- [ ] Os quatro arquivos OpenAPI descrevem operações que correspondem ao fluxo definido e têm versão `/v1`.
-- [ ] Os links relativos funcionam, os diagramas Mermaid renderizam no GitHub e o README aponta para a documentação correta.
+- [x] Todos os documentos usam os mesmos quatro nomes e responsabilidades de serviço.
+- [x] Cada serviço tem uma instância de banco própria; nenhum diagrama mostra leitura cruzada de bancos.
+- [x] Uma reserva contém um único item (medicamento ou insumo), uma unidade e quantidade positiva.
+- [x] A criação valida unidade ativa e permissão canônica `permiteReserva`; consulta de disponibilidade projetada não autoriza a solicitação.
+- [x] Os mesmos nomes de estado e transições aparecem em APIs, HATEOAS, SAGA, banco e diagramas, incluindo cancelamento em andamento e expiração da solicitação pendente.
+- [x] A reserva só fica `CONFIRMADA` depois de alocação no Estoque e autorização em Retiradas.
+- [x] A retirada física ocorre depois da confirmação e só muda o estado para `RETIRADA` após registro em Retiradas.
+- [x] Antes da entrega, Retiradas consulta o estado canônico em Reservas e exige `CONFIRMADA`; falha de consulta impede o registro, e a transação local serializa entrega e revogação.
+- [x] A SAGA tem três participantes — Reservas, Estoque e Retiradas — e as compensações são idempotentes e reversas.
+- [x] Timeout não é interpretado automaticamente como falha remota; resultado incerto é repetido com a mesma chave idempotente e conteúdo.
+- [x] Eventos usam envelope e nomes canônicos; cada produtor usa Outbox quando publica eventos.
+- [x] Mensagens podem chegar duplicadas; todo consumidor de evento é idempotente.
+- [x] Disponibilidade de leitura é marcada com instante de atualização; a escrita do Estoque é autoridade.
+- [x] Profissional da unidade informa justificativa ao cancelar; nenhuma reserva pode ser cancelada após a retirada física ser registrada.
+- [x] Gateway expõe os BFFs, não as APIs internas dos microsserviços.
+- [x] O BFF Cidadão e o BFF Unidade apresentam respostas e ações apropriadas a públicos diferentes.
+- [x] Os seis arquivos OpenAPI (quatro serviços e dois BFFs) descrevem operações, schemas de entrada obrigatórios e versão `/v1` compatíveis com os fluxos documentados.
+- [x] Todo comando HTTP de alteração exige `Idempotency-Key` no cabeçalho; repetição idêntica recupera o resultado original, e conteúdo divergente produz conflito.
+- [x] Cada operação HATEOAS usa caminho, método e corpo declarados no contrato do BFF correspondente.
+- [x] As rotas de cliente documentadas no Gateway cobrem as operações declaradas pelos dois BFFs.
+- [x] Os links Markdown relativos e os destinos do README apontam para arquivos existentes.
+- [ ] Os diagramas Mermaid foram renderizados e verificados no GitHub.
 
 ## 17. Como alterar uma decisão
 

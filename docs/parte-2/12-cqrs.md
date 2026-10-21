@@ -27,12 +27,14 @@ A tabela `disponibilidade` mantém uma linha por `(unidadeId, itemId)`, com PK c
 |---|---|
 | `unidadeId` | `uuid`; identifica a unidade da consulta. |
 | `itemId` | `uuid`; identifica o item da consulta. |
+| `estoqueFisicoAtual` | `integer`; saldo físico do estado aplicado. |
+| `quantidadeAlocada` | `integer`; quantidade alocada do estado aplicado. |
 | `quantidadeDisponivel` | `integer`; resultado de `estoqueFisicoAtual - quantidadeAlocada`. |
 | `permiteReserva` | `boolean`; permissão refletida pelo estado aplicado. |
 | `atualizadoEm` | `timestamptz`; instante do estado refletido, obtido de `occurredAt` do evento aplicado ou de `saldos.updatedAt` na reconstrução. |
 | `estoqueVersion` | `bigint`; versão do saldo refletido, usada internamente para controlar a atualização. |
 
-O endpoint existente `GET /api/cidadao/v1/estoque/disponibilidade` lê essa projeção. Nomes e demais dados de apresentação agregados pelos BFFs não precisam ser duplicados nela. A versão é interna à projeção; o contrato HTTP atual não a expõe.
+`GET /api/cidadao/v1/estoque/disponibilidade` lê apenas os campos públicos da projeção. `GET /api/unidade/v1/estoque/{unidadeId}/itens` pode ler o saldo físico e o alocado da mesma projeção, restrito à unidade autorizada. Nomes e demais dados de apresentação agregados pelos BFFs não precisam ser duplicados nela. A versão é interna à projeção; o contrato HTTP atual não a expõe.
 
 ## 4. Atualização assíncrona e defasagem
 
@@ -64,7 +66,7 @@ A alocação já retirou as duas unidades da disponibilidade. Ao consumir a aloc
 
 ## 7. Reconstrução e diferença para Event Sourcing
 
-Os eventos propagam alterações; não são a única fonte de verdade. Se a projeção precisar ser reconstruída, ela é recriada a partir de uma leitura consistente de `saldos`, calculando `quantidadeDisponivel` e copiando identificadores, permissão, versão e `updatedAt` para `atualizadoEm`.
+Os eventos propagam alterações; não são a única fonte de verdade. Se a projeção precisar ser reconstruída, ela é recriada a partir de uma leitura consistente de `saldos`, copiando os saldos físico e alocado, calculando `quantidadeDisponivel` e copiando identificadores, permissão, versão e `updatedAt` para `atualizadoEm`.
 
 Durante a recarga, pausa-se o consumidor da projeção após concluir os processamentos em andamento. Depois da recarga, ele retoma os eventos pendentes, preservando a Inbox. Eventos anteriores ao estado carregado não são reaplicados, pela comparação de versão; alterações ocorridas durante a recarga chegam pelo fluxo normal de Outbox/RabbitMQ. Assim, a reconstrução não depende de reproduzir eventos que a Inbox já marcou como processados.
 
@@ -74,8 +76,8 @@ Essa escolha mantém a recuperação baseada no estado canônico e dispensa rete
 
 | Contrato | Situação atual |
 |---|---|
-| [API de Estoque](./api/estoque.yaml), schema `DisponibilidadeItem` | Declara `atualizadoEm` como `string/date-time`, mas não possui lista `required` para garantir sua presença. |
-| [BFF Cidadão](./api/bff-cidadao.yaml), `GET /explorar` | Exibe disponibilidade pelo campo `disponivel`, mas não declara `atualizadoEm` nos itens da resposta. |
-| [BFF Unidade](./api/bff-unidade.yaml), `GET /painel/estoque` | A resposta não define schema; não é possível confirmar a propagação de `atualizadoEm` caso exiba disponibilidade. |
+| [API de Estoque](./api/estoque.yaml), schemas `DisponibilidadeItem` e `EstoqueUnidadeItem` | `atualizadoEm` é obrigatório e representa o instante refletido pela projeção. |
+| [BFF Cidadão](./api/bff-cidadao.yaml), `GET /explorar` | `atualizadoEm` é obrigatório nos itens e preserva o timestamp recebido da projeção. |
+| [BFF Unidade](./api/bff-unidade.yaml), `GET /painel/estoque` | `atualizadoEm` é obrigatório nos itens do painel e representa o instante do estado projetado. |
 
-A propagação contratual ainda não está completa. Esses pontos ficam sinalizados para alinhamento, sem alteração dos contratos neste documento.
+A propagação está descrita nos três contratos. O BFF Unidade também expõe `estoqueFisicoAtual`, `quantidadeAlocada` e `quantidadeDisponivel`; o timestamp identifica a atualização do estado projetado, não a montagem da resposta.
