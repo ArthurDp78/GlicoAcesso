@@ -344,7 +344,7 @@ Os eventos produzidos por Estoque devem incluir no `payload` os identificadores 
 - Se publicar e cair antes de marcar como publicada, a mensagem poderá ser enviada novamente. A entrega é pelo menos uma vez; consumidores deduplicam por `eventId`.
 - Se o broker estiver fora do ar, a alteração local continua válida, o evento permanece pendente e será reenviado quando o broker voltar. O publicador aplica backoff e não descarta a linha automaticamente.
 - Falhas permanentes após retries devem ficar observáveis em fila de erro/DLQ ou estado de falha operacional, com procedimento de reprocessamento documentado; não se apaga silenciosamente um evento necessário.
-- A tabela Outbox e os detalhes do publicador são descritos em `10-outbox.md`; seu contrato não pode mudar o envelope ou o significado dos eventos acima.
+- A tabela Outbox e os detalhes do publicador são descritos em `09-outbox.md`; seu contrato não pode mudar o envelope ou o significado dos eventos acima.
 
 ### 10.4 Onde existe consistência eventual
 
@@ -366,7 +366,7 @@ Estoque separa modelos de escrita e de leitura, ainda que ambos possam residir n
 | Alocações e liberações identificadas por `reservaId`. | Visão agregada para BFF Cidadão e consultas operacionais. |
 | Valida invariantes e concorrência em transação local. | Otimiza leitura e pode refletir eventos alguns segundos depois. |
 
-O modelo de leitura é atualizado por eventos persistidos na Outbox e publicados no RabbitMQ. O consumidor é idempotente e atualiza sua projeção antes de confirmar a mensagem. `11-cqrs.md` detalha tabelas, atualização e comportamento diante de atraso; deve preservar o limite de 5 segundos e a regra de que a escrita é a autoridade.
+O modelo de leitura é atualizado por eventos persistidos na Outbox e publicados no RabbitMQ. O consumidor é idempotente e atualiza sua projeção antes de confirmar a mensagem. `10-cqrs.md` detalha tabelas, atualização e comportamento diante de atraso; deve preservar o limite de 5 segundos e a regra de que a escrita é a autoridade.
 
 ## 12. Contratos HTTP, Gateway, BFFs e HATEOAS
 
@@ -428,10 +428,10 @@ Estrutura alvo de `/docs/parte-2/`:
 05-hateoas.md
 06-api-gateway.md
 07-bffs.md
-08-bancos.md
-09-consistencia.md
-10-outbox.md
-11-cqrs.md
+07-bancos.md
+08-consistencia.md
+09-outbox.md
+10-cqrs.md
 api/
   unidades.yaml
   estoque.yaml
@@ -448,9 +448,9 @@ diagramas/
 | 4.2 — REST, versionamento e HATEOAS | `api/*.yaml`, `05-hateoas.md` |
 | 4.3 — Gateway e routing | `06-api-gateway.md` |
 | 4.4 — dois BFFs distintos | `07-bffs.md` |
-| 4.5 — banco por serviço, consistência e Outbox | `08-bancos.md`, `09-consistencia.md`, `10-outbox.md` |
+| 4.5 — banco por serviço, consistência e Outbox | `07-bancos.md`, `08-consistencia.md`, `09-outbox.md` |
 | 4.6 — SAGA, compensações e falhas | `04-saga.md`, `diagramas/saga-sucesso.md`, `diagramas/saga-falha.md` |
-| 4.7 — CQRS e defasagem | `11-cqrs.md` |
+| 4.7 — CQRS e defasagem | `10-cqrs.md` |
 
 ## 16. Checklist de consistência antes de integrar
 
