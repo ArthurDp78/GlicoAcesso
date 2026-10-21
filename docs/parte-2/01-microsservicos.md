@@ -1,10 +1,10 @@
-# GlicoAcesso — decomposição e fronteiras dos microsserviços
+# GlicoAcesso - decomposição e fronteiras dos microsserviços
 
 **Etapa:** 2 — Arquitetura  
-**Documento:** 01 — Microsserviços  
+**Documento:** 01 - Microsserviços  
 **Versão:** 1.0  
 **Situação:** detalhamento das fronteiras definidas no contrato compartilhado  
-**Documento normativo:** [00 — Decisões arquiteturais compartilhadas](./00-decisoes-compartilhadas.md)  
+**Documento normativo:** [00 - Decisões arquiteturais compartilhadas](./00-decisoes-compartilhadas.md)  
 **Última revisão:** 20 de outubro de 2026
 
 > Este documento explica quais são os quatro microsserviços de domínio do GlicoAcesso, qual problema cada um resolve, quais informações controla, quais responsabilidades não lhe pertencem e por que as fronteiras foram escolhidas. Ele detalha o contrato do documento 00; não cria uma segunda definição de estados, eventos, identificadores ou tecnologias.
@@ -17,7 +17,7 @@ O requisito 4.1 do enunciado da Etapa 2 pede:
 2. a justificativa das fronteiras adotadas;
 3. um diagrama de componentes e de comunicação entre serviços.
 
-Este documento atende aos dois primeiros itens. O diagrama geral de componentes e comunicação está no [02 — Diagrama de arquitetura](./02-diagrama-arquitetura.md), que deve representar exatamente as fronteiras descritas aqui.
+Este documento atende aos dois primeiros itens. O diagrama geral de componentes e comunicação está no [02 - Diagrama de arquitetura](./02-diagrama-arquitetura.md), que deve representar exatamente as fronteiras descritas aqui.
 
 O objetivo é permitir que uma pessoa que não participou das conversas do grupo consiga responder, sem depender de explicações externas:
 
@@ -40,7 +40,7 @@ A decomposição contém exatamente estes quatro microsserviços de domínio:
 3. **Reservas**
 4. **Retiradas**
 
-Os clientes cidadão e unidade, o API Gateway e os BFFs são componentes da arquitetura de entrada e apresentação. Eles não são serviços adicionais de domínio e não passam a ser donos dos dados descritos neste documento. A arquitetura de entrada e seus caminhos são detalhados nos documentos 02, 06 e 07.
+Os clientes cidadão e unidade, o API Gateway e os BFFs são componentes da arquitetura de entrada e apresentação. Eles não são serviços adicionais de domínio e não passam a ser donos dos dados descritos neste documento. A arquitetura de entrada e seus caminhos são detalhados nos documentos 02, 03 e 04.
 
 O projeto não cria um quinto microsserviço de identidade nesta etapa. A autenticação pode ser fornecida por um provedor de identidade externo. Os serviços de domínio recebem somente o identificador estável necessário para reconhecer o ator e autorizar a operação; não copiam senha, token ou perfil completo para seus bancos.
 
@@ -52,7 +52,7 @@ Uma fronteira de microsserviço representa uma responsabilidade de negócio com 
 2. **Referências entre domínios, não cópias autoritativas.** Um serviço pode guardar identificadores externos necessários à própria operação, mas não replica a tabela de outro serviço como fonte de verdade.
 3. **Integração por contrato.** A consulta ou solicitação de mudança em outro domínio ocorre por API do serviço responsável; fatos que precisam atualizar projeções são propagados por eventos.
 4. **Sem acesso cruzado a bancos.** Nenhum microsserviço lê ou escreve diretamente na instância PostgreSQL de outro.
-5. **Transações locais.** Cada serviço confirma as alterações do próprio domínio em sua transação local. A coordenação de efeitos que atravessam serviços é feita pela SAGA de confirmação, detalhada em [04 — SAGA](./04-saga.md).
+5. **Transações locais.** Cada serviço confirma as alterações do próprio domínio em sua transação local. A coordenação de efeitos que atravessam serviços é feita pela SAGA de confirmação, detalhada em [06 - SAGA](./06-saga.md).
 6. **Separação entre estado de negócio e fato físico.** Uma reserva confirmada não é uma retirada. Reservas controla o ciclo de vida da solicitação; Retiradas controla a autorização e o fato de a entrega presencial ter ocorrido.
 
 Esses critérios evitam que a divisão seja apenas técnica. Cada serviço corresponde a uma área que possui regras e informações próprias do negócio.
@@ -378,7 +378,7 @@ Para evitar sobreposição entre as frentes, este documento não fixa:
 - sequência detalhada de cada etapa, timeout, retry e compensação da SAGA;
 - fluxo detalhado de estados e ações apresentado ao cidadão e à equipe.
 
-Os detalhes ficam nos documentos OpenAPI e 02–11 indicados na estrutura compartilhada pelo documento 00. Os documentos especializados podem detalhar a implementação, mas não podem alterar as responsabilidades e fronteiras aqui descritas sem revisar primeiro o contrato compartilhado.
+Os detalhes ficam nos documentos OpenAPI e 02–12 indicados na estrutura compartilhada pelo documento 00. Os documentos especializados podem detalhar a implementação, mas não podem alterar as responsabilidades e fronteiras aqui descritas sem revisar primeiro o contrato compartilhado.
 
 ### 13.1 Decisão de integração para a retirada física
 
@@ -412,9 +412,9 @@ Se qualquer item falhar, a proposta deve ser corrigida ou a decisão compartilha
 
 ## 15. Referências internas
 
-- [00 — Decisões arquiteturais compartilhadas](./00-decisoes-compartilhadas.md): vocabulário, propriedade de dados, identificadores, estados, tecnologia e decisões normativas.
-- [02 — Diagrama de arquitetura](./02-diagrama-arquitetura.md): representação visual dos componentes, bancos, Gateway, BFFs e comunicação.
-- [03 — Fluxo de reservas](./03-fluxo-reservas.md): fluxo de negócio, atores, decisões e transições da reserva.
-- [04 — SAGA](./04-saga.md): orquestração, etapas, compensações, falhas, recuperação e idempotência.
+- [00 - Decisões arquiteturais compartilhadas](./00-decisoes-compartilhadas.md): vocabulário, propriedade de dados, identificadores, estados, tecnologia e decisões normativas.
+- [02 - Diagrama de arquitetura](./02-diagrama-arquitetura.md): representação visual dos componentes, bancos, Gateway, BFFs e comunicação.
+- [05 - Fluxo de reservas](./05-fluxo-reservas.md): fluxo de negócio, atores, decisões e transições da reserva.
+- [06 - SAGA](./06-saga.md): orquestração, etapas, compensações, falhas, recuperação e idempotência.
 
 Os arquivos especializados acima são referências previstas na estrutura da Etapa 2. Se algum deles ainda não existir na branch, o link deve passar a funcionar quando a respectiva frente for integrada.

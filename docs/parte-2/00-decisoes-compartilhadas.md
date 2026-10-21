@@ -1,4 +1,4 @@
-# GlicoAcesso — decisões arquiteturais compartilhadas
+# GlicoAcesso - decisões arquiteturais compartilhadas
 
 **Etapa:** 2 — Arquitetura  
 **Versão:** 1.0  
@@ -344,7 +344,7 @@ Os eventos produzidos por Estoque devem incluir no `payload` os identificadores 
 - Se publicar e cair antes de marcar como publicada, a mensagem poderá ser enviada novamente. A entrega é pelo menos uma vez; consumidores deduplicam por `eventId`.
 - Se o broker estiver fora do ar, a alteração local continua válida, o evento permanece pendente e será reenviado quando o broker voltar. O publicador aplica backoff e não descarta a linha automaticamente.
 - Falhas permanentes após retries devem ficar observáveis em fila de erro/DLQ ou estado de falha operacional, com procedimento de reprocessamento documentado; não se apaga silenciosamente um evento necessário.
-- A tabela Outbox e os detalhes do publicador são descritos em `10-outbox.md`; seu contrato não pode mudar o envelope ou o significado dos eventos acima.
+- A tabela Outbox e os detalhes do publicador são descritos em `11-outbox.md`; seu contrato não pode mudar o envelope ou o significado dos eventos acima.
 
 ### 10.4 Onde existe consistência eventual
 
@@ -366,21 +366,21 @@ Estoque separa modelos de escrita e de leitura, ainda que ambos possam residir n
 | Alocações e liberações identificadas por `reservaId`. | Visão agregada para BFF Cidadão e consultas operacionais. |
 | Valida invariantes e concorrência em transação local. | Otimiza leitura e pode refletir eventos alguns segundos depois. |
 
-O modelo de leitura é atualizado por eventos persistidos na Outbox e publicados no RabbitMQ. O consumidor é idempotente e atualiza sua projeção antes de confirmar a mensagem. `11-cqrs.md` detalha tabelas, atualização e comportamento diante de atraso; deve preservar o limite de 5 segundos e a regra de que a escrita é a autoridade.
+O modelo de leitura é atualizado por eventos persistidos na Outbox e publicados no RabbitMQ. O consumidor é idempotente e atualiza sua projeção antes de confirmar a mensagem. `12-cqrs.md` detalha tabelas, atualização e comportamento diante de atraso; deve preservar o limite de 5 segundos e a regra de que a escrita é a autoridade.
 
 ## 12. Contratos HTTP, Gateway, BFFs e HATEOAS
 
 Os contratos OpenAPI são a definição detalhada dos endpoints. Devem obedecer às regras compartilhadas abaixo:
 
 1. APIs públicas seguem `/api/cidadao/v1/...` ou `/api/unidade/v1/...`; operações internas usam `/internal/v1/...` e não são roteadas publicamente.
-2. Gateway encaminha cada cliente para seu BFF. Ele aplica responsabilidades transversais definidas em `06-api-gateway.md`, mas não contém regra de negócio da reserva.
+2. Gateway encaminha cada cliente para seu BFF. Ele aplica responsabilidades transversais definidas em `03-api-gateway.md`, mas não contém regra de negócio da reserva.
 3. BFF Cidadão apresenta somente dados e ações úteis ao cidadão; BFF Unidade apresenta dados operacionais e ações autorizadas à equipe. Ambos consomem APIs dos serviços, nunca bancos.
 4. HATEOAS deve ser demonstrado no recurso Reserva. O cidadão proprietário pode cancelar enquanto a reserva estiver ativa e antes da retirada física; profissional autorizado da unidade também pode cancelar e deve fornecer justificativa. A ação não é oferecida para `CANCELAMENTO_EM_ANDAMENTO`, `RETIRADA`, `REJEITADA`, `CANCELADA`, `EXPIRADA` ou `FALHA_CONFIRMACAO`.
 5. Criar uma solicitação não é sinônimo de confirmação. O contrato deve devolver `SOLICITADA`; aceitar uma solicitação inicia processo assíncrono e o cliente consulta o recurso até obter `CONFIRMADA` ou `FALHA_CONFIRMACAO`.
 6. Resultados de negócio esperados — como estoque insuficiente — devem ser distinguíveis de falhas técnicas, autorização negada e recurso inexistente.
 7. A API de disponibilidade pode retornar `atualizadoEm` e indicador de defasagem. A API de comando de alocação é decisiva para confirmar.
 
-Os detalhes de status HTTP, esquemas, parâmetros, autenticação, limites e exemplos completos ficam nos arquivos OpenAPI, `05-hateoas.md`, `06-api-gateway.md` e `07-bffs.md`.
+Os detalhes de status HTTP, esquemas, parâmetros, autenticação, limites e exemplos completos ficam nos arquivos OpenAPI, `07-hateoas.md`, `03-api-gateway.md` e `04-bffs.md`.
 
 ## 13. Persistência, privacidade e integridade
 
@@ -398,10 +398,10 @@ O contrato-base é responsabilidade de **Marcos** e deve ser estabilizado antes 
 
 | Pessoa | Frente e entregáveis principais | Dependência |
 |---|---|---|
-| **Marcos** | Fronteiras e justificativa dos quatro serviços; arquitetura geral; fluxo e estados; SAGA, compensações e diagramas de sucesso/falha. `01`–`04` e `diagramas/`. | Define primeiro este contrato-base. Depois alinha nomes de comandos/eventos com Guilerme e Lana. |
-| **Guilerme** | Contratos REST/OpenAPI dos quatro serviços e HATEOAS da Reserva. `api/*.yaml` e `05-hateoas.md`. | Usa serviços, estados, campos e transições definidos aqui. |
-| **Arthur** | API Gateway e dois BFFs, com rotas, autenticação e respostas específicas dos dois clientes. `06-api-gateway.md` e `07-bffs.md`. | Usa os contratos REST de Guilerme e não altera regras dos serviços. Pode esboçar rotas antes e fechar após o OpenAPI. |
-| **Lana** | Bancos por serviço, consistência eventual, Outbox e CQRS no Estoque. `08`–`11`. | Usa propriedade de dados, eventos, envelope, broker e defasagem definidos aqui. |
+| **Marcos** | Fronteiras e justificativa dos quatro serviços; arquitetura geral; fluxo e estados; SAGA, compensações e diagramas de sucesso/falha. `01`, `02`, `05`, `06` e `diagramas/`. | Define primeiro este contrato-base. Depois alinha nomes de comandos/eventos com Guilerme e Lana. |
+| **Guilerme** | Contratos REST/OpenAPI dos quatro serviços e HATEOAS da Reserva. `api/*.yaml` e `07-hateoas.md`. | Usa serviços, estados, campos e transições definidos aqui. |
+| **Arthur** | API Gateway e dois BFFs, com rotas, autenticação e respostas específicas dos dois clientes. `03-api-gateway.md` e `04-bffs.md`. | Usa os contratos REST de Guilerme e não altera regras dos serviços. Pode esboçar rotas antes e fechar após o OpenAPI. |
+| **Lana** | Bancos por serviço, consistência eventual, Outbox e CQRS no Estoque. `09`–`12`. | Usa propriedade de dados, eventos, envelope, broker e defasagem definidos aqui. |
 
 Todas as pessoas devem revisar os documentos integrados e participar da apresentação, conforme o enunciado. Cada integrante deve manter contribuição autoral verificável no GitHub; a divisão de tarefas não substitui essa exigência.
 
@@ -423,34 +423,39 @@ Estrutura alvo de `/docs/parte-2/`:
 00-decisoes-compartilhadas.md
 01-microsservicos.md
 02-diagrama-arquitetura.md
-03-fluxo-reservas.md
-04-saga.md
-05-hateoas.md
-06-api-gateway.md
-07-bffs.md
-08-bancos.md
-09-consistencia.md
-10-outbox.md
-11-cqrs.md
+03-api-gateway.md
+04-bffs.md
+05-fluxo-reservas.md
+06-saga.md
+07-hateoas.md
+08-saga.md
+09-bancos.md
+10-consistencia.md
+11-outbox.md
+12-cqrs.md
 api/
-  unidades.yaml
+  unidade.yaml
   estoque.yaml
-  reservas.yaml
-  retiradas.yaml
+  reserva.yaml
+  retirada.yaml
+  bff-cidadao.yaml
+  bff-unidade.yaml
 diagramas/
   saga-sucesso.md
   saga-falha.md
+  saga-caminho-feliz.md
+  saga-compensacao.md
 ```
 
 | Requisito do enunciado | Documento(s) que o demonstram |
 |---|---|
 | 4.1 — decomposição, fronteiras e comunicação | `01-microsservicos.md`, `02-diagrama-arquitetura.md` |
-| 4.2 — REST, versionamento e HATEOAS | `api/*.yaml`, `05-hateoas.md` |
-| 4.3 — Gateway e routing | `06-api-gateway.md` |
-| 4.4 — dois BFFs distintos | `07-bffs.md` |
-| 4.5 — banco por serviço, consistência e Outbox | `08-bancos.md`, `09-consistencia.md`, `10-outbox.md` |
-| 4.6 — SAGA, compensações e falhas | `04-saga.md`, `diagramas/saga-sucesso.md`, `diagramas/saga-falha.md` |
-| 4.7 — CQRS e defasagem | `11-cqrs.md` |
+| 4.2 — REST, versionamento e HATEOAS | `api/*.yaml`, `07-hateoas.md` |
+| 4.3 — Gateway e routing | `03-api-gateway.md` |
+| 4.4 — dois BFFs distintos | `04-bffs.md` |
+| 4.5 — banco por serviço, consistência e Outbox | `09-bancos.md`, `10-consistencia.md`, `11-outbox.md` |
+| 4.6 — SAGA, compensações e falhas | `06-saga.md`, `diagramas/saga-sucesso.md`, `diagramas/saga-falha.md` |
+| 4.7 — CQRS e defasagem | `12-cqrs.md` |
 
 ## 16. Checklist de consistência antes de integrar
 

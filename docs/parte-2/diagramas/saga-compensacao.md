@@ -1,6 +1,6 @@
-# GlicoAcesso — SAGA: compensação após falha de finalização
+# GlicoAcesso - SAGA: compensação após falha de finalização
 
-**Referências:** [05 — Especificação complementar da SAGA](../05-saga.md), [04 — SAGA de confirmação e cancelamento](../04-saga.md) e contratos OpenAPI de [Reservas](../api/reserva.yaml), [Estoque](../api/estoque.yaml) e [Retiradas](../api/retirada.yaml).
+**Referências:** [08 - Especificação complementar da SAGA](../08-saga.md), [06 - SAGA de confirmação e cancelamento](../06-saga.md) e contratos OpenAPI de [Reservas](../api/reserva.yaml), [Estoque](../api/estoque.yaml) e [Retiradas](../api/retirada.yaml).
 
 Este cenário considera alocação e autorização confirmadas, mas uma falha definitiva na finalização local da reserva. Reservas primeiro reconcilia que `CONFIRMADA` não foi persistida, registra a compensação e desfaz os efeitos na ordem inversa. Se a preparação da autorização for rejeitada definitivamente antes de criar autorização, não há autorização a cancelar: Reservas libera a alocação e só conclui após confirmar essa liberação.
 

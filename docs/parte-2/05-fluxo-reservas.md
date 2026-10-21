@@ -1,15 +1,15 @@
-# GlicoAcesso — fluxo de reservas
+# GlicoAcesso - fluxo de reservas
 
 **Etapa:** 2 — Arquitetura  
-**Documento:** 03 — Fluxo de reservas  
+**Documento:** 05 - Fluxo de reservas  
 **Versão:** 1.0  
 **Escopo:** comportamento de negócio de uma solicitação desde sua criação até um resultado terminal  
-**Documento normativo:** [00 — Decisões arquiteturais compartilhadas](./00-decisoes-compartilhadas.md)  
-**Documento de fronteiras:** [01 — Decomposição e fronteiras dos microsserviços](./01-microsservicos.md)  
-**Diagrama de componentes:** [02 — Diagrama de arquitetura](./02-diagrama-arquitetura.md)  
+**Documento normativo:** [00 - Decisões arquiteturais compartilhadas](./00-decisoes-compartilhadas.md)  
+**Documento de fronteiras:** [01 - Decomposição e fronteiras dos microsserviços](./01-microsservicos.md)  
+**Diagrama de componentes:** [02 - Diagrama de arquitetura](./02-diagrama-arquitetura.md)  
 **Última revisão:** 20 de outubro de 2026
 
-> Este documento detalha o fluxo de negócio da reserva. A SAGA, seus comandos, compensações, estados internos, timeouts e recuperação são especificados no documento [04 — SAGA](./04-saga.md). Em caso de divergência, prevalecem as decisões do documento 00.
+> Este documento detalha o fluxo de negócio da reserva. A SAGA, seus comandos, compensações, estados internos, timeouts e recuperação são especificados no documento [06 - SAGA](./06-saga.md). Em caso de divergência, prevalecem as decisões do documento 00.
 
 ## 1. Objetivo
 
@@ -77,9 +77,9 @@ flowchart TD
     P --> Q["Reservas atualiza para RETIRADA"]
 ```
 
-O diagrama resume os caminhos de negócio. A ordem técnica da confirmação e das compensações é detalhada no documento 04.
+O diagrama resume os caminhos de negócio. A ordem técnica da confirmação e das compensações é detalhada no documento 06.
 
-## 5. Fluxo A — consulta e criação
+## 5. Fluxo A - consulta e criação
 
 ### 5.1 Consulta de disponibilidade
 
@@ -106,7 +106,7 @@ O diagrama resume os caminhos de negócio. A ordem técnica da confirmação e d
 
 Se uma validação falhar, Reservas não cria uma solicitação ativa. A API deve distinguir resultado de negócio inválido, falha de autenticação/autorização e indisponibilidade técnica. O detalhamento do contrato HTTP fica nos arquivos OpenAPI.
 
-## 6. Fluxo B — decisão da unidade
+## 6. Fluxo B - decisão da unidade
 
 ### 6.1 Autorização e prazo
 
@@ -136,9 +136,9 @@ O estado deve ser atualizado condicionalmente no banco de Reservas para impedir 
 5. Somente quando ambos os efeitos necessários forem confirmados, Reservas muda o estado para `CONFIRMADA`.
 6. A resposta apresentada ao cidadão distingue “aceita pela unidade/em confirmação” de “confirmada”. A aceitação profissional, por si só, não garante a disponibilidade nem a confirmação.
 
-Se uma etapa falhar definitivamente, Reservas aplica as compensações previstas no documento 04. Após todas as compensações necessárias serem confirmadas, a solicitação termina como `FALHA_CONFIRMACAO`. Enquanto uma etapa ou compensação estiver pendente, não deve ser apresentada como resultado final.
+Se uma etapa falhar definitivamente, Reservas aplica as compensações previstas no documento 06. Após todas as compensações necessárias serem confirmadas, a solicitação termina como `FALHA_CONFIRMACAO`. Enquanto uma etapa ou compensação estiver pendente, não deve ser apresentada como resultado final.
 
-## 7. Fluxo C — expiração por falta de decisão
+## 7. Fluxo C - expiração por falta de decisão
 
 1. Reservas monitora solicitações em `SOLICITADA` cujo `decisaoAte` foi atingido.
 2. Quando `agora >= decisaoAte`, Reservas tenta mudar condicionalmente o estado para `EXPIRADA`.
@@ -149,7 +149,7 @@ Se uma etapa falhar definitivamente, Reservas aplica as compensações previstas
 
 `EXPIRADA` é terminal. Uma nova tentativa exige outra solicitação.
 
-## 8. Fluxo D — cancelamento pelo cidadão ou profissional
+## 8. Fluxo D - cancelamento pelo cidadão ou profissional
 
 O cancelamento é permitido antes da retirada física enquanto a reserva estiver ativa. O cidadão só pode cancelar a própria solicitação. Um profissional autenticado e vinculado à unidade da reserva também pode cancelar; nesse caso, uma justificativa não vazia é obrigatória e registrada para auditoria.
 
@@ -163,7 +163,7 @@ O cancelamento é permitido antes da retirada física enquanto a reserva estiver
 
 O sistema não comunica `CANCELADA` antes de confirmar a revogação da autorização e a liberação da alocação quando esses efeitos existirem. Timeout de uma chamada não prova que a operação remota falhou; Reservas mantém o cancelamento pendente e reconcilia pelo mesmo identificador idempotente.
 
-## 9. Fluxo E — retirada física
+## 9. Fluxo E - retirada física
 
 1. O profissional da unidade apresenta/valida a autorização da reserva no serviço de Retiradas.
 2. Retiradas obtém `reservaId` da autorização e consulta `GET /internal/v1/reservas/{reservaId}/estado`. Só prossegue com estado canônico `CONFIRMADA`; timeout, indisponibilidade, reserva inexistente ou outro estado impedem a entrega naquele momento. Na transação local, revalida que a autorização corresponde à unidade e à reserva e não foi revogada nem usada.
@@ -179,11 +179,11 @@ Durante o processamento assíncrono pode haver um intervalo em que Retiradas já
 
 Se a entrega física for registrada primeiro, um cancelamento concorrente deve ser recusado. Se o cancelamento da autorização concluir primeiro, a autorização não pode ser usada para registrar a entrega. Retiradas serializa essas operações para que somente um resultado vença. A consulta não bloqueia a Reserva: a corrida continua possível se o cancelamento começar depois da leitura de `CONFIRMADA`, conforme o documento 00, seção 9.8.
 
-Quando a retirada vence, Reservas não envia `LiberarAlocacao`: Estoque baixa o físico e encerra a alocação como consumida ao processar o evento. Respostas tardias ou retries não podem retomar a execução de cancelamento encerrada nem mudar a reserva de `RETIRADA` para `CANCELADA`. O tratamento da execução está detalhado no documento 04, seção 5.3.
+Quando a retirada vence, Reservas não envia `LiberarAlocacao`: Estoque baixa o físico e encerra a alocação como consumida ao processar o evento. Respostas tardias ou retries não podem retomar a execução de cancelamento encerrada nem mudar a reserva de `RETIRADA` para `CANCELADA`. O tratamento da execução está detalhado no documento 06, seção 5.3.
 
 ## 10. Estados de negócio
 
-O estado de negócio pertence a Reservas. Os estados internos da SAGA são diferentes e ficam no documento 04.
+O estado de negócio pertence a Reservas. Os estados internos da SAGA são diferentes e ficam no documento 06.
 
 | Estado atual | Evento/ação válida | Próximo estado | Terminal? |
 |---|---|---|---:|
@@ -235,7 +235,7 @@ Os contratos HTTP devem distinguir o resultado de negócio de falhas técnicas. 
 
 - Criação repetida com a mesma `idempotencyKey` e o mesmo conteúdo devolve a solicitação original. A mesma chave com conteúdo diferente é conflito.
 - A aceitação, rejeição, expiração e cancelamento usam atualização condicional de estado para que apenas uma ação concorrente vença.
-- Os comandos internos da SAGA usam `sagaId`, `reservaId` e chave idempotente estável; detalhes estão no documento 04.
+- Os comandos internos da SAGA usam `sagaId`, `reservaId` e chave idempotente estável; detalhes estão no documento 06.
 - Uma entrega é única por autorização/reserva. Retentativas não geram novo `retiradaId` nem nova baixa.
 - Consumidores de eventos deduplicam pelo `eventId` e confirmam efeitos de negócio em transação local.
 - A fila de Reservas e a fila de Estoque para `retirada.concluida.v1` são independentes. Um consumidor não pode retirar a mensagem da fila compartilhada e impedir que o outro serviço receba o fato.
@@ -274,8 +274,8 @@ O fluxo está de acordo com as decisões compartilhadas quando:
 
 ## 15. Referências
 
-- [00 — Decisões arquiteturais compartilhadas](./00-decisoes-compartilhadas.md): estados canônicos, regras de cancelamento, expiração, eventos, SAGA, idempotência e propriedade dos dados.
-- [01 — Decomposição e fronteiras dos microsserviços](./01-microsservicos.md): responsabilidades de Reservas, Estoque, Unidades e Retiradas.
-- [02 — Diagrama de arquitetura](./02-diagrama-arquitetura.md): componentes, bancos e comunicações síncronas e assíncronas.
-- [04 — SAGA](./04-saga.md): sequência técnica da confirmação, compensações, cancelamento distribuído, falhas e recuperação.
+- [00 - Decisões arquiteturais compartilhadas](./00-decisoes-compartilhadas.md): estados canônicos, regras de cancelamento, expiração, eventos, SAGA, idempotência e propriedade dos dados.
+- [01 - Decomposição e fronteiras dos microsserviços](./01-microsservicos.md): responsabilidades de Reservas, Estoque, Unidades e Retiradas.
+- [02 - Diagrama de arquitetura](./02-diagrama-arquitetura.md): componentes, bancos e comunicações síncronas e assíncronas.
+- [06 - SAGA](./06-saga.md): sequência técnica da confirmação, compensações, cancelamento distribuído, falhas e recuperação.
 - Documentos OpenAPI e de HATEOAS: contratos de entrada, saída, autorização e ações disponíveis ao cliente.

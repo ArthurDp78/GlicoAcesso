@@ -1,9 +1,9 @@
-# GlicoAcesso — Projeto de HATEOAS
+# GlicoAcesso - Projeto de HATEOAS
 
 **Etapa:** 2 — Arquitetura  
-**Documento:** 05 — HATEOAS 
-**Documento normativo:** [00 — Decisões arquiteturais compartilhadas](./00-decisoes-compartilhadas.md)  
-**Documento complementar:** [01 — Decomposição e fronteiras dos microsserviços](./01-microsservicos.md)  
+**Documento:** 07 - HATEOAS 
+**Documento normativo:** [00 - Decisões arquiteturais compartilhadas](./00-decisoes-compartilhadas.md)  
+**Documento complementar:** [01 - Decomposição e fronteiras dos microsserviços](./01-microsservicos.md)  
 **Recurso Escolhido:** Reserva  
 
 > Este documento detalha a implementação do padrão HATEOAS para o recurso de Reserva. As regras, estados e transições aqui descritas obedecem estritamente às definições estabelecidas no documento normativo (00) e respeitam as fronteiras definidas no documento 01.

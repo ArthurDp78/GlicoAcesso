@@ -1,7 +1,7 @@
-# GlicoAcesso — Projeto dos BFFs (Backend For Frontend)
+# GlicoAcesso - Projeto dos BFFs (Backend For Frontend)
 
 **Etapa:** 2 — Arquitetura  
-**Documento:** 06 — BFFs   
+**Documento:** 04 - BFFs   
 
 ## 1. Justificativa para separar os BFFs
 

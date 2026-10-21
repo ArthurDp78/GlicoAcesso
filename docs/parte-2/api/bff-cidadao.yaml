@@ -53,7 +53,12 @@ paths:
                 type: array
                 items:
                   type: object
+                  required: [unidadeId, nomeUnidade, disponivel, atualizadoEm]
                   properties:
                     unidadeId: { type: string, format: uuid }
                     nomeUnidade: { type: string }
                     disponivel: { type: boolean }
+                    atualizadoEm:
+                      type: string
+                      format: date-time
+                      description: Timestamp recebido da projeção de Estoque para o estado exibido, preservado pelo BFF sem substituição pelo horário de montagem da resposta.

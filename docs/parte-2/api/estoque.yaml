@@ -13,12 +13,16 @@ components:
   schemas:
     DisponibilidadeItem:
       type: object
+      required: [itemId, unidadeId, quantidadeDisponivel, permiteReserva, atualizadoEm]
       properties:
         itemId: { type: string, format: uuid }
         unidadeId: { type: string, format: uuid }
         quantidadeDisponivel: { type: integer }
         permiteReserva: { type: boolean }
-        atualizadoEm: { type: string, format: date-time }
+        atualizadoEm:
+          type: string
+          format: date-time
+          description: Instante do estado refletido pela projeção de Estoque, não o horário da consulta.
 paths:
   /api/cidadao/v1/estoque/disponibilidade:
     get:
