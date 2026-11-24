@@ -8,6 +8,7 @@ SERVICOS = {
     "unidades": "UNIDADES_DATABASE_URL",
     "estoque": "ESTOQUE_DATABASE_URL",
     "reservas": "RESERVAS_DATABASE_URL",
+    "orquestrador": "ORQUESTRADOR_DATABASE_URL",
 }
 
 

@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Painel da unidade | GlicoAcesso</title>
+  <link rel="stylesheet" href="/unidade/assets/portal.css">
+  <script src="/unidade/assets/unidade.js" defer></script>
+</head>
+<body>
+  <header class="topo">
+    <div class="largura barra">
+      <a class="marca" href="/unidade" aria-label="GlicoAcesso, painel da unidade">Glico<span>Acesso</span></a>
+      <span class="portal">Painel da unidade</span>
+    </div>
+  </header>
+  <main class="largura">
+    <section class="hero" aria-labelledby="titulo">
+      <div>
+        <h1 id="titulo">Solicitações<br class="quebra"> da sua unidade</h1>
+        <p>Analise as reservas pendentes e registre a decisão dentro do prazo.</p>
+      </div>
+      <div class="selo" aria-hidden="true">
+        <div class="simbolo"><img src="/unidade/logo.png" alt=""></div>
+      </div>
+    </section>
+
+    <section class="consulta" aria-labelledby="titulo-acesso">
+      <h2 id="titulo-acesso">Acesso do profissional</h2>
+      <form id="carregar">
+        <div class="campo">
+          <label for="credencial">Token do profissional de demonstração</label>
+          <input id="credencial" type="password" autocomplete="off" spellcheck="false" required>
+        </div>
+        <button type="submit">Carregar solicitações</button>
+      </form>
+    </section>
+
+    <section class="resultados" aria-labelledby="titulo-pendentes">
+      <h2 id="titulo-pendentes">Aguardando decisão</h2>
+      <p id="status" class="status" role="status" aria-live="polite">Informe o token para ver as solicitações.</p>
+      <div id="lista" class="lista"></div>
+    </section>
+
+    <footer>Dados fictícios de demonstração. O aceite inicia a confirmação, que pode levar alguns instantes.</footer>
+  </main>
+</body>
+</html>

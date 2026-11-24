@@ -1,13 +1,13 @@
 import os
 from hashlib import sha256
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID, uuid4
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 from psycopg.types.json import Jsonb
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from servicos.banco import BancoIndisponivel, conectar
 from servicos.contratos_reserva import PedidoReserva, ReservaInterna
@@ -197,3 +197,75 @@ async def listar_pendentes(request: Request, profissional: Profissional, respons
     response.headers["Cache-Control"] = "no-store"
     unidade = await verificar_vinculo(request, profissional)
     return await run_in_threadpool(listar_pendentes_da_unidade, unidade)
+
+
+class Decisao(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    decisao: Literal["ACEITAR", "REJEITAR"]
+
+
+OPERACAO_DECISAO = "decisao-unidade"
+
+
+def conflito(codigo: str, mensagem: str) -> tuple[int, dict]:
+    return 409, {"codigo": codigo, "mensagem": mensagem}
+
+
+def registrar_decisao(profissional: str, unidade: UUID, reserva_id: UUID, decisao: str, chave: str):
+    resumo = sha256(f"{reserva_id}:{decisao}".encode()).hexdigest()
+    with conectar(BANCO) as conexao:
+        controle = f"{OPERACAO_DECISAO}:{profissional}:{chave}"
+        conexao.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (controle,))
+        anterior = conexao.execute("""
+            SELECT request_hash, http_status, resposta FROM idempotencia_comandos
+            WHERE operacao = %s AND principal_id = %s AND chave = %s
+        """, (OPERACAO_DECISAO, profissional, chave)).fetchone()
+        if anterior is not None:
+            if anterior["request_hash"] != resumo:
+                return conflito("CHAVE_IDEMPOTENTE_CONFLITANTE", "Chave reutilizada com outra reserva ou decisão.")
+            return anterior["http_status"], anterior["resposta"]
+        reserva = conexao.execute("""
+            SELECT unidade_id, status, decisao_ate > now() AS no_prazo
+            FROM reservas WHERE reserva_id = %s FOR UPDATE
+        """, (reserva_id,)).fetchone()
+        if reserva is None:
+            raise HTTPException(404, "Reserva não encontrada.")
+        if reserva["unidade_id"] != unidade:
+            raise HTTPException(403, "Reserva de outra unidade.")
+        if reserva["status"] != "SOLICITADA":
+            resultado = conflito("ESTADO_INCOMPATIVEL", f"A reserva está {reserva['status']}.")
+        elif not reserva["no_prazo"]:
+            resultado = conflito("ESTADO_INCOMPATIVEL", "O prazo de decisão terminou.")
+        elif decisao == "ACEITAR":
+            # O aceite só muda o estado pelo comando do Orquestrador; aqui fixa-se o destino da chave.
+            resultado = conflito("ACEITE_ENCAMINHAR", "Encaminhe o aceite ao Orquestrador com a mesma chave.")
+        else:
+            conexao.execute("""
+                UPDATE reservas SET status = 'REJEITADA', decisao = 'REJEITAR', decisao_ator_id = %s,
+                    decidida_em = now(), atualizada_em = now()
+                WHERE reserva_id = %s
+            """, (profissional, reserva_id))
+            conexao.execute("""
+                INSERT INTO historico_reserva
+                    (historico_id, reserva_id, status_anterior, status_posterior, ocorrido_em, ator_id)
+                VALUES (%s, %s, 'SOLICITADA', 'REJEITADA', now(), %s)
+            """, (uuid4(), reserva_id, profissional))
+            resultado = 200, {"reservaId": str(reserva_id), "status": "REJEITADA"}
+        conexao.execute("""
+            INSERT INTO idempotencia_comandos
+                (operacao, principal_id, chave, request_hash, http_status, resposta)
+            VALUES (%s, %s, %s, %s, %s, %s)
+        """, (OPERACAO_DECISAO, profissional, chave, resumo, resultado[0], Jsonb(resultado[1])))
+        return resultado
+
+
+@app.post("/api/unidade/v1/reservas/{reservaId}/decisao")
+async def decidir(request: Request, reservaId: UUID, corpo: Decisao, profissional: Profissional, chave: Chave):
+    if not chave.strip():
+        raise HTTPException(422, "Chave idempotente vazia.")
+    unidade = await verificar_vinculo(request, profissional)
+    status, dados = await run_in_threadpool(
+        registrar_decisao, profissional.id, unidade, reservaId, corpo.decisao, chave
+    )
+    return JSONResponse(dados, status_code=status, headers={"Cache-Control": "no-store"})

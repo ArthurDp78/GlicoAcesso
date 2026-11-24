@@ -267,7 +267,48 @@ A cada requisição, Reservas confere em Unidades se a unidade vinculada existe 
 Invoke-RestMethod 'http://127.0.0.1:8004/api/unidade/v1/reservas' -Headers @{ Authorization = 'Bearer <token do profissional>' }
 ```
 
-A consulta `GET /internal/v1/reservas/{reservaId}` aceita o cidadão dono da reserva ou um profissional da mesma unidade. Um profissional de outra unidade recebe `403`. Um cidadão que não é o dono recebe `404`. O token do profissional não cria reservas (`403`), e o token do cidadão não acessa as rotas da unidade (`403`). O BFF e o portal da unidade chegam na subtarefa 2.6.
+A consulta `GET /internal/v1/reservas/{reservaId}` aceita o cidadão dono da reserva ou um profissional da mesma unidade. Um profissional de outra unidade recebe `403`. Um cidadão que não é o dono recebe `404`. O token do profissional não cria reservas (`403`), e o token do cidadão não acessa as rotas da unidade (`403`).
+
+### Painel da unidade e aceite
+
+O aceite é recebido pelo Orquestrador da SAGA, que tem o próprio PostgreSQL (o quarto banco). Na primeira execução:
+
+```powershell
+docker run -d --name glico-orquestrador-db -e POSTGRES_USER=glico -e POSTGRES_PASSWORD=glico-demo -e POSTGRES_DB=orquestrador -p 127.0.0.1:54334:5432 -v glico-orquestrador-data:/var/lib/postgresql/data postgres:17
+```
+
+Nas próximas execuções, use `docker start glico-orquestrador-db`. Inicie mais dois processos. O Orquestrador valida o token do profissional, então ele precisa das mesmas variáveis de identidade usadas em Reservas:
+
+**Orquestrador (porta 8006)**
+
+```powershell
+$env:GLICO_CIDADAO_TOKEN = '<token do cidadão>'
+$env:GLICO_PROFISSIONAL_TOKEN = '<token do profissional>'
+$env:GLICO_PROFISSIONAL_UNIDADE_ID = '10000000-0000-4000-8000-000000000001'
+$env:ORQUESTRADOR_DATABASE_URL = 'postgresql://glico:glico-demo@127.0.0.1:54334/orquestrador'
+uv run --locked python -m servicos.migracoes orquestrador
+uv run --locked uvicorn servicos.orquestrador.main:app --host 127.0.0.1 --port 8006
+```
+
+**BFF Unidade (porta 8005)**
+
+```powershell
+uv run --locked uvicorn servicos.bff_unidade.main:app --host 127.0.0.1 --port 8005
+```
+
+Abra [http://127.0.0.1:8000/unidade](http://127.0.0.1:8000/unidade), informe o token do profissional e clique em **Carregar solicitações**. Cada solicitação pendente mostra **Aceitar** e **Rejeitar**. Os botões vêm dos links `_links` que o BFF Unidade devolve.
+
+- **Rejeitar** é uma operação local de Reservas: retorna `200` e a reserva passa a `REJEITADA`.
+- **Aceitar** não muda a reserva em Reservas. Reservas devolve `409 ACEITE_ENCAMINHAR` ao BFF e grava esse destino com a chave idempotente. O BFF então encaminha o pedido ao Orquestrador com a mesma chave. O Orquestrador grava a execução (`EM_EXECUCAO`) e a primeira etapa (`ACEITAR_RESERVA`, `PENDENTE`). Só depois disso o BFF responde `202`, com `Location` apontando para `/api/unidade/v1/painel/reservas/{reservaId}`.
+- Nesta etapa, a reserva aceita continua `SOLICITADA`. A execução da confirmação (`EM_CONFIRMACAO`, alocação, autorização e `CONFIRMADA`) chega na subtarefa 2.7.
+- Repetir a mesma ação com a mesma chave devolve o resultado original. Um segundo aceite da mesma reserva com outra chave recebe `409 EXECUCAO_CONCORRENTE`. Se o Orquestrador estiver fora do ar, o BFF responde `502`, e a repetição com a mesma chave conclui o aceite.
+
+| Processo | Variável de ambiente | Padrão |
+|---|---|---|
+| Gateway | `BFF_UNIDADE_URL` | `http://127.0.0.1:8005` |
+| BFF Unidade | `RESERVAS_URL` | `http://127.0.0.1:8004` |
+| BFF Unidade | `ESTOQUE_URL` | `http://127.0.0.1:8003` |
+| BFF Unidade | `ORQUESTRADOR_URL` | `http://127.0.0.1:8006` |
 
 ## Referências
 

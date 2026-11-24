@@ -59,6 +59,9 @@ button:not(:disabled):hover { background: #002e71; }
 button:disabled { background: #61778f; cursor: default; }
 button[hidden] { display: none; }
 .secundario { margin-top: 12px; }
+.acoes { display: flex; gap: 10px; flex-wrap: wrap; }
+button.perigo { background: #fff; color: #b0151a; border-color: var(--vermelho); }
+button.perigo:not(:disabled):hover { background: #fdecec; }
 :focus-visible { outline: 3px solid #089aea; outline-offset: 3px; }
 .resultados { margin-top: 29px; }
 .status { color: var(--muted); margin: 10px 0 0; line-height: 1.45; }

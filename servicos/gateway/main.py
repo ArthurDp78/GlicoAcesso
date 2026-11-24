@@ -13,6 +13,7 @@ PASTA_PORTAL = Path(__file__).resolve().parent / "portal"
 LOGO = Path(__file__).resolve().parents[2] / "identidade-visual" / "logo-sem-fundo.png"
 app = FastAPI(title="GlicoAcesso — API Gateway", lifespan=cliente_http)
 app.mount("/cidadao/assets", StaticFiles(directory=PASTA_PORTAL), name="portal-cidadao")
+app.mount("/unidade/assets", StaticFiles(directory=PASTA_PORTAL), name="portal-unidade")
 
 
 @app.get("/health")
@@ -25,7 +26,13 @@ def portal_cidadao():
     return FileResponse(PASTA_PORTAL / "index.html")
 
 
+@app.get("/unidade", include_in_schema=False)
+def portal_unidade():
+    return FileResponse(PASTA_PORTAL / "unidade.html")
+
+
 @app.get("/cidadao/logo.png", include_in_schema=False)
+@app.get("/unidade/logo.png", include_in_schema=False)
 def logo_portal():
     return FileResponse(LOGO, media_type="image/png")
 
@@ -47,7 +54,18 @@ async def encaminhar_consulta(request: Request) -> Response:
 @app.post("/api/cidadao/v1/reservas", status_code=201)
 @app.get("/api/cidadao/v1/reservas/{reservaId}")
 async def encaminhar_reserva(request: Request, reservaId: UUID | None = None) -> Response:
-    destino = os.environ.get("BFF_CIDADAO_URL", "http://127.0.0.1:8001").rstrip("/")
+    return await repassar(request, os.environ.get("BFF_CIDADAO_URL", "http://127.0.0.1:8001"))
+
+
+@app.get("/api/unidade/v1/painel/reservas")
+@app.get("/api/unidade/v1/painel/reservas/{reservaId}")
+@app.post("/api/unidade/v1/reservas/{reservaId}/decisao")
+async def encaminhar_unidade(request: Request, reservaId: UUID | None = None) -> Response:
+    return await repassar(request, os.environ.get("BFF_UNIDADE_URL", "http://127.0.0.1:8005"))
+
+
+async def repassar(request: Request, destino: str) -> Response:
+    destino = destino.rstrip("/")
     cabecalhos = {
         nome: request.headers[nome]
         for nome in ("authorization", "idempotency-key", "content-type")
