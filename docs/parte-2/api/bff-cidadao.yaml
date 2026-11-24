@@ -121,6 +121,10 @@ paths:
       responses:
         '201':
           description: Solicitação criada com status SOLICITADA.
+          headers:
+            Location:
+              description: Caminho público de consulta da reserva criada.
+              schema: { type: string, format: uri-reference }
           content:
             application/json:
               schema:
@@ -129,6 +133,7 @@ paths:
           description: Unidade inexistente/inativa ou combinação unidade/item sem permissão para reserva.
         '409':
           description: "`Idempotency-Key` reutilizada com conteúdo diferente."
+        '401': { description: Credencial do cidadão ausente ou inválida. }
   /reservas/{reservaId}/cancelar:
     post:
       summary: Solicitar cancelamento da reserva pelo cidadão
@@ -192,6 +197,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ReservaCidadao'
+        '401': { description: Credencial do cidadão ausente ou inválida. }
+        '404': { description: Reserva inexistente ou sem acesso para este cidadão. }
   /explorar:
     get:
       summary: Explorar disponibilidade agregada

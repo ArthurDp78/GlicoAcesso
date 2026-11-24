@@ -3,10 +3,11 @@ import os
 from typing import Literal
 from uuid import UUID
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, Header, HTTPException, Request, Response
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
-from servicos.http import cliente_http, consultar
+from servicos.contratos_reserva import DadosReserva, LinkReserva, PedidoReserva, ReservaPublica
+from servicos.http import cliente_http, consultar, requisitar
 
 
 app = FastAPI(title="GlicoAcesso — BFF Cidadão", lifespan=cliente_http)
@@ -110,3 +111,56 @@ async def explorar(request: Request, itemId: UUID):
 
     resultados = await asyncio.gather(*(combinar(unidade) for unidade in unidades))
     return [resultado for resultado in resultados if resultado is not None]
+
+def origem_reservas() -> str:
+    return os.environ.get("RESERVAS_URL", "http://127.0.0.1:8004").rstrip("/")
+
+
+def cabecalhos_autenticados(request: Request) -> dict[str, str]:
+    return {
+        nome: request.headers[nome]
+        for nome in ("authorization", "idempotency-key")
+        if nome in request.headers
+    }
+
+
+def apresentar_reserva(resposta, status_esperado: int, saida: Response):
+    if resposta.status_code != status_esperado:
+        if resposta.status_code not in (401, 403, 404, 409, 422, 502, 503, 504):
+            raise HTTPException(502, "Não foi possível concluir a consulta de Reservas.")
+        headers = {"Cache-Control": "no-store"}
+        if "www-authenticate" in resposta.headers:
+            headers["WWW-Authenticate"] = resposta.headers["www-authenticate"]
+        return Response(resposta.content, status_code=resposta.status_code,
+                        media_type="application/json", headers=headers)
+    try:
+        dados = DadosReserva.model_validate_json(resposta.content, extra="ignore")
+    except ValidationError as erro:
+        raise HTTPException(502, "Reservas retornou dados incompatíveis.") from erro
+    href = f"/api/cidadao/v1/reservas/{dados.reservaId}"
+    saida.headers["Cache-Control"] = "no-store"
+    if status_esperado == 201:
+        saida.headers["Location"] = href
+    return ReservaPublica(**dados.model_dump(), links={"self": LinkReserva(href=href, method="GET")})
+
+
+@app.post("/api/cidadao/v1/reservas", status_code=201, response_model=ReservaPublica)
+async def criar_reserva(
+    request: Request, response: Response, pedido: PedidoReserva,
+    idempotency_key: str = Header(alias="Idempotency-Key", min_length=1, max_length=128),
+):
+    resposta = await requisitar(
+        request.app.state.http, "POST", origem_reservas() + "/api/cidadao/v1/reservas",
+        headers={**cabecalhos_autenticados(request), "Idempotency-Key": idempotency_key},
+        json=pedido.model_dump(mode="json"),
+    )
+    return apresentar_reserva(resposta, 201, response)
+
+
+@app.get("/api/cidadao/v1/reservas/{reservaId}", response_model=ReservaPublica)
+async def consultar_reserva(request: Request, response: Response, reservaId: UUID):
+    resposta = await consultar(
+        request.app.state.http, origem_reservas() + f"/internal/v1/reservas/{reservaId}",
+        headers=cabecalhos_autenticados(request),
+    )
+    return apresentar_reserva(resposta, 200, response)

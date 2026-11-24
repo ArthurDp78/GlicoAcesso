@@ -44,8 +44,11 @@ h2 { font-size: 1.33rem; letter-spacing: -.033em; }
 form { display: flex; align-items: end; gap: 12px; margin-top: 17px; }
 .campo { flex: 1; min-width: 0; }
 label { display: block; font-weight: 600; font-size: .9rem; margin-bottom: 7px; }
-select, button { font: inherit; min-height: 46px; border-radius: 9px; }
-select { width: 100%; background: #fff; color: var(--texto); border: 1px solid #afbfd1; padding: 0 12px; }
+select, input, button { font: inherit; min-height: 46px; border-radius: 9px; }
+select, input { width: 100%; background: #fff; color: var(--texto); border: 1px solid #afbfd1; padding: 0 12px; }
+form[hidden] { display: none; }
+.credencial { margin-top: 17px; max-width: 540px; }
+.solicitar { justify-self: start; }
 button {
   display: inline-flex; justify-content: center; align-items: center; gap: 8px;
   padding: 0 20px; border: 1px solid transparent; font-weight: 650;

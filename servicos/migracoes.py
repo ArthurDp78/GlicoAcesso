@@ -7,6 +7,7 @@ from servicos.banco import BancoIndisponivel, conectar
 SERVICOS = {
     "unidades": "UNIDADES_DATABASE_URL",
     "estoque": "ESTOQUE_DATABASE_URL",
+    "reservas": "RESERVAS_DATABASE_URL",
 }
 
 
@@ -29,8 +30,9 @@ def migrar(servico: str, carregar_demo: bool) -> None:
             if arquivo.name not in aplicadas:
                 conexao.execute(arquivo.read_text(encoding="utf-8"))
                 conexao.execute("INSERT INTO migracoes (nome) VALUES (%s)", (arquivo.name,))
-        if carregar_demo:
-            conexao.execute((pasta_servico / "demo.sql").read_text(encoding="utf-8"))
+        demo = pasta_servico / "demo.sql"
+        if carregar_demo and demo.is_file():
+            conexao.execute(demo.read_text(encoding="utf-8"))
 
 
 def main() -> None:

@@ -1,11 +1,12 @@
 from typing import Annotated, Literal
 from uuid import UUID
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.responses import JSONResponse
 from pydantic import AwareDatetime, BaseModel
 
 from servicos.banco import BancoIndisponivel, conectar
+from servicos.identidade_demo import servico_reservas_autenticado
 
 
 app = FastAPI(title="GlicoAcesso — Estoque")
@@ -66,3 +67,23 @@ def consultar_disponibilidade(
     if disponibilidade is None:
         raise HTTPException(status_code=404, detail="Disponibilidade não encontrada.")
     return disponibilidade
+
+class PermissaoReserva(BaseModel):
+    unidadeId: UUID
+    itemId: UUID
+    permiteReserva: bool
+
+
+@app.get(
+    "/internal/v1/unidades/{unidadeId}/itens/{itemId}/permissao-reserva",
+    response_model=PermissaoReserva, dependencies=[Depends(servico_reservas_autenticado)],
+)
+def consultar_permissao(unidadeId: UUID, itemId: UUID):
+    with conectar("ESTOQUE_DATABASE_URL") as conexao:
+        dado = conexao.execute("""
+            SELECT unidade_id AS "unidadeId", item_id AS "itemId", permite_reserva AS "permiteReserva"
+            FROM saldos WHERE unidade_id = %s AND item_id = %s
+        """, (unidadeId, itemId)).fetchone()
+    if dado is None:
+        raise HTTPException(404, "Combinação de unidade e item não encontrada.")
+    return dado

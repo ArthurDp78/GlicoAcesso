@@ -222,6 +222,36 @@ Invoke-RestMethod 'http://127.0.0.1:8000/api/cidadao/v1/explorar?itemId=20000000
 | BFF Cidadão | `UNIDADES_URL` | `http://127.0.0.1:8002` |
 | BFF Cidadão | `ESTOQUE_URL` | `http://127.0.0.1:8003` |
 
+### Criar e consultar reservas
+
+Crie um terceiro PostgreSQL independente para Reservas na primeira execução.
+
+```powershell
+docker run -d --name glico-reservas-db -e POSTGRES_USER=glico -e POSTGRES_PASSWORD=glico-demo -e POSTGRES_DB=reservas -p 127.0.0.1:54333:5432 -v glico-reservas-data:/var/lib/postgresql/data postgres:17
+```
+
+Nas próximas execuções, use `docker start glico-reservas-db`. Gere dois tokens de demonstração distintos com o comando abaixo, executando-o duas vezes.
+
+```powershell
+uv run --locked python -c "import secrets; print(secrets.token_urlsafe(32))"
+```
+
+Antes de iniciar **Unidades**, **Estoque** e **Reservas**, defina `$env:GLICO_RESERVAS_SERVICE_TOKEN` com o mesmo token interno nos três terminais. O navegador usa o outro token, definido como `GLICO_CIDADAO_TOKEN` somente no processo de Reservas. O Gateway e o BFF encaminham a credencial do cidadão para Reservas, que verifica a identidade e a propriedade da solicitação. As consultas públicas continuam acessíveis sem token. Use essas credenciais apenas na demonstração local.
+
+Em um quinto terminal, após o banco de Reservas aceitar conexões:
+
+```powershell
+$env:GLICO_RESERVAS_SERVICE_TOKEN = '<token interno>'
+$env:GLICO_CIDADAO_TOKEN = '<token do cidadão>'
+$env:RESERVAS_DATABASE_URL = 'postgresql://glico:glico-demo@127.0.0.1:54333/reservas'
+uv run --locked python -m servicos.migracoes reservas
+uv run --locked uvicorn servicos.reservas.main:app --host 127.0.0.1 --port 8004
+```
+
+O BFF usa `RESERVAS_URL` com padrão `http://127.0.0.1:8004`. Se os serviços já estiverem rodando, reinicie-os com o código atual e com as variáveis necessárias.
+
+No portal, consulte **Tiras reagentes para glicemia**, clique em **Solicitar reserva**, informe o token do cidadão e envie a quantidade desejada. Copie o código retornado para acompanhar a solicitação. A criação retorna `201` e o estado `SOLICITADA`. A alocação de estoque ocorre no fluxo posterior de confirmação.
+
 ## Referências
 
 1. [International Diabetes Federation - Dados sobre diabetes no Brasil](https://diabetesatlas.org/es/data-by-location/country/brazil/).

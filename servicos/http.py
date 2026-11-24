@@ -11,10 +11,13 @@ async def cliente_http(app: FastAPI):
         yield
 
 
-async def consultar(cliente: httpx.AsyncClient, url: str, *, params=None) -> httpx.Response:
+async def requisitar(cliente: httpx.AsyncClient, metodo: str, url: str, **opcoes) -> httpx.Response:
     try:
-        return await cliente.get(url, params=params)
+        return await cliente.request(metodo, url, **opcoes)
     except httpx.TimeoutException as erro:
         raise HTTPException(504, "O serviço de consulta demorou a responder.") from erro
     except httpx.RequestError as erro:
         raise HTTPException(502, "O serviço de consulta está indisponível.") from erro
+
+async def consultar(cliente: httpx.AsyncClient, url: str, *, params=None, headers=None) -> httpx.Response:
+    return await requisitar(cliente, "GET", url, params=params, headers=headers)

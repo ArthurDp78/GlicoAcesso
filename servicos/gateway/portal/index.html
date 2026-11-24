@@ -48,6 +48,29 @@
       <div id="lista" class="lista"></div>
     </section>
 
+    <section class="consulta" aria-labelledby="titulo-reserva">
+      <h2 id="titulo-reserva">Minhas reservas</h2>
+      <div class="campo credencial">
+        <label for="credencial">Token do cidadão de demonstração</label>
+        <input id="credencial" type="password" autocomplete="off" spellcheck="false">
+      </div>
+      <form id="criar-reserva" hidden>
+        <div class="campo">
+          <label for="quantidade">Quantidade para <span id="unidade-reserva"></span></label>
+          <input id="quantidade" type="number" min="1" max="2147483647" step="1" value="1" required>
+        </div>
+        <button type="submit">Enviar solicitação</button>
+      </form>
+      <form id="acompanhar-reserva">
+        <div class="campo">
+          <label for="codigo-reserva">Código da reserva</label>
+          <input id="codigo-reserva" type="text" required>
+        </div>
+        <button type="submit">Consultar reserva</button>
+      </form>
+      <p id="status-reserva" class="status" role="status" aria-live="polite"></p>
+    </section>
+
     <footer>A disponibilidade é informativa e pode mudar antes do atendimento.</footer>
   </main>
 </body>

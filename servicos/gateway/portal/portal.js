@@ -26,7 +26,7 @@ function texto(tag, conteudo) {
   return elemento;
 }
 
-function cartao(unidade) {
+function cartao(unidade, itemId) {
   const artigo = document.createElement("article");
   artigo.className = "cartao";
   const cabecalho = document.createElement("header");
@@ -48,6 +48,13 @@ function cartao(unidade) {
     dados.append(campo);
   }
   artigo.append(cabecalho, dados);
+  if (unidade.permiteReserva && unidade.disponivel) {
+    const solicitar = texto("button", "Solicitar reserva");
+    solicitar.type = "button";
+    solicitar.className = "solicitar";
+    solicitar.addEventListener("click", () => selecionarUnidade(unidade, itemId));
+    artigo.append(solicitar);
+  }
   return artigo;
 }
 
@@ -77,10 +84,12 @@ formulario.addEventListener("submit", async (evento) => {
   buscar.disabled = true;
   seletor.disabled = true;
   lista.replaceChildren();
+  formularioReserva.hidden = true;
+  selecaoReserva = undefined;
   informar("Consultando disponibilidade…");
   try {
     const unidades = await consultar("/explorar?" + new URLSearchParams({itemId}));
-    lista.replaceChildren(...unidades.map(cartao));
+    lista.replaceChildren(...unidades.map(unidade => cartao(unidade, itemId)));
     const quantidade = unidades.length;
     informar(quantidade === 0 ? "Nenhuma unidade informou disponibilidade para este item."
       : quantidade === 1 ? "1 unidade com informação de estoque."
@@ -94,4 +103,83 @@ formulario.addEventListener("submit", async (evento) => {
 });
 
 recarregar.addEventListener("click", carregarCatalogo);
+
+const formularioReserva = document.querySelector("#criar-reserva");
+const formularioAcompanhamento = document.querySelector("#acompanhar-reserva");
+const credencial = document.querySelector("#credencial");
+const codigoReserva = document.querySelector("#codigo-reserva");
+const mensagemReserva = document.querySelector("#status-reserva");
+let selecaoReserva;
+let ultimaTentativa;
+
+function informarReserva(mensagem, erro = false) {
+  mensagemReserva.textContent = mensagem;
+  mensagemReserva.classList.toggle("erro", erro);
+}
+
+function selecionarUnidade(unidade, itemId) {
+  selecaoReserva = {unidadeId: unidade.unidadeId, itemId};
+  document.querySelector("#unidade-reserva").textContent = unidade.nomeUnidade;
+  formularioReserva.hidden = false;
+  informarReserva("");
+  (credencial.value ? document.querySelector("#quantidade") : credencial).focus();
+}
+
+async function requisitarReserva(recurso, opcoes = {}) {
+  const token = credencial.value.trim();
+  if (!token) {
+    credencial.focus();
+    throw new Error("Informe o token do cidadão de demonstração.");
+  }
+  const resposta = await fetch(api + recurso, {
+    ...opcoes,
+    headers: {...opcoes.headers, Authorization: "Bearer " + token},
+  });
+  if (resposta.status === 401) throw new Error("Token do cidadão inválido.");
+  if (resposta.status === 404) throw new Error("Reserva não encontrada para este cidadão.");
+  if (resposta.status === 422) throw new Error("Confira os dados. A unidade ou o item pode não aceitar reservas.");
+  if (resposta.status === 409) throw new Error("A chave deste pedido já foi usada com outros dados.");
+  if (!resposta.ok) throw new Error("Não foi possível concluir. Tente novamente.");
+  return resposta.json();
+}
+
+formularioReserva.addEventListener("submit", async (evento) => {
+  evento.preventDefault();
+  if (!selecaoReserva) return;
+  const botao = evento.submitter;
+  const body = JSON.stringify({...selecaoReserva, quantidade: Number(document.querySelector("#quantidade").value)});
+  if (ultimaTentativa?.body !== body) ultimaTentativa = {body, chave: crypto.randomUUID()};
+  botao.disabled = true;
+  informarReserva("Enviando solicitação…");
+  try {
+    const reserva = await requisitarReserva("/reservas", {
+      method: "POST", body,
+      headers: {"Content-Type": "application/json", "Idempotency-Key": ultimaTentativa.chave},
+    });
+    codigoReserva.value = reserva.reservaId;
+    ultimaTentativa = undefined;
+    informarReserva("Solicitação registrada. Estado: " + reserva.status + ".");
+    formularioReserva.hidden = true;
+    codigoReserva.focus();
+  } catch (erro) {
+    informarReserva(erro instanceof TypeError ? "Falha de conexão. Tente enviar novamente." : erro.message, true);
+  } finally {
+    botao.disabled = false;
+  }
+});
+
+formularioAcompanhamento.addEventListener("submit", async (evento) => {
+  evento.preventDefault();
+  const botao = evento.submitter;
+  botao.disabled = true;
+  informarReserva("Consultando reserva…");
+  try {
+    const reserva = await requisitarReserva("/reservas/" + encodeURIComponent(codigoReserva.value.trim()));
+    informarReserva("Estado: " + reserva.status + ". Quantidade: " + reserva.quantidade + ".");
+  } catch (erro) {
+    informarReserva(erro instanceof TypeError ? "Falha de conexão. Tente consultar novamente." : erro.message, true);
+  } finally {
+    botao.disabled = false;
+  }
+});
 carregarCatalogo();

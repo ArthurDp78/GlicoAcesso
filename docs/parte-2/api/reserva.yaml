@@ -102,6 +102,8 @@ components:
         itemId: { type: string, format: uuid }
         quantidade: { type: integer, minimum: 1 }
         status: { type: string, enum: [SOLICITADA, EM_CONFIRMACAO, CONFIRMADA, CANCELAMENTO_EM_ANDAMENTO, CANCELADA, REJEITADA, EXPIRADA, FALHA_CONFIRMACAO, RETIRADA] }
+        criadaEm: { type: string, format: date-time }
+        decisaoAte: { type: string, format: date-time }
         _links:
           type: object
           additionalProperties: true
@@ -176,7 +178,8 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Reserva' }
         '403': { description: Ator sem acesso à reserva. }
-        '404': { description: Reserva não encontrada. }
+        '401': { description: Credencial ausente ou inválida. }
+        '404': { description: Reserva não encontrada ou invisível para o cidadão autenticado. }
   /api/cidadao/v1/reservas:
     post:
       summary: Criar solicitação
@@ -206,6 +209,7 @@ paths:
           description: Unidade inexistente/inativa ou combinação unidade/item sem permissão para reserva.
         '409':
           description: "`Idempotency-Key` reutilizada com conteúdo diferente."
+        '401': { description: Credencial do cidadão ausente ou inválida. }
   /api/cidadao/v1/reservas/{reservaId}/cancelar:
     post:
       operationId: cancelarSolicitacaoCidadao

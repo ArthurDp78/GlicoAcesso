@@ -1,11 +1,12 @@
 import os
+from uuid import UUID
 from pathlib import Path
 
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from servicos.http import cliente_http, consultar
+from servicos.http import cliente_http, consultar, requisitar
 
 
 PASTA_PORTAL = Path(__file__).resolve().parent / "portal"
@@ -41,4 +42,27 @@ async def encaminhar_consulta(request: Request) -> Response:
         content=resposta.content,
         status_code=resposta.status_code,
         media_type=resposta.headers.get("content-type", "application/json"),
+    )
+
+@app.post("/api/cidadao/v1/reservas", status_code=201)
+@app.get("/api/cidadao/v1/reservas/{reservaId}")
+async def encaminhar_reserva(request: Request, reservaId: UUID | None = None) -> Response:
+    destino = os.environ.get("BFF_CIDADAO_URL", "http://127.0.0.1:8001").rstrip("/")
+    cabecalhos = {
+        nome: request.headers[nome]
+        for nome in ("authorization", "idempotency-key", "content-type")
+        if nome in request.headers
+    }
+    resposta = await requisitar(
+        request.app.state.http, request.method, destino + request.url.path,
+        headers=cabecalhos, content=await request.body() if request.method == "POST" else None,
+    )
+    return Response(
+        content=resposta.content,
+        status_code=resposta.status_code,
+        headers={
+            nome: resposta.headers[nome]
+            for nome in ("content-type", "cache-control", "location", "www-authenticate")
+            if nome in resposta.headers
+        },
     )
