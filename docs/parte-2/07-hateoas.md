@@ -1,16 +1,16 @@
 # GlicoAcesso - Projeto de HATEOAS
 
-**Etapa:** 2 — Arquitetura  
-**Documento:** 07 - HATEOAS 
-**Documento normativo:** [00 - Decisões arquiteturais compartilhadas](./00-decisoes-compartilhadas.md)  
-**Documento complementar:** [01 - Decomposição e fronteiras dos microsserviços](./01-microsservicos.md)  
-**Recurso Escolhido:** Reserva  
+**Etapa:** 2 — Arquitetura\
+**Documento:** 07 - HATEOAS\
+**Documento normativo:** [00 - Decisões arquiteturais compartilhadas](./00-decisoes-compartilhadas.md)\
+**Documento complementar:** [01 - Decomposição e fronteiras dos microsserviços](./01-microsservicos.md)\
+**Recurso Escolhido:** Reserva
 
-> Este documento detalha a implementação do padrão HATEOAS para o recurso de Reserva. As regras, estados e transições aqui descritas obedecem estritamente às definições estabelecidas no documento normativo (00) e respeitam as fronteiras definidas no documento 01.
+> Este documento detalha o projeto do padrão HATEOAS para o recurso de Reserva. As regras, estados e transições aqui descritas obedecem estritamente às definições estabelecidas no documento normativo (00) e respeitam as fronteiras definidas no documento 01.
 
 ## 1. Introdução ao HATEOAS no Recurso Reserva
 
-O padrão HATEOAS (Hypermedia as the Engine of Application State) foi aplicado ao recurso **Reserva** do microsserviço de Reservas. O objetivo é fornecer ao cliente (através dos BFFs) não apenas os dados da solicitação, mas também os links para as transições de estado permitidas no momento da consulta.
+O padrão HATEOAS (Hypermedia as the Engine of Application State) é projetado ao recurso **Reserva** do microsserviço de Reservas. O objetivo é fornecer ao cliente (através dos BFFs) não apenas os dados da solicitação, mas também os links para as transições de estado permitidas no momento da consulta.
 
 Os comandos vinculados usam o cabeçalho obrigatório `Idempotency-Key`, conforme os contratos dos BFFs. O cliente gera uma chave por ação lógica e reutiliza a mesma chave e corpo em retries; ela não faz parte do corpo JSON mostrado no link.
 
@@ -38,7 +38,7 @@ A unidade aceitou o pedido e a SAGA está em andamento.
     *   `cancelar`: `POST /api/cidadao/v1/reservas/{reservaId}/cancelar`, sem corpo.
 *   **Links para o Profissional da Unidade (BFF Unidade):**
     *   `self`: `GET /api/unidade/v1/painel/reservas/{reservaId}`.
-    *   `cancelar`: `POST /api/unidade/v1/reservas/{reservaId}/cancelar`, com `justificativa` no corpo. A operação interrompe a SAGA e inicia a compensação.
+    *   `cancelar`: `POST /api/unidade/v1/reservas/{reservaId}/cancelar`, com `justificativa` no corpo. O BFF encaminha o pedido ao Orquestrador. A confirmação pode ter avançado enquanto a ação estava disponível, por isso o cancelamento depende da validação do estado atual.
 
 ### 2.3. Estado: `CONFIRMADA`
 A alocação de estoque e a preparação da autorização de retirada foram concluídas com sucesso.
@@ -59,6 +59,8 @@ O BFF Unidade consulta a autorização por `GET /internal/v1/autorizacoes/{reser
 Para os estados `CANCELAMENTO_EM_ANDAMENTO`, `RETIRADA`, `REJEITADA`, `CANCELADA`, `EXPIRADA` e `FALHA_CONFIRMACAO`, **nenhuma ação adicional é oferecida** além da própria consulta.
 *   **Links (Comuns):**
     *   `self`: Link para recarregar a reserva.
+
+Os links apontam para os BFFs. O aceite inicia a confirmação no Orquestrador. A rejeição e o cancelamento de solicitação ainda pendente são operações locais de Reservas. A ação `cancelar` mantém a rota pública quando exige coordenação distribuída, conforme [04 - BFFs](./04-bffs.md). O estado pode mudar depois da consulta, por isso cada comando valida novamente as condições. Após um aceite para processamento ou um conflito de estado, o cliente consulta `self` para acompanhar a reserva e obter os links atuais.
 
 ## 3. Exemplos de Respostas JSON
 

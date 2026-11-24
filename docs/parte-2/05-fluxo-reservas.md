@@ -1,13 +1,13 @@
 # GlicoAcesso - fluxo de reservas
 
-**Etapa:** 2 — Arquitetura  
-**Documento:** 05 - Fluxo de reservas  
-**Versão:** 1.0  
-**Escopo:** comportamento de negócio de uma solicitação desde sua criação até um resultado terminal  
-**Documento normativo:** [00 - Decisões arquiteturais compartilhadas](./00-decisoes-compartilhadas.md)  
-**Documento de fronteiras:** [01 - Decomposição e fronteiras dos microsserviços](./01-microsservicos.md)  
-**Diagrama de componentes:** [02 - Diagrama de arquitetura](./02-diagrama-arquitetura.md)  
-**Última revisão:** 20 de outubro de 2026
+**Etapa:** 2 — Arquitetura\
+**Documento:** 05 - Fluxo de reservas\
+**Versão:** 1.1\
+**Escopo:** comportamento de negócio de uma solicitação desde sua criação até um resultado terminal\
+**Documento normativo:** [00 - Decisões arquiteturais compartilhadas](./00-decisoes-compartilhadas.md)\
+**Documento de fronteiras:** [01 - Decomposição e fronteiras dos microsserviços](./01-microsservicos.md)\
+**Diagrama de componentes:** [02 - Diagrama de arquitetura](./02-diagrama-arquitetura.md)\
+**Última revisão:** 24 de novembro de 2026
 
 > Este documento detalha o fluxo de negócio da reserva. A SAGA, seus comandos, compensações, estados internos, timeouts e recuperação são especificados no documento [06 - SAGA](./06-saga.md). Em caso de divergência, prevalecem as decisões do documento 00.
 
@@ -25,9 +25,10 @@ Este fluxo não define a estrutura física das tabelas, o formato completo dos e
 |---|---|
 | Cidadão | Consulta disponibilidade, cria e acompanha a própria solicitação e pode cancelá-la antes da retirada física enquanto estiver ativa. |
 | Profissional da unidade | Consulta solicitações da unidade, aceita, rejeita ou cancela uma solicitação. Ao cancelar, deve fornecer justificativa. Registra a entrega presencial pelo fluxo de Retiradas. |
-| BFF Cidadão | Encaminha as operações do cidadão a Reservas e pode agregar informações de consulta. Não decide regras de domínio. |
+| BFF Cidadão | Encaminha operações locais a Reservas e cancelamentos distribuídos ao Orquestrador. Pode agregar informações de consulta. |
 | BFF Unidade | Encaminha as operações profissionais aos serviços responsáveis. Não decide regras de domínio nem coordena a SAGA. |
-| Reservas | É proprietário da solicitação e de seu estado de negócio. Valida regras do fluxo, consulta os dados necessários, inicia a SAGA e atualiza o estado quando consome o evento de retirada. |
+| Reservas | É proprietário da solicitação e de seu estado de negócio. Valida regras do fluxo, consulta os dados necessários, valida e aplica transições e atualiza o estado quando consome o evento de retirada. |
+| Orquestrador | Coordena a confirmação e o cancelamento distribuído, com execução durável própria. |
 | Unidades | É proprietário do prazo de análise configurado para cada unidade. |
 | Estoque | É proprietário da permissão de reserva, do saldo físico e das alocações. Decide a disponibilidade real no momento da alocação. |
 | Retiradas | É proprietário da autorização de balcão e do registro da entrega física. Publica o evento da retirada concluída. |
@@ -60,10 +61,13 @@ flowchart TD
     D --> E["Reservas grava SOLICITADA"]
     E --> F{"Decisão da unidade antes do prazo?"}
     F -->|"Rejeitar"| G["REJEITADA"]
-    F -->|"Aceitar"| H["EM_CONFIRMACAO e inicia SAGA"]
+    F -->|"Aceitar"| A0["Orquestrador registra execução"]
+    A0 --> H["Reservas grava EM_CONFIRMACAO"]
+    E -->|"Cancelamento local"| O
+    H -->|"Cancelamento distribuído"| N
     F -->|"Sem decisão"| I["EXPIRADA"]
-    H --> J{"SAGA concluída?"}
-    J -->|"Sim"| K["CONFIRMADA"]
+    H --> J{"Resultado da confirmação?"}
+    J -->|"Alocação, autorização e finalização confirmadas"| K["CONFIRMADA"]
     J -->|"Falha compensada"| L["FALHA_CONFIRMACAO"]
     K --> M{"Cancelamento antes da entrega?"}
     M -->|"Sim"| N["CANCELAMENTO_EM_ANDAMENTO"]
@@ -131,14 +135,13 @@ O estado deve ser atualizado condicionalmente no banco de Reservas para impedir 
 
 ### 6.3 Aceitação
 
-1. O profissional escolhe aceitar uma solicitação `SOLICITADA`.
-2. Reservas valida a permissão, a unidade e o prazo, e registra a decisão.
-3. Reservas altera o estado para `EM_CONFIRMACAO` e persiste a execução durável da SAGA.
-4. Reservas coordena a alocação no Estoque e, após sua confirmação, a preparação de autorização em Retiradas.
-5. Somente quando ambos os efeitos necessários forem confirmados, Reservas muda o estado para `CONFIRMADA`.
-6. A resposta apresentada ao cidadão distingue “aceita pela unidade/em confirmação” de “confirmada”. A aceitação profissional, por si só, não garante a disponibilidade nem a confirmação.
+1. No aceite, o BFF Unidade encaminha o pedido ao Orquestrador.
+2. O Orquestrador persiste a execução e a intenção do primeiro comando. Reservas valida o ator, a unidade, o prazo e o estado. Em sua própria transação, grava a decisão e `EM_CONFIRMACAO`.
+3. O Orquestrador solicita a alocação a Estoque. Confirmada a alocação, solicita a Retiradas a preparação da autorização.
+4. Com ambos os efeitos confirmados, o Orquestrador solicita a finalização. Reservas grava `CONFIRMADA`, que é o ponto de compromisso. O Orquestrador registra a conclusão em seu banco.
+5. O cliente acompanha o estado pelo recurso Reserva. A recepção do pedido e o estado `EM_CONFIRMACAO` representam processamento em curso.
 
-Se uma etapa falhar definitivamente, Reservas aplica as compensações previstas no documento 06. Após todas as compensações necessárias serem confirmadas, a solicitação termina como `FALHA_CONFIRMACAO`. Enquanto uma etapa ou compensação estiver pendente, não deve ser apresentada como resultado final.
+Se uma etapa falhar definitivamente antes do ponto de compromisso, o Orquestrador coordena as compensações necessárias. Depois de confirmá-las, pede a Reservas que grave `FALHA_CONFIRMACAO`. Uma resposta perdida exige recuperar o resultado com a mesma chave e conteúdo.
 
 ## 7. Fluxo C - expiração por falta de decisão
 
@@ -158,20 +161,20 @@ O cancelamento é permitido antes da retirada física enquanto a reserva estiver
 | Estado no pedido de cancelamento | Comportamento |
 |---|---|
 | `SOLICITADA` | Reservas cancela localmente, sem chamar Estoque ou Retiradas, e grava `CANCELADA`. |
-| `EM_CONFIRMACAO` | Reservas registra `CANCELAMENTO_EM_ANDAMENTO`, interrompe etapas futuras e coordena a compensação dos efeitos que já tenham sido confirmados. Só grava `CANCELADA` após concluir as operações aplicáveis. |
-| `CONFIRMADA` | Reservas registra `CANCELAMENTO_EM_ANDAMENTO`, pede a Retiradas que cancele a autorização e, somente após confirmar a revogação, pede a Estoque que libere a alocação. Só grava `CANCELADA` após confirmar as operações aplicáveis; se a retirada vencer, segue o fluxo da seção 9. |
+| `EM_CONFIRMACAO` | O Orquestrador reconcilia comandos de confirmação já emitidos. Reservas valida o pedido e grava `CANCELAMENTO_EM_ANDAMENTO` quando aplicável. O Orquestrador coordena a reversão e pede a Reservas que finalize após confirmar os efeitos. |
+| `CONFIRMADA` | O Orquestrador pede a Reservas que inicie o cancelamento. Confirma a revogação em Retiradas antes de solicitar a liberação em Estoque. Reservas só grava `CANCELADA` após as operações aplicáveis. Se a retirada vencer, segue-se o fluxo da seção 9. |
 | `CANCELAMENTO_EM_ANDAMENTO` | Não inicia um segundo cancelamento concorrente. Retorna o estado atual e permite consultar o andamento. |
 | `REJEITADA`, `CANCELADA`, `EXPIRADA`, `FALHA_CONFIRMACAO` ou `RETIRADA` | Recusa o cancelamento adicional porque a reserva está em estado terminal. |
 
-O sistema não comunica `CANCELADA` antes de confirmar a revogação da autorização e a liberação da alocação quando esses efeitos existirem. Timeout de uma chamada não prova que a operação remota falhou; Reservas mantém o cancelamento pendente e repete o mesmo comando com a mesma `Idempotency-Key` e conteúdo para recuperar a resposta original.
+O sistema não comunica `CANCELADA` antes de confirmar a revogação da autorização e a liberação da alocação quando esses efeitos existirem. Após timeout, o Orquestrador mantém o cancelamento pendente e repete o mesmo comando com a mesma `Idempotency-Key` e conteúdo para recuperar a resposta original.
 
 ## 9. Fluxo E - retirada física
 
-1. O profissional da unidade apresenta/valida a autorização da reserva no serviço de Retiradas.
+1. O profissional solicita o registro da entrega pelo BFF Unidade, que encaminha a operação diretamente a Retiradas.
 2. Retiradas obtém `reservaId` da autorização e consulta `GET /internal/v1/reservas/{reservaId}/estado`. Só prossegue com estado canônico `CONFIRMADA`; timeout, indisponibilidade, reserva inexistente ou outro estado impedem a entrega naquele momento. Na transação local, revalida que a autorização corresponde à unidade e à reserva e não foi revogada nem usada.
 3. Retiradas registra a entrega física uma única vez em seu próprio banco e grava `retirada.concluida.v1` na mesma transação local, pela Outbox.
-4. A Outbox publica o evento no RabbitMQ. Reservas e Estoque recebem cópias por filas duráveis independentes.
-5. Reservas deduplica por `eventId` e atualiza o estado de negócio de `CONFIRMADA` ou `CANCELAMENTO_EM_ANDAMENTO` para `RETIRADA` em seu próprio banco. No segundo caso, encerra a execução de cancelamento como `INTERROMPIDA` e registra a auditoria correspondente, na mesma transação local da deduplicação e da atualização da reserva.
+4. A Outbox publica o evento no RabbitMQ. Reservas, Estoque e Orquestrador recebem cópias por filas duráveis independentes.
+5. Reservas deduplica por `eventId` e atualiza o estado de negócio de `CONFIRMADA` ou `CANCELAMENTO_EM_ANDAMENTO` para `RETIRADA` em seu próprio banco. O Orquestrador deduplica sua cópia e a usa para reconciliar eventual cancelamento em seu próprio banco.
 6. Estoque deduplica por `eventId`, valida a alocação ativa pelo `reservaId` e confere `unidadeId`, `itemId` e `quantidade`. Em uma única transação local, registra a saída física, baixa a quantidade, encerra a alocação e grava `estoque.retirada-baixada.v1` na sua Outbox.
 7. A projeção de disponibilidade consome `estoque.retirada-baixada.v1` e atualiza sua leitura.
 
@@ -181,7 +184,7 @@ Durante o processamento assíncrono pode haver um intervalo em que Retiradas já
 
 Se a entrega física for registrada primeiro, um cancelamento concorrente deve ser recusado. Se o cancelamento da autorização concluir primeiro, a autorização não pode ser usada para registrar a entrega. Retiradas serializa essas operações para que somente um resultado vença. A consulta não bloqueia a Reserva: a corrida continua possível se o cancelamento começar depois da leitura de `CONFIRMADA`, conforme o documento 00, seção 9.8.
 
-Quando a retirada vence, Reservas não envia `LiberarAlocacao`: Estoque baixa o físico e encerra a alocação como consumida ao processar o evento. Respostas tardias ou retries não podem retomar a execução de cancelamento encerrada nem mudar a reserva de `RETIRADA` para `CANCELADA`. O tratamento da execução está detalhado no documento 06, seção 5.3.
+Quando a retirada vence, o Orquestrador encerra o cancelamento como `INTERROMPIDA` e mantém a alocação para a baixa física. Estoque baixa o físico e encerra a alocação como consumida ao processar o evento. Respostas tardias ou retries não podem retomar a execução de cancelamento encerrada nem mudar a reserva de `RETIRADA` para `CANCELADA`. O tratamento da execução está detalhado no documento 06, seção 5.3.
 
 ## 10. Estados de negócio
 
@@ -194,9 +197,9 @@ O estado de negócio pertence a Reservas. Os estados internos da SAGA são difer
 | `SOLICITADA` | Unidade aceita dentro do prazo | `EM_CONFIRMACAO` | Não |
 | `SOLICITADA` | Cidadão cancela ou profissional cancela com justificativa | `CANCELADA` | Sim |
 | `SOLICITADA` | Prazo vence antes de uma decisão concorrente | `EXPIRADA` | Sim |
-| `EM_CONFIRMACAO` | Confirmação da SAGA concluída | `CONFIRMADA` | Não |
+| `EM_CONFIRMACAO` | Alocação e autorização confirmadas, com finalização em Reservas | `CONFIRMADA` | Não |
 | `EM_CONFIRMACAO` | Falha final com compensações concluídas | `FALHA_CONFIRMACAO` | Sim |
-| `EM_CONFIRMACAO` | Cancelamento solicitado | `CANCELAMENTO_EM_ANDAMENTO` | Não |
+| `EM_CONFIRMACAO` | Cancelamento autorizado após reconciliação dos comandos já emitidos | `CANCELAMENTO_EM_ANDAMENTO` | Não |
 | `CONFIRMADA` | Cancelamento solicitado | `CANCELAMENTO_EM_ANDAMENTO` | Não |
 | `CANCELAMENTO_EM_ANDAMENTO` | Operações aplicáveis de cancelamento confirmadas | `CANCELADA` | Sim |
 | `CANCELAMENTO_EM_ANDAMENTO` | `retirada.concluida.v1` comprova que a retirada física venceu o cancelamento | `RETIRADA` | Sim |
@@ -210,7 +213,7 @@ Regras invariantes:
 - `CONFIRMADA` só é registrada após a alocação e a preparação da autorização estarem confirmadas.
 - O estoque não é alocado na criação da solicitação; a alocação ocorre depois do aceite.
 - Somente Retiradas registra a entrega física. Somente Estoque altera saldo físico e alocação. Somente Reservas altera o estado de negócio da solicitação.
-- Cancelamento nunca é aceito depois da entrega física ser registrada.
+- Uma entrega já registrada impede que o cancelamento termine em `CANCELADA`.
 - Uma solicitação terminal não volta a um estado anterior.
 - A repetição de comandos ou eventos não pode duplicar solicitações, alocações, cancelamentos, entregas ou baixas.
 
@@ -239,7 +242,7 @@ Os contratos HTTP devem distinguir o resultado de negócio de falhas técnicas. 
 - Os comandos internos da SAGA usam `sagaId`, `reservaId` e chave idempotente estável; detalhes estão no documento 06.
 - Uma entrega é única por autorização/reserva. Retentativas não geram novo `retiradaId` nem nova baixa.
 - Consumidores de eventos deduplicam pelo `eventId` e confirmam efeitos de negócio em transação local.
-- A fila de Reservas e a fila de Estoque para `retirada.concluida.v1` são independentes. Um consumidor não pode retirar a mensagem da fila compartilhada e impedir que o outro serviço receba o fato.
+- Reservas, Estoque e Orquestrador recebem `retirada.concluida.v1` em filas independentes e aplicam seus efeitos em transações locais.
 - Comandos de alocação usam o modelo de escrita canônico de Estoque. A projeção de disponibilidade nunca é autoridade para reservar quantidade.
 
 ## 13. Auditoria e informações apresentadas
@@ -268,7 +271,7 @@ O fluxo está de acordo com as decisões compartilhadas quando:
 - cidadão pode cancelar a própria solicitação ativa antes da entrega; profissional da unidade também pode cancelar, com justificativa registrada;
 - cancelamento bem-sucedido só leva a `CANCELADA` após as operações aplicáveis serem confirmadas; se a retirada vencer, a reserva termina em `RETIRADA` e a execução de cancelamento em `INTERROMPIDA`;
 - a retirada física é registrada em Retiradas e comunicada por `retirada.concluida.v1` via Outbox;
-- Reservas e Estoque recebem o evento em filas separadas e atualizam somente seus próprios bancos;
+- Reservas, Estoque e Orquestrador recebem o evento em filas separadas e atualizam somente seus próprios bancos;
 - Estoque baixa a quantidade e encerra a alocação em uma transação local idempotente;
 - estados terminais não podem ser reabertos e cada operação é protegida contra duplicidade;
 - os contratos HTTP distinguem resultados de negócio, autorização e falhas técnicas.
