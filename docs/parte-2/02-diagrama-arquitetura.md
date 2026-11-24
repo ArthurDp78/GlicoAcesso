@@ -1,246 +1,101 @@
 # GlicoAcesso - diagrama da arquitetura
 
-**Etapa:** 2 — Arquitetura  
-**Documento:** 02 - Diagrama de arquitetura  
-**Versão:** 1.0  
-**Situação:** representação dos componentes e das comunicações definidos nos documentos 00 e 01  
-**Documento normativo:** [00 - Decisões arquiteturais compartilhadas](./00-decisoes-compartilhadas.md)  
-**Documento complementar:** [01 - Decomposição e fronteiras dos microsserviços](./01-microsservicos.md)  
-**Última revisão:** 20 de outubro de 2026
+**Etapa:** 2 — Arquitetura\
+**Documento:** 02 - Diagrama de arquitetura\
+**Versão:** 1.1\
+**Última revisão:** 24 de novembro de 2026
 
-> Este documento representa visualmente a arquitetura lógica do GlicoAcesso. Os limites dos serviços, as responsabilidades, os identificadores, os estados e os eventos são os definidos nos documentos 00 e 01. Se um desenho aqui parecer contradizê-los, prevalecem os documentos 00 e 01.
+O diagrama mostra a arquitetura lógica do GlicoAcesso. As fronteiras e responsabilidades seguem os documentos [00 - Decisões arquiteturais compartilhadas](./00-decisoes-compartilhadas.md) e [01 - Microsserviços](./01-microsservicos.md).
 
-## 1. Objetivo e escopo
-
-O requisito 4.1 do enunciado pede um diagrama de componentes e de comunicação entre os serviços. Este documento apresenta:
-
-- os dois clientes e o caminho de entrada por API Gateway e BFFs;
-- os quatro microsserviços de domínio;
-- as chamadas síncronas internas necessárias ao fluxo;
-- os eventos assíncronos publicados pela Outbox e consumidos por filas independentes;
-- o banco PostgreSQL próprio de cada serviço.
-
-O diagrama é lógico e mostra responsabilidades e fluxos. Ele não representa implantação física, quantidade de réplicas, portas, endereços de rede, configuração de cluster, esquema de tabelas ou especificações completas de API. Esses detalhes pertencem aos documentos de Gateway, BFFs, OpenAPI, bancos, consistência, Outbox e CQRS.
-
-## 2. Componentes da arquitetura
-
-| Componente | Tipo | Responsabilidade no sistema | Acesso a dados |
-|---|---|---|---|
-| Cliente Cidadão | Cliente | Consultar unidades e disponibilidade; criar, acompanhar e cancelar a própria solicitação conforme as regras de estado. | Não acessa bancos nem microsserviços diretamente. |
-| Cliente da Unidade | Cliente | Consultar solicitações da unidade, decidir sobre elas, administrar estoque e registrar retiradas autorizadas conforme permissões. | Não acessa bancos nem microsserviços diretamente. |
-| API Gateway | Componente de entrada | Receber as chamadas externas e encaminhar cada público ao BFF correspondente; aplicar responsabilidades transversais definidas no documento 03. | Não possui dados de domínio e não coordena a SAGA. |
-| BFF Cidadão | Backend de apresentação | Compor as consultas e operações necessárias à experiência do cidadão. | Consome APIs dos serviços; não acessa bancos e não é dono de regras de domínio. |
-| BFF Unidade | Backend de apresentação | Compor consultas e operações de trabalho da equipe da unidade. | Consome APIs dos serviços; não acessa bancos e não coordena a SAGA. |
-| Unidades | Microsserviço de domínio | Manter cadastro e informações de atendimento da unidade, além do prazo de análise configurado. | Único proprietário dos dados de Unidades em sua instância PostgreSQL. |
-| Estoque | Microsserviço de domínio | Manter catálogo, saldo físico, movimentações, alocações, configuração de permissão de reserva e projeção de disponibilidade. | Único proprietário dos dados de Estoque em sua instância PostgreSQL. |
-| Reservas | Microsserviço de domínio | Manter solicitações e estados de negócio; coordenar a SAGA de confirmação e o cancelamento distribuído. | Único proprietário dos dados de Reservas e do registro durável da SAGA em sua instância PostgreSQL. |
-| Retiradas | Microsserviço de domínio | Preparar/cancelar autorizações e registrar a entrega presencial. | Único proprietário dos dados de Retiradas em sua instância PostgreSQL. |
-| RabbitMQ | Broker de eventos | Transportar eventos publicados por serviços para consumidores independentes. | Não é fonte de verdade de dados de domínio. |
-| Provedor de identidade | Componente externo opcional | Autenticar atores e fornecer identificadores estáveis. | Credenciais e tokens não são armazenados nos bancos dos microsserviços. |
-
-Gateway, BFFs, RabbitMQ e provedor de identidade não são microsserviços de domínio adicionais. A decomposição de domínio continua contendo somente Unidades, Estoque, Reservas e Retiradas.
-
-## 3. Caminho das chamadas dos clientes
-
-As chamadas externas seguem o caminho **cliente → API Gateway → BFF do público → APIs dos serviços de domínio**. O Gateway não expõe as APIs internas dos microsserviços aos clientes.
+## 1. Visão geral
 
 ```mermaid
-flowchart TB
-    C["Cliente Cidadão"] --> G["API Gateway"]
-    P["Cliente da Unidade"] --> G
-    G --> BC["BFF Cidadão"]
-    G --> BU["BFF Unidade"]
-    BC --> U["Unidades"]
-    BC --> E["Estoque"]
-    BC --> R["Reservas"]
-    BU --> U
-    BU --> E
-    BU --> R
-    BU --> T["Retiradas"]
+flowchart LR
+    C["Cliente cidadão"] --> G["API Gateway"]
+    P["Cliente da unidade"] --> G
+
+    subgraph BFFS["Apresentação"]
+        BC["BFF Cidadão"]
+        BU["BFF Unidade"]
+    end
+
+    G --> BC
+    G --> BU
+
+    subgraph COORD["Coordenação"]
+        O["Orquestrador da SAGA<br/>PostgreSQL próprio"]
+    end
+
+    subgraph DOM["Microsserviços de domínio"]
+        U["Unidades<br/>PostgreSQL próprio"]
+        R["Reservas<br/>PostgreSQL próprio"]
+        E["Estoque · CQRS<br/>PostgreSQL próprio"]
+        T["Retiradas<br/>PostgreSQL próprio"]
+    end
+
+    BC -->|"Consultas e operações locais"| DOM
+    BU -->|"Consultas e operações locais"| DOM
+    BC -->|"Cancelamento distribuído"| O
+    BU -->|"Confirmação e cancelamento distribuído"| O
+    O --> R
+    O --> E
+    O --> T
+
+    MQ["RabbitMQ<br/>Mensageria compartilhada"]
+    T -.->|"Retirada concluída"| MQ
+    MQ -.-> R
+    MQ -.->|"Baixa física"| E
+    MQ -.->|"Reconciliação"| O
+    E -.->|"Eventos de estoque"| MQ
+    MQ -.->|"Projeção CQRS"| E
+
+    classDef coordenacao fill:#eaf5ef,stroke:#287452,color:#143927
+    classDef mensageria fill:#fff4df,stroke:#a76a14,color:#543407
+    class O coordenacao
+    class MQ mensageria
 ```
 
-| Público | BFF encaminhado pelo Gateway | Serviços de domínio que podem ser consultados pelo BFF |
-|---|---|---|
-| Cidadão | BFF Cidadão | Unidades, Estoque e Reservas. |
-| Profissional da unidade | BFF Unidade | Unidades, Estoque, Reservas e Retiradas. |
-
-O diagrama indica capacidades de comunicação, não que cada tela chame todos os serviços. Cada BFF chama somente os serviços necessários à operação solicitada. A autorização é validada na borda e também pelos serviços responsáveis pela operação; o BFF não é a única barreira de autorização.
-
-As APIs públicas seguem os prefixos /api/cidadao/v1 e /api/unidade/v1. As chamadas entre serviços usam rotas internas versionadas sob /internal/v1, que não são publicadas pelo Gateway. Os endpoints e suas respostas são definidos nos arquivos OpenAPI e nos documentos 03, 04 e 07.
-
-## 4. Comunicação entre os microsserviços
-
-Há dois tipos de comunicação entre os serviços:
-
-- **REST interno síncrono:** usado quando o serviço precisa de uma decisão ou resposta imediata do proprietário da informação;
-- **eventos RabbitMQ assíncronos:** usados para comunicar fatos que já foram confirmados localmente e atualizar estados derivados ou projeções.
-
-```mermaid
-flowchart TB
-    R["Reservas"]
-    U["Unidades"]
-    E["Estoque"]
-    T["Retiradas"]
-    MQ["RabbitMQ"]
-    Qr["Fila durável de Reservas"]
-    Qe["Fila durável de Estoque"]
-    Qp["Fila da projeção de disponibilidade"]
-
-    R -->|"REST interno: consultar prazoAnalise"| U
-    R -->|"REST interno: validar permissão e alocar/liberar"| E
-    R -->|"REST interno: preparar/cancelar autorização"| T
-    T -->|"REST interno: consultar estado antes da entrega"| R
-    T -->|"Outbox: retirada.concluida.v1"| MQ
-    MQ --> Qr
-    MQ --> Qe
-    Qr -->|"atualiza status da reserva"| R
-    Qe -->|"baixa saldo e encerra alocação"| E
-    E -->|"Outbox: estoque.retirada-baixada.v1"| MQ
-    MQ --> Qp
-    Qp -->|"atualiza leitura"| E
-```
-
-### 4.1 Chamadas internas de Reservas
-
-Reservas mantém o controle do fluxo de negócio, mas não grava dados nos bancos dos participantes:
-
-1. Ao criar uma solicitação, consulta Estoque para validar se a unidade permite reservar aquele item e consulta Unidades para obter o prazo de análise. Depois, grava SOLICITADA e o instante limite decisaoAte em seu próprio banco.
-2. Após a aceitação pela unidade, inicia a SAGA e envia comandos internos idempotentes a Estoque e Retiradas.
-3. Estoque valida e cria a alocação no seu banco.
-4. Retiradas prepara a autorização no seu banco.
-5. Reservas grava CONFIRMADA somente após confirmar os efeitos exigidos das duas etapas.
-
-Unidades participa da validação inicial da solicitação, mas não é participante da SAGA de confirmação.
-
-### 4.2 Evento de retirada física e baixa de estoque
-
-O registro de entrega física ocorre em Retiradas, na mesma transação local que grava o evento retirada.concluida.v1 na sua Outbox. Após o commit, o publicador envia o evento ao RabbitMQ.
-
-Esse evento tem **dois consumidores independentes**, cada um com sua própria fila durável:
-
-- **Reservas** consome o evento e atualiza o status da reserva de CONFIRMADA ou CANCELAMENTO_EM_ANDAMENTO para RETIRADA. Se a retirada venceu o cancelamento, encerra a execução de cancelamento como INTERROMPIDA, atomicamente com a deduplicação, a atualização da reserva e a auditoria, conforme o documento 00, seção 9.3.
-- **Estoque** consome o evento e, em uma transação local idempotente, valida a alocação vinculada ao reservaId, registra a saída física, encerra a alocação e grava estoque.retirada-baixada.v1 na própria Outbox.
-
-A projeção de disponibilidade consome estoque.retirada-baixada.v1 para refletir a redução do estoque físico e o encerramento da alocação. A fila de Reservas e a fila de Estoque não podem ser compartilhadas como uma única fila de consumidores concorrentes: ambos os serviços precisam receber o fato.
-
-Nenhum desses passos autoriza um serviço a gravar no banco de outro. Retiradas é a autoridade do registro da entrega; Estoque é a autoridade da quantidade e da alocação; Reservas é a autoridade do estado da solicitação.
-
-## 5. Bancos e propriedade dos dados
-
-Cada microsserviço tem uma instância PostgreSQL independente. As setas abaixo indicam propriedade e gravação local, não compartilhamento de banco.
-
-```mermaid
-flowchart TB
-    subgraph BU["Fronteira do serviço Unidades"]
-        U["Microsserviço Unidades"] --> DBU[("PostgreSQL de Unidades")]
-    end
-
-    subgraph BE["Fronteira do serviço Estoque"]
-        E["Microsserviço Estoque"] --> DBE[("PostgreSQL de Estoque")]
-    end
-
-    subgraph BR["Fronteira do serviço Reservas"]
-        R["Microsserviço Reservas"] --> DBR[("PostgreSQL de Reservas")]
-    end
-
-    subgraph BT["Fronteira do serviço Retiradas"]
-        T["Microsserviço Retiradas"] --> DBT[("PostgreSQL de Retiradas")]
-    end
-```
-
-| Banco | Único serviço autorizado a gravar | Exemplos de dados sob sua propriedade |
-|---|---|---|
-| PostgreSQL de Unidades | Unidades | Cadastro, endereço, horários, informações de atendimento e prazo de análise. |
-| PostgreSQL de Estoque | Estoque | Catálogo, saldo físico, movimentações, permissão de reserva, alocações, projeções, Inbox de consumidores e Outbox de eventos de Estoque. |
-| PostgreSQL de Reservas | Reservas | Solicitações, status, decisões, auditoria e estado durável das execuções da SAGA. |
-| PostgreSQL de Retiradas | Retiradas | Autorizações, cancelamentos e registros das entregas presenciais, além de sua Outbox para retirada.concluida.v1. |
-
-Não há chave estrangeira entre instâncias. Uma relação com dados de outro serviço é representada por identificador estável, como unidadeId, itemId ou reservaId, e validada por contrato ou evento. Uma API, BFF, consumidor RabbitMQ ou job não pode contornar essa regra consultando diretamente outro banco.
-
-## 6. Fluxos representados
-
-### 6.1 Consulta e criação da solicitação
-
-1. O cidadão consulta unidades e disponibilidade pelo BFF Cidadão.
-2. O BFF pode combinar informações de Unidades e da projeção de disponibilidade de Estoque.
-3. A disponibilidade é informativa e pode estar alguns segundos atrasada.
-4. Ao solicitar um item, Reservas valida a permissão com Estoque e obtém o prazo de análise com Unidades.
-5. Reservas grava a solicitação em seu próprio banco como SOLICITADA. A consulta de disponibilidade não reserva nem garante a quantidade.
-
-### 6.2 Confirmação da reserva
-
-1. O profissional da unidade aceita a solicitação no BFF Unidade.
-2. Reservas grava a decisão e inicia sua SAGA durável.
-3. Reservas solicita a alocação a Estoque.
-4. Se Estoque confirmar a alocação, Reservas solicita a preparação da autorização a Retiradas.
-5. Se as duas operações forem confirmadas, Reservas grava CONFIRMADA.
-6. Se uma etapa posterior falhar, Reservas coordena somente as compensações necessárias, em ordem inversa aos efeitos concluídos. O detalhamento está no documento 06.
-
-### 6.3 Cancelamento antes da retirada física
-
-O cancelamento de uma reserva ativa é coordenado por Reservas. Se houver efeitos distribuídos, Reservas solicita o cancelamento da autorização a Retiradas e a liberação da alocação a Estoque. A reserva só passa a CANCELADA depois da confirmação das operações aplicáveis. O conflito entre cancelar e registrar a entrega é serializado em Retiradas.
-
-### 6.4 Registro da retirada física
-
-Retiradas consulta `GET /internal/v1/reservas/{reservaId}/estado` e exige o estado canônico CONFIRMADA; timeout, indisponibilidade ou outro estado impedem a entrega naquele momento. Depois, revalida a autorização local, serializando com a revogação, e grava entrega e retirada.concluida.v1 na Outbox, na mesma transação. Reservas e Estoque recebem o evento em filas separadas. Reservas atualiza o status para RETIRADA; Estoque baixa o saldo e encerra a alocação. A baixa de Estoque gera estoque.retirada-baixada.v1 para atualizar a projeção de disponibilidade.
-
-## 7. Consistência, duplicidade e recuperação
-
-- Cada gravação de negócio pertence ao serviço dono dos dados e é confirmada em transação local.
-- Não existe transação ACID distribuída entre os quatro bancos.
-- O RabbitMQ entrega mensagens pelo menos uma vez. Uma mensagem pode ser recebida mais de uma vez.
-- Todo consumidor deve deduplicar pelo eventId e executar seus efeitos de forma idempotente.
-- O consumidor de Estoque deve gravar a deduplicação, a baixa física, o encerramento da alocação e a nova linha de Outbox na mesma transação local.
-- Se a alocação não corresponder ao evento de retirada, Estoque não faz uma baixa parcial ou arbitrária; a ocorrência deve ficar observável para reconciliação e reprocessamento.
-- Se um serviço estiver temporariamente indisponível, a mensagem permanece recuperável por retry/backoff ou pelo mecanismo de falha operacional definido no documento 11.
-- A disponibilidade de leitura pode ficar defasada em relação ao modelo de escrita. A resposta deve informar atualizadoEm; a alocação sempre valida o saldo canônico no modelo de escrita de Estoque.
-- Depois da retirada, a alocação permanece ativa até Estoque consumir o evento. Durante esse intervalo, a quantidade não pode voltar a ser oferecida para outra reserva.
-
-O objetivo para atualização de projeções é até 5 segundos em condições normais. Atrasos acima desse limite devem ser sinalizados e monitorados, conforme os documentos 10–12.
-
-## 8. Convenções de leitura do diagrama
-
-| Elemento ou rótulo | Significado |
+| Elemento | Como ler |
 |---|---|
-| Seta de cliente para Gateway | Chamada externa do cliente. |
-| Seta de Gateway para BFF | Encaminhamento conforme o público e a rota pública. |
-| Seta de Reservas para outro serviço com rótulo REST interno | Chamada síncrona e versionada usada para validar ou executar um comando. |
-| Seta de serviço para RabbitMQ com rótulo Outbox | Fato gravado localmente e publicado de modo assíncrono pelo padrão Outbox. |
-| Fila durável separada por consumidor | Cada serviço recebe sua própria cópia lógica do evento; os consumidores não competem pela mensagem. |
-| Seta de um serviço para seu PostgreSQL | O serviço é o único proprietário e gravador daquele banco. |
+| Seta contínua | Chamada HTTP. As setas que saem do Orquestrador representam comandos internos da SAGA. |
+| Seta tracejada | Evento assíncrono publicado ou entregue pelo RabbitMQ. |
+| PostgreSQL próprio | Cada serviço indicado possui uma instância independente. O Orquestrador guarda as execuções e etapas. Reservas guarda o estado da solicitação. |
 
-Os diagramas não indicam uma chamada direta entre bancos, uma transação compartilhada ou um acesso do cliente aos microsserviços sem passar pelo Gateway e pelo BFF.
+As setas dos BFFs para o grupo de domínio resumem os destinos. A tabela abaixo especifica quais serviços cada BFF usa.
 
-## 9. Decisões de implantação que ainda não estão neste documento
+## 2. Caminhos de entrada
 
-Este desenho não fixa linguagem, framework, endereço de rede, porta, topologia de cluster RabbitMQ, nomes físicos de filas, número de réplicas, serviço de descoberta ou formato de deployment. Essas escolhas podem ser definidas em documentos posteriores, desde que preservem:
+| BFF | Consultas e operações locais | Operações coordenadas |
+|---|---|---|
+| Cidadão | Unidades, Estoque e Reservas. | Cancelamento distribuído. |
+| Unidade | Unidades, Estoque, Reservas e Retiradas. | Confirmação e cancelamento distribuído. |
 
-- as quatro fronteiras de domínio;
-- um PostgreSQL independente por microsserviço;
-- o Gateway como ponto de entrada para os dois BFFs;
-- a coordenação da SAGA por Reservas;
-- eventos publicados por Outbox e consumidores idempotentes;
-- ausência de leitura ou gravação cruzada entre bancos.
+O API Gateway publica as rotas dos BFFs. Consultas, criação, rejeição e cancelamento de solicitação pendente sem efeitos distribuídos vão ao serviço responsável. O BFF Unidade registra a entrega no balcão diretamente em Retiradas. Na confirmação, Reservas valida e grava o aceite e a transição final para `CONFIRMADA`. O Orquestrador solicita essas transições, a alocação em Estoque e a preparação da autorização em Retiradas.
 
-## 10. Critério de conformidade
+### Validações internas
 
-O diagrama está de acordo com a arquitetura quando:
+Essas chamadas HTTP complementam as setas do diagrama macro:
 
-- mostra exatamente os quatro microsserviços de domínio: Unidades, Estoque, Reservas e Retiradas;
-- representa os clientes passando pelo Gateway e pelo BFF correspondente;
-- não expõe as APIs internas diretamente aos clientes;
-- mostra chamadas internas de Reservas a Unidades, Estoque e Retiradas conforme o fluxo definido;
-- representa RabbitMQ como comunicação por eventos, sem transferir a coordenação da SAGA para o broker;
-- mostra retirada.concluida.v1 chegando a Reservas e Estoque por filas duráveis independentes;
-- mostra Estoque gerando estoque.retirada-baixada.v1 para a projeção de disponibilidade;
-- representa uma instância PostgreSQL independente para cada serviço;
-- não contém setas de acesso de um serviço ao banco de outro;
-- preserva os estados, eventos e identificadores do documento 00.
+| Origem | Destino | Validação |
+|---|---|---|
+| Reservas | Unidades | Unidade ativa e prazo de análise. |
+| Reservas | Estoque | Permissão canônica para reservar o item na unidade. |
+| Retiradas | Reservas | Estado canônico `CONFIRMADA` antes do registro da entrega. |
 
-## 11. Referências
+## 3. RabbitMQ e filas
 
-- [00 - Decisões arquiteturais compartilhadas](./00-decisoes-compartilhadas.md): contrato normativo de serviços, estados, identificadores, SAGA, eventos, Outbox e CQRS.
-- [01 - Decomposição e fronteiras dos microsserviços](./01-microsservicos.md): justificativa e responsabilidades detalhadas dos serviços.
-- [05 - Fluxo de reservas](./05-fluxo-reservas.md): fluxo de negócio e estados, previsto na estrutura da Etapa 2.
-- [06 - SAGA](./06-saga.md): confirmação, falhas, compensações e recuperação, previsto na estrutura da Etapa 2.
-- [03 - API Gateway](./03-api-gateway.md) e [04 - BFFs](./04-bffs.md): roteamento e composição das chamadas dos clientes, previstos na estrutura da Etapa 2.
+Retiradas publica `retirada.concluida.v1` pela Outbox. O RabbitMQ entrega uma cópia em cada fila durável:
+
+| Consumidor | Efeito |
+|---|---|
+| Reservas | Atualiza o estado da solicitação para `RETIRADA` quando aplicável. |
+| Estoque | Registra a baixa física e encerra a alocação como consumida. |
+| Orquestrador | Reconcilia um eventual cancelamento em andamento. |
+
+Estoque publica seus próprios eventos pela Outbox. A projeção de disponibilidade os recebe em outra fila e atualiza o modelo de leitura do CQRS. A escrita canônica e a projeção ficam em tabelas distintas do PostgreSQL de Estoque.
+
+## 4. Detalhes dos fluxos
+
+- [Fluxo de reservas](./05-fluxo-reservas.md) e [SAGA](./06-saga.md)
+- [API Gateway](./03-api-gateway.md) e [BFFs](./04-bffs.md)
+- [Bancos](./09-bancos.md), [Outbox e Inbox](./11-outbox.md) e [CQRS](./12-cqrs.md)
