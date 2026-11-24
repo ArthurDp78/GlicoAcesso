@@ -12,13 +12,14 @@ from pydantic import BaseModel, Field, ValidationError
 from servicos.banco import BancoIndisponivel, conectar
 from servicos.contratos_reserva import PedidoReserva, ReservaInterna
 from servicos.http import cliente_http, consultar
-from servicos.identidade_demo import cidadao_autenticado
+from servicos.identidade_demo import Ator, AtorAutenticado, cidadao_autenticado, profissional_autenticado
 
 
 app = FastAPI(title="GlicoAcesso — Reservas", lifespan=cliente_http)
 BANCO = "RESERVAS_DATABASE_URL"
 OPERACAO = "criar-reserva"
 Cidadao = Annotated[str, Depends(cidadao_autenticado)]
+Profissional = Annotated[Ator, Depends(profissional_autenticado)]
 Chave = Annotated[str, Header(alias="Idempotency-Key", min_length=1, max_length=128)]
 CAMPOS = """
     reserva_id AS "reservaId", cidadao_id AS "cidadaoId",
@@ -78,17 +79,35 @@ async def verificar_dependencia(cliente, url: str, token: str, modelo):
         raise HTTPException(502, "A validação retornou dados incompatíveis.") from erro
 
 
-async def verificar_pedido(request: Request, pedido: PedidoReserva) -> int:
+def token_interno() -> str:
     token = os.environ.get("GLICO_RESERVAS_SERVICE_TOKEN", "")
     if len(token) < 32:
         raise HTTPException(503, "Credencial interna de Reservas não configurada.")
+    return token
+
+
+async def unidade_ativa(request: Request, unidade_id: UUID) -> UnidadeParaReserva | None:
     unidades = os.environ.get("UNIDADES_URL", "http://127.0.0.1:8002").rstrip("/")
+    unidade = await verificar_dependencia(
+        request.app.state.http, f"{unidades}/internal/v1/unidades/{unidade_id}", token_interno(), UnidadeParaReserva
+    )
+    if unidade is None or unidade.unidadeId != unidade_id or not unidade.ativa:
+        return None
+    return unidade
+
+
+async def verificar_vinculo(request: Request, profissional: Ator) -> UUID:
+    if await unidade_ativa(request, profissional.unidadeId) is None:
+        raise HTTPException(403, "Profissional sem unidade ativa vinculada.")
+    return profissional.unidadeId
+
+
+async def verificar_pedido(request: Request, pedido: PedidoReserva) -> int:
+    token = token_interno()
     estoque = os.environ.get("ESTOQUE_URL", "http://127.0.0.1:8003").rstrip("/")
     cliente = request.app.state.http
-    unidade = await verificar_dependencia(
-        cliente, f"{unidades}/internal/v1/unidades/{pedido.unidadeId}", token, UnidadeParaReserva
-    )
-    if unidade is None or unidade.unidadeId != pedido.unidadeId or not unidade.ativa:
+    unidade = await unidade_ativa(request, pedido.unidadeId)
+    if unidade is None:
         raise HTTPException(422, "Unidade inexistente ou inativa.")
     permissao = await verificar_dependencia(
         cliente, f"{estoque}/internal/v1/unidades/{pedido.unidadeId}/itens/{pedido.itemId}/permissao-reserva",
@@ -142,14 +161,39 @@ async def criar(request: Request, response: Response, pedido: PedidoReserva, cid
     return await run_in_threadpool(persistir, cidadao, chave, resumo, pedido, prazo)
 
 
-@app.get("/internal/v1/reservas/{reservaId}", response_model=ReservaInterna)
-def consultar_reserva(reservaId: UUID, cidadao: Cidadao, response: Response):
-    response.headers["Cache-Control"] = "no-store"
+def buscar_reserva(reserva_id: UUID):
     with conectar(BANCO) as conexao:
-        registro = conexao.execute(
-            f"SELECT {CAMPOS} FROM reservas WHERE reserva_id = %s AND cidadao_id = %s",
-            (reservaId, cidadao),
-        ).fetchone()
+        return conexao.execute(f"SELECT {CAMPOS} FROM reservas WHERE reserva_id = %s", (reserva_id,)).fetchone()
+
+
+@app.get("/internal/v1/reservas/{reservaId}", response_model=ReservaInterna)
+async def consultar_reserva(request: Request, reservaId: UUID, ator: AtorAutenticado, response: Response):
+    response.headers["Cache-Control"] = "no-store"
+    unidade = await verificar_vinculo(request, ator) if ator.papel == "PROFISSIONAL" else None
+    registro = await run_in_threadpool(buscar_reserva, reservaId)
+    if ator.papel == "CIDADAO":
+        # Reserva alheia e inexistente são indistinguíveis para o cidadão.
+        if registro is None or registro["cidadaoId"] != ator.id:
+            raise HTTPException(404, "Reserva não encontrada.")
+        return registro
     if registro is None:
         raise HTTPException(404, "Reserva não encontrada.")
+    if registro["unidadeId"] != unidade:
+        raise HTTPException(403, "Reserva de outra unidade.")
     return registro
+
+
+def listar_pendentes_da_unidade(unidade_id: UUID):
+    with conectar(BANCO) as conexao:
+        return conexao.execute(f"""
+            SELECT {CAMPOS} FROM reservas
+            WHERE unidade_id = %s AND status = 'SOLICITADA'
+            ORDER BY decisao_ate, reserva_id
+        """, (unidade_id,)).fetchall()
+
+
+@app.get("/api/unidade/v1/reservas", response_model=list[ReservaInterna])
+async def listar_pendentes(request: Request, profissional: Profissional, response: Response):
+    response.headers["Cache-Control"] = "no-store"
+    unidade = await verificar_vinculo(request, profissional)
+    return await run_in_threadpool(listar_pendentes_da_unidade, unidade)

@@ -252,6 +252,23 @@ O BFF usa `RESERVAS_URL` com padrão `http://127.0.0.1:8004`. Se os serviços j�
 
 No portal, consulte **Tiras reagentes para glicemia**, clique em **Solicitar reserva**, informe o token do cidadão e envie a quantidade desejada. Copie o código retornado para acompanhar a solicitação. A criação retorna `201` e o estado `SOLICITADA`. A alocação de estoque ocorre no fluxo posterior de confirmação.
 
+### Profissional da unidade
+
+O profissional de demonstração usa um terceiro token, diferente dos outros dois, e fica vinculado a uma unidade. O vínculo é um atributo da identidade, como o papel. Por isso não fica gravado nos bancos de domínio. Antes de iniciar Reservas, acrescente:
+
+```powershell
+$env:GLICO_PROFISSIONAL_TOKEN = '<token do profissional>'
+$env:GLICO_PROFISSIONAL_UNIDADE_ID = '10000000-0000-4000-8000-000000000001'
+```
+
+A cada requisição, Reservas confere em Unidades se a unidade vinculada existe e está ativa. Se não estiver, responde `403`. Se o token do profissional for igual ao do cidadão, as operações autenticadas respondem `503`. Para listar as solicitações pendentes da unidade:
+
+```powershell
+Invoke-RestMethod 'http://127.0.0.1:8004/api/unidade/v1/reservas' -Headers @{ Authorization = 'Bearer <token do profissional>' }
+```
+
+A consulta `GET /internal/v1/reservas/{reservaId}` aceita o cidadão dono da reserva ou um profissional da mesma unidade. Um profissional de outra unidade recebe `403`. Um cidadão que não é o dono recebe `404`. O token do profissional não cria reservas (`403`), e o token do cidadão não acessa as rotas da unidade (`403`). O BFF e o portal da unidade chegam na subtarefa 2.6.
+
 ## Referências
 
 1. [International Diabetes Federation - Dados sobre diabetes no Brasil](https://diabetesatlas.org/es/data-by-location/country/brazil/).
