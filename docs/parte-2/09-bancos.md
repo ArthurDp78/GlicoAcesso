@@ -1,27 +1,28 @@
 # GlicoAcesso - Database per Service
 
-**Etapa:** 2 — Arquitetura  
-**Responsável:** Lana  
+**Etapa:** 2 — Arquitetura\
+**Responsável:** Lana\
 **Referências:** [decisões compartilhadas](./00-decisoes-compartilhadas.md), [fronteiras dos serviços](./01-microsservicos.md), [fluxo de reservas](./05-fluxo-reservas.md) e [SAGA](./06-saga.md).
 
 ## 1. Tecnologia e isolamento
 
-Cada microsserviço possui um banco PostgreSQL próprio e é o único responsável por acessá-lo. Os quatro domínios têm dados relacionais e precisam de transações locais, constraints e controle de concorrência. Persistência poliglota acrescentaria complexidade sem benefício claro para este escopo.
+Os quatro microsserviços de domínio e o Orquestrador da SAGA têm cinco instâncias PostgreSQL independentes. Cada serviço acessa apenas sua instância. PostgreSQL permite proteger dados relacionais e resultados idempotentes com transações locais, constraints e controle de concorrência. O Orquestrador usa essas mesmas garantias para persistir e retomar execuções.
 
 Não existem JOINs, consultas diretas, FKs ou transações ACID entre bancos de serviços diferentes. Identificadores externos são referências opacas; validações entre serviços acontecem pelas APIs e pelos fatos de integração já definidos no documento 00.
 
 | Banco / fonte canônica | Tabelas de domínio e operação |
 |---|---|
 | Unidades: cadastro e atendimento | `unidades`, `contatos_unidade`, `horarios_unidade`, `idempotencia_comandos` |
-| Estoque: catálogo, saldo e alocações | `itens`, `saldos`, `alocacoes`, `movimentacoes`, `idempotencia_comandos` |
-| Reservas: solicitação e orquestração | `reservas`, `saga_execucoes`, `saga_etapas`, `historico_reserva`, `idempotencia_comandos` |
-| Retiradas: autorização e entrega física | `autorizacoes`, `retiradas`, `idempotencia_comandos` |
+| Estoque: catálogo, saldo e alocações | `itens`, `saldos`, `alocacoes`, `movimentacoes`, `idempotencia_comandos`, `inbox`, `outbox`, `disponibilidade` |
+| Reservas: solicitação e histórico | `reservas`, `historico_reserva`, `idempotencia_comandos`, `inbox` |
+| Retiradas: autorização e entrega física | `autorizacoes`, `retiradas`, `idempotencia_comandos`, `outbox` |
+| Orquestrador: coordenação da SAGA | `saga_execucoes`, `saga_etapas`, `saga_pedidos_cancelamento`, `idempotencia_comandos`, `inbox` |
 
 Este documento modela a persistência de domínio e as estruturas necessárias para idempotência. Inbox, Outbox e a projeção CQRS são detalhadas nos documentos 10, 11 e 12; sua implementação mantém as mesmas garantias locais descritas aqui.
 
 ### Registro de idempotência dos comandos
 
-Cada serviço mantém em seu próprio banco `idempotencia_comandos`, com `operacao text`, `principalId text`, `idempotencyKey text`, `requestHash text`, `httpStatus integer`, `responseBody jsonb` e `createdAt timestamptz`, todos obrigatórios. A chave primária é `(operacao, principalId, idempotencyKey)`. O resultado HTTP conclusivo e o efeito de domínio são confirmados na mesma transação local. Reservas persiste também a chave da etapa da SAGA antes do envio; participantes guardam o resultado para replay. O conteúdo sensível da resposta segue os controles de acesso e retenção do recurso correspondente.
+Cada serviço mantém em seu próprio banco `idempotencia_comandos`, com `operacao text`, `principalId text`, `idempotencyKey text`, `requestHash text`, `httpStatus integer`, `responseBody jsonb` e `createdAt timestamptz`, todos obrigatórios. A chave primária é `(operacao, principalId, idempotencyKey)`. O resultado HTTP conclusivo e o efeito de domínio são confirmados na mesma transação local. O Orquestrador registra o resultado da recepção do pedido junto da execução ou do pedido de cancelamento durável. Também persiste a chave de cada comando de etapa antes do envio. Os participantes guardam o resultado para repetição idempotente. O conteúdo sensível da resposta segue os controles de acesso e retenção do recurso correspondente.
 
 Os campos `idempotencyKey` em `reservas`, `alocacoes` e `autorizacoes` identificam o comando de criação daquele registro. Comandos posteriores, como cancelamento e compensação, têm chaves próprias em `idempotencia_comandos`; não sobrescrevem a chave de criação.
 
@@ -85,7 +86,7 @@ A situação da alocação é representada pelos fatos já previstos no fluxo: e
 - Cada alteração do agregado de saldo, inclusive sua permissão, incrementa `estoqueVersion` na mesma transação. A versão é monotônica por `(unidadeId, itemId)` e fica reservada ao uso posterior pelo CQRS.
 - A aplicação serializa alterações do mesmo saldo por bloqueio da linha ou atualização condicional. Ela mantém `quantidadeAlocada` igual à soma das alocações ativas. Essa igualdade entre tabelas e a correspondência entre movimentação e alocação não são garantidas por um `CHECK` de linha.
 
-Referências externas sem FK: `unidadeId → Unidades`; `reservaId` e `sagaId → Reservas`; `retiradaId → Retiradas`; `atorId → identidade externa`. O vínculo de `itemId` é interno a Estoque, inclusive por meio da FK composta para `saldos`.
+Referências externas sem FK: `unidadeId → Unidades`; `reservaId → Reservas`; `sagaId → Orquestrador`; `retiradaId → Retiradas`; `atorId → identidade externa`. O vínculo de `itemId` é interno a Estoque, inclusive por meio da FK composta para `saldos`.
 
 ### Índices necessários
 
@@ -103,52 +104,27 @@ Contrato relacionado: [reserva.yaml](./api/reserva.yaml).
 | Tabela | Campos e tipos | PK / FKs internas |
 |---|---|---|
 | `reservas` | `reservaId`, `unidadeId`, `itemId uuid`; `cidadaoId text`; `quantidade integer`; `status text`; `prazoAnaliseHoras integer`; `criadaEm`, `decisaoAte`, `atualizadaEm timestamptz`; `idempotencyKey text`, obrigatórios. `decisao`, `decisaoAtorId text` e `decididaEm timestamptz`, opcionais até haver decisão. | PK `reservaId`. |
-| `saga_execucoes` | `sagaId`, `reservaId uuid`; `tipo`, `estado text`; `correlationId uuid`; `createdAt`, `updatedAt timestamptz`, obrigatórios. `etapaAtual`, `erroTecnico`, `motivoEncerramento text`; `encerradaEm timestamptz`; `eventId`, `retiradaId uuid`, opcionais conforme o progresso e a causa do encerramento. | PK `sagaId`; FK `reservaId → reservas.reservaId`. |
-| `saga_etapas` | `sagaId uuid`; `operacao`, `estadoTecnico`, `idempotencyKey text`; `dadosComando jsonb`; `tentativas integer`; `createdAt`, `updatedAt timestamptz`, obrigatórios. `ultimaTentativaEm`, `proximoRetryEm`, `efeitoConfirmadoEm timestamptz`; `resultado jsonb`, `erroTecnico text`, opcionais. | PK composta `(sagaId, operacao)`; FK `sagaId → saga_execucoes.sagaId`. |
-| `historico_reserva` | `historicoId`, `reservaId uuid`; `statusPosterior text`; `ocorridoEm timestamptz`, obrigatórios. `statusAnterior`, `atorId`, `justificativa`, `motivo text`; `sagaId`, `eventId`, `retiradaId uuid`, opcionais quando não aplicáveis. | PK `historicoId`; FK `reservaId → reservas.reservaId`; FK opcional `sagaId → saga_execucoes.sagaId`. |
+| `historico_reserva` | `historicoId`, `reservaId uuid`; `statusPosterior text`; `ocorridoEm timestamptz`, obrigatórios. `statusAnterior`, `atorId`, `justificativa`, `motivo text`; `sagaId`, `eventId`, `retiradaId uuid`, opcionais quando não aplicáveis. | PK `historicoId`; FK `reservaId → reservas.reservaId`. |
 
-`reservas` representa o negócio; `saga_execucoes` representa a coordenação técnica. Confirmação e cancelamento são execuções distintas da mesma reserva. `saga_etapas` persiste o comando lógico, sua chave, tentativas e evidências necessárias à retomada. Não se cria tabela adicional de tentativas HTTP.
+`historico_reserva` preserva as transições, os atores, a justificativa de cancelamento profissional e as referências à retirada ou à execução quando aplicável. `sagaId` é uma referência externa ao Orquestrador. `retiradaId` referencia Retiradas e `eventId` identifica o fato consumido. Essas referências não têm FK entre bancos.
 
-`historico_reserva` modela o histórico de transições e cancelamentos exigido pelo documento 01, seção 7.2, e os registros de auditoria detalhados no documento 05, seção 13. O documento 00, seção 9.3, também exige evidência da retirada e motivo do encerramento quando a entrega vence o cancelamento. Esses documentos exigem a preservação dos dados, sem determinar uma tabela específica; a tabela aqui apresentada atende a esse requisito. O ator vem da identidade autenticada; ações automáticas são identificadas pelo motivo e pela execução ou fato que as originou. Quando o histórico referencia uma SAGA, a aplicação valida que ela pertence à mesma reserva.
+### Estados e transações locais
 
-### Estados canônicos
+`reservas.status` e os estados do histórico usam o conjunto do documento 00: `SOLICITADA`, `EM_CONFIRMACAO`, `CONFIRMADA`, `CANCELAMENTO_EM_ANDAMENTO`, `CANCELADA`, `REJEITADA`, `EXPIRADA`, `FALHA_CONFIRMACAO` e `RETIRADA`. O estado anterior do histórico é nulo no registro inicial.
 
-`reservas.status` recebe `CHECK` restrito aos valores do documento 00 e do OpenAPI:
+- `quantidade > 0`, `prazoAnaliseHoras > 0` e `decisaoAte = criadaEm + prazoAnaliseHoras` em horas. A reserva preserva o prazo aplicado na criação.
+- `decisao` admite `ACEITAR` ou `REJEITAR` e é gravada com ator e instante. Expiração só atua em `SOLICITADA`.
+- Reservas registra cada transição, a auditoria e o resultado idempotente do comando na mesma transação local. Atualização condicional ou bloqueio da linha protege a máquina de estados. A gravação de `CONFIRMADA` é o ponto de compromisso.
+- No evento de retirada, Reservas deduplica na Inbox e grava `RETIRADA` e a auditoria na mesma transação local. O encerramento técnico do cancelamento ocorre no banco do Orquestrador.
 
-`SOLICITADA`, `EM_CONFIRMACAO`, `CONFIRMADA`, `CANCELAMENTO_EM_ANDAMENTO`, `CANCELADA`, `REJEITADA`, `EXPIRADA`, `FALHA_CONFIRMACAO`, `RETIRADA`.
-
-Os estados anterior e posterior do histórico usam o mesmo conjunto, com anterior nulo no registro inicial. `saga_execucoes.estado` recebe `CHECK` com os estados canônicos da execução:
-
-`EM_EXECUCAO`, `COMPENSANDO`, `COMPENSACAO_PENDENTE`, `CANCELANDO`, `CANCELAMENTO_PENDENTE`, `INTERROMPIDA`, `CONCLUIDA`, `COMPENSADA`, `CANCELADA`.
-
-`tipo` distingue `CONFIRMACAO` e `CANCELAMENTO`. `saga_execucoes.estado` usa os estados da máquina descrita no documento 06. `saga_etapas.operacao` identifica os comandos `AlocarEstoque`, `PrepararAutorizacao`, `CancelarAutorizacao` e `LiberarAlocacao`; `etapaAtual` referencia a etapa correspondente. `estadoTecnico` acompanha o envio, a incerteza, a conclusão e a compensação de cada comando. Esse detalhe técnico não cria estados de negócio adicionais para a Reserva nem substitui os estados canônicos da execução.
-
-### Integridade e recuperação
-
-- Em `reservas`: `CHECK (quantidade > 0)`, `CHECK (prazoAnaliseHoras > 0)` e `decisaoAte = criadaEm + prazoAnaliseHoras` em horas. O prazo é uma cópia da configuração aplicada na criação; mudar o cadastro de Unidades não altera o vencimento já registrado.
-- `decisao`, quando preenchida, aceita apenas `ACEITAR` ou `REJEITAR`, conforme o comando HTTP, acompanhada de ator e instante. Esses três campos são preenchidos juntos; `REJEITADA` é estado da reserva, não valor do comando.
-- `tentativas >= 0` em `saga_etapas`. A PK composta mantém uma linha por operação lógica da execução; retries atualizam essa linha e reutilizam a `Idempotency-Key` armazenada em `idempotencyKey`. Cada operação lógica tem chave própria, além do resultado armazenado pelo participante.
-- `dadosComando` preserva os dados necessários para repetir o mesmo comando, inclusive identificadores e quantidade; `resultado` preserva a resposta conclusiva e identificadores de efeitos confirmados. Erros são sanitizados e não armazenam credenciais ou perfis pessoais.
-- Um índice UNIQUE parcial em `saga_execucoes(reservaId)` para `EM_EXECUCAO`, `COMPENSANDO`, `COMPENSACAO_PENDENTE`, `CANCELANDO` e `CANCELAMENTO_PENDENTE` garante uma única execução ativa. `INTERROMPIDA` é terminal e fica fora desse índice.
-- Aceite, transição para `EM_CONFIRMACAO`, histórico e criação da execução são atômicos no banco de Reservas. A finalização grava `CONFIRMADA`, `CONCLUIDA` e histórico na mesma transação local.
-- Se uma confirmação for interrompida para cancelar, seus efeitos e etapas continuam preservados. A execução de cancelamento usa novo `sagaId` depois do encerramento da anterior, conforme o documento 06.
-- Quando a retirada vence o cancelamento, a reserva admite `CANCELAMENTO_EM_ANDAMENTO → RETIRADA`; a execução de cancelamento termina em `INTERROMPIDA`, com motivo e evidências. As alterações e a auditoria são atômicas com a deduplicação exigida pelo documento 00. Respostas tardias não podem levar a reserva para `CANCELADA` nem reabrir a execução.
-- Transições usam bloqueio ou atualização condicional pelo estado atual. Um `CHECK` de valores não valida sozinho a máquina de estados. Expiração só atua sobre `SOLICITADA`; justificativa é obrigatória no cancelamento profissional, conforme o contrato vigente, e fica no histórico.
-
-Referências externas sem FK: `unidadeId → Unidades`; `itemId → Estoque`; `cidadaoId`, `decisaoAtorId` e `atorId → identidade externa`; `retiradaId → Retiradas`. `eventId` é referência ao fato recebido, sem FK para o produtor. Os `sagaId` usados neste banco possuem os vínculos internos indicados nas tabelas.
+Referências externas adicionais sem FK: `unidadeId → Unidades`, `itemId → Estoque` e identificadores de ator para o provedor de identidade.
 
 ### Índices necessários
 
-Além das PKs e dos UNIQUE indicados:
-
 - `reservas(unidadeId, status, criadaEm)` para a fila de análise da unidade.
 - `reservas(cidadaoId, criadaEm)` para acompanhamento das próprias solicitações.
-- Índice parcial `reservas(decisaoAte)` apenas para `SOLICITADA`, para localizar vencimentos.
-- `saga_execucoes(reservaId)` para recuperar também o histórico de execuções encerradas.
-- Índice parcial de `saga_execucoes(updatedAt)` nos cinco estados ativos para recuperar a orquestração após reinício.
+- Índice parcial em `reservas(decisaoAte)` para `SOLICITADA`, para expiração.
 - `historico_reserva(reservaId, ocorridoEm)` para auditoria da reserva.
-
-A PK de `saga_etapas` permite carregar as etapas da execução. A recuperação lê somente dados locais persistidos; registrar que uma chamada foi enviada não prova seu sucesso. Reservas repete o comando com a mesma `Idempotency-Key` e conteúdo para que o participante devolva a resposta conclusiva gravada com o efeito local. O GET da autorização documentado em `retirada.yaml` serve à agregação operacional, não substitui esse replay.
 
 ## 5. Banco de Retiradas
 
@@ -176,12 +152,27 @@ A situação local é representada pela autorização criada, por `canceladaEm` 
 - `atorId` é obtido da identidade autenticada, conforme a exigência dos documentos 00 e 01 de registrar quem realizou a entrega. Não é um campo adicional no corpo HTTP atual, que recebe `autorizacaoId`. `correlationId` é metadado de rastreamento.
 - Entrega e registro para publicação são confirmados na mesma transação local, conforme o documento 00; a estrutura técnica será detalhada separadamente.
 
-Referências externas sem FK em `autorizacoes`: `reservaId` e `sagaId → Reservas`, `unidadeId → Unidades`, `itemId → Estoque`. Em `retiradas`, `atorId` referencia a identidade externa; `correlationId` é correlação, não relacionamento de domínio. A retirada obtém os identificadores do conteúdo entregue pela FK interna para sua autorização.
+Referências externas sem FK em `autorizacoes`: `reservaId → Reservas`, `sagaId → Orquestrador`, `unidadeId → Unidades`, `itemId → Estoque`. Em `retiradas`, `atorId` referencia a identidade externa; `correlationId` é correlação, não relacionamento de domínio. A retirada obtém os identificadores do conteúdo entregue pela FK interna para sua autorização.
 
 As PKs e os UNIQUE atendem às consultas por autorização e reserva e à detecção de entrega anterior. Não há consulta adicional definida que justifique outro índice neste banco.
 
-## 6. Decisões alinhadas
+## 6. Banco do Orquestrador
 
-Os contratos e este modelo definem uma convenção única para idempotência, armazenamento de resultados repetíveis e unicidade histórica da alocação por `reservaId`. Os estados técnicos da SAGA seguem os nomes definidos em 00 e 06; qualquer alteração exige atualizar contratos, banco, diagramas e documentos dependentes no mesmo conjunto de mudanças.
+O Orquestrador grava suas execuções e os comandos recuperáveis em PostgreSQL próprio. `reservaId` é uma referência externa sem FK para Reservas. Os vínculos entre uma execução e suas etapas são FKs locais.
 
-Consistência, Outbox e CQRS estão detalhados em [10](./10-consistencia.md), [11](./11-outbox.md) e [12](./12-cqrs.md). A autorização consultada pelo BFF Unidade é uma projeção operacional, não uma autorização para registrar entrega; o fluxo de entrega permanece protegido pela validação canônica em Reservas.
+| Tabela | Campos e uso | Chaves e vínculos locais |
+|---|---|---|
+| `saga_execucoes` | `sagaId`, `reservaId`, `correlationId uuid`; `tipo`, `estado text`; `versao bigint`; `createdAt`, `updatedAt timestamptz`. Quando aplicável, `etapaAtual`, `encerradaEm`, `motivoEncerramento`, `resultado`, `eventId` e `retiradaId`. | PK `sagaId`. Índice único parcial por `reservaId` nos estados ativos. |
+| `saga_etapas` | `sagaId uuid`; `etapaId`, `operacao`, `destino`, `idempotencyKey`, `estadoTecnico text`; `dadosComando jsonb`; `tentativas integer` não negativo; `createdAt`, `updatedAt timestamptz`. Conforme o progresso, `ultimaTentativaEm`, `proximoRetryEm`, `resultado jsonb` e `erroTecnico` sanitizado. | PK `(sagaId, etapaId)`. FK para `saga_execucoes`. Cada etapa lógica tem chave própria e todas as suas repetições a reutilizam. |
+| `saga_pedidos_cancelamento` | `sagaIdSolicitado`, `reservaId`, `correlationId uuid`; referência opcional à confirmação ativa; contexto mínimo do ator e justificativa quando exigida; instante do pedido, fase de admissão e resultado quando conhecido. Se houver transição a recuperar antes da ativação, referencia a intenção persistida na execução ativa. | PK `sagaIdSolicitado`. A confirmação vinculada, se presente, referencia uma execução local. O pedido não conta como execução ativa. |
+| `inbox` | Deduplicação por consumidor e `eventId` da entrega concluída. | PK `(consumer, eventId)`. O efeito de reconciliação é persistido na mesma transação local. |
+
+### Estados, exclusão e retomada
+
+- `tipo` distingue `CONFIRMACAO` e `CANCELAMENTO`. Os estados ativos são `EM_EXECUCAO`, `COMPENSANDO`, `COMPENSACAO_PENDENTE`, `CANCELANDO` e `CANCELAMENTO_PENDENTE`. Os terminais são `INTERROMPIDA`, `CONCLUIDA`, `COMPENSADA` e `CANCELADA`. O índice único parcial impede duas execuções ativas para a mesma reserva.
+- O controle transacional e a versão serializam a seleção de trabalho e o avanço por reserva. Uma réplica que perde a posse não registra uma nova etapa. Outra réplica pode recuperar e repetir a intenção persistida usando a chave e o conteúdo originais.
+- Se o cancelamento puder substituir a confirmação, a intenção de consultar ou solicitar a transição em Reservas fica registrada antes da chamada. Enquanto o resultado da transição estiver incerto, a recuperação repete a mesma intenção. Se Reservas aceitar, uma transação do Orquestrador encerra a confirmação como `INTERROMPIDA`, ativa a execução de cancelamento com o novo `sagaId` e preserva os efeitos conhecidos a reverter. Em caso de recusa conclusiva, o pedido é encerrado e a confirmação pode prosseguir.
+- Depois de cada chamada, a resposta conclusiva é persistida antes de selecionar novo trabalho. Após reinício, recuperam-se as execuções ativas e os pedidos pendentes com suas etapas e intenções. Índices por `reservaId` e pelo próximo instante de retry atendem à auditoria e à retomada.
+- Se Retiradas confirmar que a entrega venceu, o Orquestrador preserva a evidência disponível e encerra o cancelamento como `INTERROMPIDA`. A Inbox pode reconciliar esse desfecho. A liberação de alocação depende do resultado durável da revogação em Retiradas ou de confirmação de que a autorização nunca existiu.
+
+O registro armazena identificadores e dados mínimos para repetir a operação. Credenciais e tokens ficam fora das intenções, respostas e erros persistidos. Os detalhes de mensagens e projeção estão em [11 - Outbox e Inbox](./11-outbox.md) e [12 - CQRS](./12-cqrs.md).

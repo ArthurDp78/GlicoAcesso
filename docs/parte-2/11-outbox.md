@@ -10,8 +10,9 @@
 | Reservas | `inbox` | Não | Consome `retirada.concluida.v1`. |
 | Estoque | `inbox` | `outbox` | Consome a retirada e publica os eventos da projeção CQRS; a projeção também consome esses eventos. |
 | Retiradas | Não | `outbox` | Produz `retirada.concluida.v1`. |
+| Orquestrador | `inbox` | Não | Consome `retirada.concluida.v1` para reconciliar cancelamentos. Seus comandos HTTP usam o registro durável de etapas. |
 
-Cada tabela fica no PostgreSQL do próprio serviço. A solução usa um worker próprio para consultar a Outbox e publicar no RabbitMQ, com entrega **at-least-once**.
+Cada tabela fica no PostgreSQL do próprio serviço. Cada produtor usa um worker para consultar sua Outbox e publicar no RabbitMQ. A entrega é pelo menos uma vez.
 
 ## 2. Estrutura mínima da Outbox
 
@@ -42,7 +43,7 @@ O envelope publicado contém `eventId`, `eventType`, `eventVersion`, `occurredAt
 
 1. O worker consulta eventos `PENDENTE` com `nextRetryAt <= agora`, já confirmados pela transação de origem.
 2. Registra o início da tentativa em `attempts` e publica o envelope no RabbitMQ.
-3. Somente a confirmação conclusiva do broker para o destino previsto permite marcar `PUBLICADO` e preencher `publishedAt`. Isso confirma publicação, não processamento pelos consumidores.
+3. O worker usa publisher confirms e trata mensagens sem rota como falha de publicação. Após confirmação do broker e verificação de que não houve retorno por falta de rota, marca `PUBLICADO` e preenche `publishedAt`. A topologia deve declarar todos os vínculos esperados. A confirmação do broker não comprova processamento por consumidor.
 4. Em falha ou timeout, o evento permanece `PENDENTE`, com `lastError` sanitizado e `nextRetryAt` adiado por backoff. Se o worker cair, os registros pendentes continuam recuperáveis.
 
 Se o broker receber o evento e o worker cair antes de marcar a publicação, haverá reenvio com o mesmo `eventId`. Portanto, consumidores precisam ser idempotentes. A publicação pode chegar fora de ordem; a projeção usa `estoqueVersion` para evitar regressão. O registro não é descartado por falha de publicação.
@@ -59,9 +60,12 @@ Se o broker receber o evento e o worker cair antes de marcar a publicação, hav
 
 A PK composta `(consumer, eventId)` impede reaplicar a mesma mensagem naquele consumidor, inclusive em entregas concorrentes. Na mesma transação local, o consumidor insere a Inbox e aplica os efeitos. Uma duplicata já confirmada não reaplica o efeito; uma falha desfaz tanto os efeitos quanto a inserção. A mensagem só recebe ACK após o commit ou após constatar processamento anterior confirmado. Receber a mensagem, por si só, não significa que foi processada.
 
-- **Reservas:** Inbox, transição para `RETIRADA`, auditoria e eventual encerramento do cancelamento como `INTERROMPIDA` são atômicos.
+- **Reservas:** Inbox, transição para `RETIRADA` quando aplicável e auditoria são atômicas.
+- **Orquestrador:** Inbox e o efeito local de reconciliação são atômicos. Se houver execução de cancelamento afetada, registra a evidência da entrega e reconcilia seu encerramento como `INTERROMPIDA`. Se a execução já estiver encerrada, preserva o resultado terminal. A segurança da liberação continua dependendo do resultado durável da revogação em Retiradas.
 - **Estoque:** valida a alocação por reserva, unidade, item e quantidade; grava Inbox, baixa física, consumo da alocação, nova `estoqueVersion` e Outbox de `estoque.retirada-baixada.v1` na mesma transação. Reduz físico e alocado pela mesma quantidade, sem descontar a disponibilidade novamente. Divergências não recebem baixa arbitrária nem são marcadas como processadas com sucesso; permanecem observáveis para reconciliação.
 - **Projeção CQRS em Estoque:** Inbox e atualização da projeção são atômicas. Eventos com versão antiga não substituem o estado mais novo; podem ser registrados como tratados sem alterar a projeção.
+
+Quando o processamento falhar, o consumidor não confirma sucesso. Falhas transitórias são reprocessadas com backoff. Falhas persistentes ficam observáveis para tratamento e reprocessamento, por fila de erro ou mecanismo operacional equivalente. O reprocessamento preserva o `eventId` e a identidade do consumidor.
 
 ## 5. Catálogo mínimo de eventos
 
@@ -69,13 +73,19 @@ A PK composta `(consumer, eventId)` impede reaplicar a mesma mensagem naquele co
 
 | Evento | Produtor → consumidores | Payload obrigatório |
 |---|---|---|
-| `retirada.concluida.v1` | Retiradas → Reservas e Estoque | `retiradaId`, `reservaId`, `unidadeId`, `itemId` e `quantidade` positiva. |
+| `retirada.concluida.v1` | Retiradas → Reservas, Estoque e Orquestrador | `retiradaId`, `reservaId`, `unidadeId`, `itemId` e `quantidade` positiva. |
 
-Retiradas grava entrega, uso da autorização e Outbox atomicamente. O RabbitMQ entrega cópias em **filas duráveis separadas** de Reservas e Estoque: os dois serviços precisam receber o fato. O evento não contém dados pessoais do cidadão.
+Retiradas grava entrega, uso da autorização e Outbox atomicamente. O RabbitMQ encaminha o evento a três filas duráveis independentes. O evento não contém dados pessoais do cidadão.
+
+| Fila lógica | Consumidor | Efeito local |
+|---|---|---|
+| Retirada em Reservas | Reservas | Atualiza estado e auditoria da reserva. |
+| Retirada em Estoque | Estoque | Baixa o saldo físico e encerra a alocação como consumida. |
+| Retirada no Orquestrador | Orquestrador | Reconcilia o cancelamento distribuído. |
 
 ### Estoque e projeção CQRS
 
-Todos os eventos abaixo são produzidos por Estoque e consumidos pela sua projeção de disponibilidade. Além do envelope, o payload sempre contém `unidadeId`, `itemId`, `estoqueVersion` e o estado resultante completo do saldo: `estoqueFisicoAtual`, `quantidadeAlocada` e `permiteReserva`.
+Todos os eventos abaixo são produzidos por Estoque. A projeção de disponibilidade os consome por fila durável própria, separada da fila de baixa física. Além do envelope, o payload sempre contém `unidadeId`, `itemId`, `estoqueVersion` e o estado resultante completo do saldo: `estoqueFisicoAtual`, `quantidadeAlocada` e `permiteReserva`.
 
 | Evento | Fato que o produz | Campos adicionais do payload |
 |---|---|---|

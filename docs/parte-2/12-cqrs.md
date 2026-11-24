@@ -6,7 +6,7 @@
 
 CQRS aplica-se somente ao serviço Estoque. Disponibilidade é uma consulta frequente; uma projeção própria simplifica essa leitura sem expor saldo, alocações, movimentações e regras de concorrência a cada busca.
 
-Escrita e leitura ficam no **mesmo PostgreSQL de Estoque**, em tabelas distintas. CQRS separa responsabilidades e modelos, sem exigir bancos físicos diferentes. Uma infraestrutura separada não traz benefício suficiente para o escopo atual.
+Escrita e leitura ficam no **mesmo PostgreSQL de Estoque**, em tabelas distintas. CQRS separa responsabilidades e modelos, sem exigir bancos físicos diferentes. A instância de Estoque mantém os dois modelos sob o mesmo proprietário. O PostgreSQL do Orquestrador armazena apenas a coordenação da SAGA.
 
 ## 2. Modelo de escrita canônico
 
@@ -17,7 +17,7 @@ Escrita e leitura ficam no **mesmo PostgreSQL de Estoque**, em tabelas distintas
 | `alocacoes` | Quantidades vinculadas às reservas e seu consumo ou liberação. |
 | `movimentacoes` | Histórico das entradas, ajustes e saídas físicas. |
 
-Comandos validam o saldo canônico e mantêm suas invariantes com transações locais e controle de concorrência, conforme o documento de bancos. Uma consulta de disponibilidade não reserva quantidade nem garante que uma alocação posterior será aceita. `permiteReserva` na projeção também é informativo; o comando revalida a permissão canônica.
+Os comandos de alocação e liberação enviados pelo Orquestrador atuam no modelo de escrita. Estoque valida o saldo canônico e mantém suas invariantes com transações locais e controle de concorrência, conforme o documento de bancos. Uma consulta de disponibilidade não reserva quantidade nem garante que uma alocação posterior será aceita. `permiteReserva` na projeção também é informativo; o comando revalida a permissão canônica.
 
 ## 3. Modelo de leitura
 
@@ -42,7 +42,7 @@ O fluxo é: **alteração canônica + Outbox na mesma transação → worker →
 
 O consumidor usa os seis eventos de Estoque definidos em `11-outbox.md`: `estoque.alocacao-criada.v1`, `estoque.alocacao-liberada.v1`, `estoque.entrada-registrada.v1`, `estoque.ajustado.v1`, `estoque.retirada-baixada.v1` e `estoque.permissao-reserva-alterada.v1`.
 
-Cada evento traz `unidadeId`, `itemId`, `estoqueVersion` e o estado resultante: `estoqueFisicoAtual`, `quantidadeAlocada` e `permiteReserva`. O consumidor calcula a disponibilidade e grava o estado correspondente, sem acumular deltas. A projeção não baixa estoque diretamente ao receber `retirada.concluida.v1`: esse evento primeiro provoca o processamento canônico da retirada em Estoque, que produz `estoque.retirada-baixada.v1`.
+Cada evento traz `unidadeId`, `itemId`, `estoqueVersion` e o estado resultante: `estoqueFisicoAtual`, `quantidadeAlocada` e `permiteReserva`. O consumidor calcula a disponibilidade e grava o estado correspondente, sem acumular deltas. A projeção consome os eventos de Estoque em fila própria. O consumidor de baixa física recebe `retirada.concluida.v1` em outra fila, aplica a retirada ao saldo canônico e produz `estoque.retirada-baixada.v1`. As cópias de Reservas e do Orquestrador seguem em filas independentes.
 
 A meta operacional é aplicar mudanças à projeção em até aproximadamente **5 segundos em condições normais**. Falhas ou acúmulo de mensagens podem aumentar o atraso; não há garantia absoluta desse prazo. As respostas de disponibilidade devem preservar `atualizadoEm`, inclusive quando agregadas pelos BFFs. Esse campo não é substituído pelo horário da consulta: representa o estado exibido, que pode estar temporariamente defasado.
 
