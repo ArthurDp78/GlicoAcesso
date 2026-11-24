@@ -1,12 +1,14 @@
+from hashlib import sha256
 from typing import Annotated, Literal
-from uuid import UUID
+from uuid import UUID, uuid4
 
-from fastapi import Depends, FastAPI, HTTPException, Query
-from fastapi.responses import JSONResponse
-from pydantic import AwareDatetime, BaseModel
+from fastapi import Depends, FastAPI, Header, HTTPException, Query
+from fastapi.responses import JSONResponse, Response
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
 from servicos.banco import BancoIndisponivel, conectar
-from servicos.identidade_demo import servico_reservas_autenticado
+from servicos.idempotencia import gravar_resultado, resultado_anterior
+from servicos.identidade_demo import orquestrador_autenticado, servico_reservas_autenticado
 
 
 app = FastAPI(title="GlicoAcesso — Estoque")
@@ -87,3 +89,104 @@ def consultar_permissao(unidadeId: UUID, itemId: UUID):
     if dado is None:
         raise HTTPException(404, "Combinação de unidade e item não encontrada.")
     return dado
+
+
+# --- Comandos da SAGA (somente o Orquestrador) ---
+
+BANCO = "ESTOQUE_DATABASE_URL"
+PRINCIPAL = "orquestrador"
+Orquestrador = Annotated[str, Depends(orquestrador_autenticado)]
+Chave = Annotated[str, Header(alias="Idempotency-Key", min_length=1, max_length=128)]
+
+
+class PedidoAlocacao(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    sagaId: UUID
+    reservaId: UUID
+    unidadeId: UUID
+    itemId: UUID
+    quantidade: Annotated[int, Field(strict=True, ge=1, le=2147483647)]
+
+
+def alocar(pedido: PedidoAlocacao, chave: str, correlacao: UUID | None):
+    resumo = sha256(pedido.model_dump_json().encode()).hexdigest()
+    with conectar(BANCO) as conexao:
+        if (anterior := resultado_anterior(conexao, "alocar-estoque", PRINCIPAL, chave, resumo)) is not None:
+            return anterior
+        saldo = conexao.execute("""
+            SELECT estoque_fisico_atual - quantidade_alocada AS livre, permite_reserva
+            FROM saldos WHERE unidade_id = %s AND item_id = %s FOR UPDATE
+        """, (pedido.unidadeId, pedido.itemId)).fetchone()
+        existente = conexao.execute("SELECT 1 FROM alocacoes WHERE reserva_id = %s", (pedido.reservaId,)).fetchone()
+        if saldo is None:
+            resultado = 404, {"codigo": "SALDO_NAO_ENCONTRADO", "mensagem": "Item ou saldo da unidade não encontrado."}
+        elif existente is not None:
+            resultado = 409, {"codigo": "ALOCACAO_INCOMPATIVEL", "mensagem": "A reserva já tem alocação."}
+        elif not saldo["permite_reserva"]:
+            resultado = 409, {"codigo": "RESERVA_NAO_PERMITIDA", "mensagem": "A unidade não permite reservar o item."}
+        elif saldo["livre"] < pedido.quantidade:
+            resultado = 409, {"codigo": "SALDO_INSUFICIENTE", "mensagem": f"Disponível: {saldo['livre']}."}
+        else:
+            alocacao_id = uuid4()
+            conexao.execute("""
+                INSERT INTO alocacoes (alocacao_id, reserva_id, saga_id, unidade_id, item_id, quantidade,
+                    idempotency_key, correlation_id)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            """, (alocacao_id, pedido.reservaId, pedido.sagaId, pedido.unidadeId, pedido.itemId,
+                  pedido.quantidade, chave, correlacao))
+            conexao.execute("""
+                UPDATE saldos SET quantidade_alocada = quantidade_alocada + %s,
+                    estoque_version = estoque_version + 1, updated_at = now()
+                WHERE unidade_id = %s AND item_id = %s
+            """, (pedido.quantidade, pedido.unidadeId, pedido.itemId))
+            resultado = 201, {"alocacaoId": str(alocacao_id), **pedido.model_dump(mode="json")}
+        return gravar_resultado(conexao, "alocar-estoque", PRINCIPAL, chave, resumo, resultado)
+
+
+def liberar(reserva_id: UUID, saga_id: UUID, chave: str):
+    resumo = sha256(f"{reserva_id}:{saga_id}".encode()).hexdigest()
+    with conectar(BANCO) as conexao:
+        if (anterior := resultado_anterior(conexao, "liberar-alocacao", PRINCIPAL, chave, resumo)) is not None:
+            return anterior
+        alocacao = conexao.execute("""
+            SELECT unidade_id, item_id, quantidade, liberada_em, consumida_em
+            FROM alocacoes WHERE reserva_id = %s FOR UPDATE
+        """, (reserva_id,)).fetchone()
+        if alocacao is not None and alocacao["consumida_em"] is not None:
+            resultado = 409, {"codigo": "ALOCACAO_CONSUMIDA", "mensagem": "A alocação já foi consumida na retirada."}
+        else:
+            if alocacao is not None and alocacao["liberada_em"] is None:
+                conexao.execute("UPDATE alocacoes SET liberada_em = now(), updated_at = now() WHERE reserva_id = %s",
+                                (reserva_id,))
+                conexao.execute("""
+                    UPDATE saldos SET quantidade_alocada = quantidade_alocada - %s,
+                        estoque_version = estoque_version + 1, updated_at = now()
+                    WHERE unidade_id = %s AND item_id = %s
+                """, (alocacao["quantidade"], alocacao["unidade_id"], alocacao["item_id"]))
+            # Liberada agora, já liberada ou inexistente: nada a reverter.
+            resultado = 204, {}
+        return gravar_resultado(conexao, "liberar-alocacao", PRINCIPAL, chave, resumo, resultado)
+
+
+def responder_comando(resultado) -> Response:
+    status, corpo = resultado
+    if status == 204:
+        return Response(status_code=204)
+    return JSONResponse(corpo, status_code=status, headers={"Cache-Control": "no-store"})
+
+
+@app.post("/internal/v1/alocacoes", status_code=201)
+def alocar_estoque(
+    pedido: PedidoAlocacao, _orquestrador: Orquestrador, chave: Chave,
+    correlacao: Annotated[UUID | None, Header(alias="X-Correlation-Id")] = None,
+):
+    return responder_comando(alocar(pedido, chave, correlacao))
+
+
+@app.delete("/internal/v1/alocacoes/{reservaId}", status_code=204)
+def liberar_alocacao(
+    reservaId: UUID, _orquestrador: Orquestrador, chave: Chave,
+    saga_id: Annotated[UUID, Header(alias="X-Saga-Id")],
+):
+    return responder_comando(liberar(reservaId, saga_id, chave))

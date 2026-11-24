@@ -1,3 +1,5 @@
+import threading
+from contextlib import asynccontextmanager
 from typing import Annotated
 from uuid import UUID, uuid4
 
@@ -8,9 +10,18 @@ from psycopg.types.json import Jsonb
 
 from servicos.banco import BancoIndisponivel, conectar
 from servicos.identidade_demo import Ator, profissional_autenticado
+from servicos.orquestrador.executor import laco, nova_etapa
 
 
-app = FastAPI(title="GlicoAcesso — Orquestrador da SAGA")
+@asynccontextmanager
+async def ciclo(_app: FastAPI):
+    parar = threading.Event()
+    threading.Thread(target=laco, args=(parar,), name="executor-saga", daemon=True).start()
+    yield
+    parar.set()
+
+
+app = FastAPI(title="GlicoAcesso — Orquestrador da SAGA", lifespan=ciclo)
 BANCO = "ORQUESTRADOR_DATABASE_URL"
 OPERACAO = "solicitar-confirmacao"
 PRIMEIRA_ETAPA = "ACEITAR_RESERVA"
@@ -68,12 +79,10 @@ def solicitar_confirmacao(
                 """, (saga_id, reservaId, correlacao or uuid4(), profissional.id, profissional.unidadeId, PRIMEIRA_ETAPA))
         except UniqueViolation:
             return erro(409, "EXECUCAO_CONCORRENTE", "Já existe uma execução ativa para esta reserva.")
-        # Primeira intenção durável: a etapa existe antes de qualquer chamada a Reservas (2.7).
-        conexao.execute("""
-            INSERT INTO saga_etapas (saga_id, etapa_id, operacao, destino, idempotency_key, estado_tecnico,
-                dados_comando, proximo_retry_em, criada_em, atualizada_em)
-            VALUES (%s, %s, 'aceitarReserva', 'reservas', %s, 'PENDENTE', %s, now(), now(), now())
-        """, (saga_id, PRIMEIRA_ETAPA, f"{saga_id}:{PRIMEIRA_ETAPA}", Jsonb({"sagaId": str(saga_id)})))
+        # Primeira intenção durável: o comando existe antes de qualquer chamada a Reservas.
+        nova_etapa(conexao, saga_id, PRIMEIRA_ETAPA, "reservas", "POST", f"/internal/v1/reservas/{reservaId}/aceite",
+                   {"sagaId": str(saga_id)}, {"X-Ator-Papel": profissional.papel, "X-Ator-Id": profissional.id,
+                                              "X-Ator-Unidade-Id": str(profissional.unidadeId)})
         dados = {"sagaId": str(saga_id), "reservaId": str(reservaId)}
         conexao.execute("""
             INSERT INTO idempotencia_comandos (operacao, principal_id, chave, request_hash, http_status, resposta)

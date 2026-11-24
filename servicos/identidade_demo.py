@@ -77,3 +77,18 @@ def profissional_autenticado(ator: AtorAutenticado) -> Ator:
 
 def servico_reservas_autenticado(credencial: Credencial) -> None:
     validar_token(credencial, "GLICO_RESERVAS_SERVICE_TOKEN")
+
+
+def orquestrador_autenticado(credencial: Credencial) -> str:
+    validar_token(credencial, "GLICO_ORQUESTRADOR_SERVICE_TOKEN")
+    return "orquestrador"
+
+
+def ator_delegado(papel: str | None, ator_id: str | None, unidade: str | None) -> Ator:
+    # shortcut: cabeçalhos de ator só valem junto da credencial do Orquestrador; trocar por token delegado assinado.
+    if papel != "PROFISSIONAL" or not ator_id:
+        raise HTTPException(403, "Ator delegado ausente ou sem papel de profissional.")
+    try:
+        return Ator("PROFISSIONAL", ator_id, UUID(unidade or ""))
+    except ValueError:
+        raise HTTPException(403, "Unidade do ator delegado inválida.") from None

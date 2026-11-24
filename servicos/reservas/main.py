@@ -12,7 +12,9 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from servicos.banco import BancoIndisponivel, conectar
 from servicos.contratos_reserva import PedidoReserva, ReservaInterna
 from servicos.http import cliente_http, consultar
-from servicos.identidade_demo import Ator, AtorAutenticado, cidadao_autenticado, profissional_autenticado
+from servicos.identidade_demo import (
+    Ator, AtorAutenticado, ator_delegado, cidadao_autenticado, orquestrador_autenticado, profissional_autenticado,
+)
 
 
 app = FastAPI(title="GlicoAcesso — Reservas", lifespan=cliente_http)
@@ -269,3 +271,97 @@ async def decidir(request: Request, reservaId: UUID, corpo: Decisao, profissiona
         registrar_decisao, profissional.id, unidade, reservaId, corpo.decisao, chave
     )
     return JSONResponse(dados, status_code=status, headers={"Cache-Control": "no-store"})
+
+
+class ComandoSaga(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    sagaId: UUID
+
+
+Orquestrador = Annotated[str, Depends(orquestrador_autenticado)]
+
+
+def registrar_transicao(operacao: str, reserva_id: UUID, saga_id: UUID, chave: str,
+                        origem: str, destino: str, ator: Ator | None = None):
+    """Transição pedida pelo Orquestrador: efeito, histórico e resultado idempotente na mesma transação."""
+    principal = "orquestrador"
+    resumo = sha256(f"{reserva_id}:{saga_id}".encode()).hexdigest()
+    with conectar(BANCO) as conexao:
+        controle = f"{operacao}:{principal}:{chave}"
+        conexao.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (controle,))
+        anterior = conexao.execute("""
+            SELECT request_hash, http_status, resposta FROM idempotencia_comandos
+            WHERE operacao = %s AND principal_id = %s AND chave = %s
+        """, (operacao, principal, chave)).fetchone()
+        if anterior is not None:
+            if anterior["request_hash"] != resumo:
+                return conflito("CHAVE_IDEMPOTENTE_CONFLITANTE", "Chave reutilizada com outro comando.")
+            return anterior["http_status"], anterior["resposta"]
+        reserva = conexao.execute(f"""
+            SELECT {CAMPOS}, decisao_ate > now() AS "noPrazo"
+            FROM reservas WHERE reserva_id = %s FOR UPDATE
+        """, (reserva_id,)).fetchone()
+        if reserva is None:
+            raise HTTPException(404, "Reserva não encontrada.")
+        if ator is not None and reserva["unidadeId"] != ator.unidadeId:
+            raise HTTPException(403, "Reserva de outra unidade.")
+        if reserva["status"] != origem:
+            resultado = conflito("ESTADO_INCOMPATIVEL", f"A reserva está {reserva['status']}.")
+        elif ator is not None and not reserva["noPrazo"]:
+            resultado = conflito("ESTADO_INCOMPATIVEL", "O prazo de decisão terminou.")
+        else:
+            conexao.execute("""
+                UPDATE reservas SET status = %s, atualizada_em = now(),
+                    decisao = COALESCE(%s, decisao), decisao_ator_id = COALESCE(%s, decisao_ator_id),
+                    decidida_em = CASE WHEN %s::text IS NULL THEN decidida_em ELSE now() END
+                WHERE reserva_id = %s
+            """, (destino, ator and "ACEITAR", ator and ator.id, ator and ator.id, reserva_id))
+            conexao.execute("""
+                INSERT INTO historico_reserva
+                    (historico_id, reserva_id, status_anterior, status_posterior, ocorrido_em, ator_id, saga_id)
+                VALUES (%s, %s, %s, %s, now(), %s, %s)
+            """, (uuid4(), reserva_id, origem, destino, ator.id if ator else principal, saga_id))
+            corpo = {"reservaId": str(reserva_id), "status": destino}
+            if ator is not None:
+                corpo |= {"unidadeId": str(reserva["unidadeId"]), "itemId": str(reserva["itemId"]),
+                          "quantidade": reserva["quantidade"]}
+            resultado = 200, corpo
+        conexao.execute("""
+            INSERT INTO idempotencia_comandos
+                (operacao, principal_id, chave, request_hash, http_status, resposta)
+            VALUES (%s, %s, %s, %s, %s, %s)
+        """, (operacao, principal, chave, resumo, resultado[0], Jsonb(resultado[1])))
+        return resultado
+
+
+def responder(resultado: tuple[int, dict]) -> JSONResponse:
+    return JSONResponse(resultado[1], status_code=resultado[0], headers={"Cache-Control": "no-store"})
+
+
+@app.post("/internal/v1/reservas/{reservaId}/aceite")
+async def aceitar(
+    request: Request, reservaId: UUID, comando: ComandoSaga, _orquestrador: Orquestrador, chave: Chave,
+    papel: Annotated[str | None, Header(alias="X-Ator-Papel")] = None,
+    ator_id: Annotated[str | None, Header(alias="X-Ator-Id")] = None,
+    unidade: Annotated[str | None, Header(alias="X-Ator-Unidade-Id")] = None,
+):
+    ator = ator_delegado(papel, ator_id, unidade)
+    await verificar_vinculo(request, ator)
+    return responder(await run_in_threadpool(
+        registrar_transicao, "aceitar-reserva", reservaId, comando.sagaId, chave, "SOLICITADA", "EM_CONFIRMACAO", ator
+    ))
+
+
+@app.post("/internal/v1/reservas/{reservaId}/confirmar")
+async def confirmar(reservaId: UUID, comando: ComandoSaga, _orquestrador: Orquestrador, chave: Chave):
+    return responder(await run_in_threadpool(
+        registrar_transicao, "confirmar-reserva", reservaId, comando.sagaId, chave, "EM_CONFIRMACAO", "CONFIRMADA"
+    ))
+
+
+@app.post("/internal/v1/reservas/{reservaId}/falhar-confirmacao")
+async def falhar_confirmacao(reservaId: UUID, comando: ComandoSaga, _orquestrador: Orquestrador, chave: Chave):
+    return responder(await run_in_threadpool(
+        registrar_transicao, "falhar-confirmacao", reservaId, comando.sagaId, chave, "EM_CONFIRMACAO", "FALHA_CONFIRMACAO"
+    ))

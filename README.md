@@ -300,8 +300,7 @@ Abra [http://127.0.0.1:8000/unidade](http://127.0.0.1:8000/unidade), informe o t
 
 - **Rejeitar** é uma operação local de Reservas: retorna `200` e a reserva passa a `REJEITADA`.
 - **Aceitar** não muda a reserva em Reservas. Reservas devolve `409 ACEITE_ENCAMINHAR` ao BFF e grava esse destino com a chave idempotente. O BFF então encaminha o pedido ao Orquestrador com a mesma chave. O Orquestrador grava a execução (`EM_EXECUCAO`) e a primeira etapa (`ACEITAR_RESERVA`, `PENDENTE`). Só depois disso o BFF responde `202`, com `Location` apontando para `/api/unidade/v1/painel/reservas/{reservaId}`.
-- Nesta etapa, a reserva aceita continua `SOLICITADA`. A execução da confirmação (`EM_CONFIRMACAO`, alocação, autorização e `CONFIRMADA`) chega na subtarefa 2.7.
-- Repetir a mesma ação com a mesma chave devolve o resultado original. Um segundo aceite da mesma reserva com outra chave recebe `409 EXECUCAO_CONCORRENTE`. Se o Orquestrador estiver fora do ar, o BFF responde `502`, e a repetição com a mesma chave conclui o aceite.
+- Repetir a mesma ação com a mesma chave devolve o resultado original. Um segundo aceite da mesma reserva com outra chave, enquanto a confirmação ainda roda, recebe `409 EXECUCAO_CONCORRENTE`. Se o Orquestrador estiver fora do ar, o BFF responde `502`, e a repetição com a mesma chave conclui o aceite.
 
 | Processo | Variável de ambiente | Padrão |
 |---|---|---|
@@ -309,6 +308,52 @@ Abra [http://127.0.0.1:8000/unidade](http://127.0.0.1:8000/unidade), informe o t
 | BFF Unidade | `RESERVAS_URL` | `http://127.0.0.1:8004` |
 | BFF Unidade | `ESTOQUE_URL` | `http://127.0.0.1:8003` |
 | BFF Unidade | `ORQUESTRADOR_URL` | `http://127.0.0.1:8006` |
+
+### Confirmação pela SAGA
+
+Depois do aceite, o Orquestrador executa a confirmação em segundo plano, etapa por etapa:
+
+1. Reservas grava `EM_CONFIRMACAO`.
+2. Estoque aloca a quantidade.
+3. Retiradas prepara a autorização.
+4. Reservas grava `CONFIRMADA`, o ponto de compromisso.
+5. A execução termina como `CONCLUIDA`.
+
+Antes de cada chamada, a etapa fica gravada no banco do Orquestrador, com o comando e uma chave idempotente própria. Se a resposta se perder (timeout, `5xx` ou participante fora do ar), o Orquestrador repete o mesmo comando com a mesma chave. A espera entre tentativas cresce até 30 segundos. O participante devolve o resultado já gravado, sem repetir o efeito. Se o Orquestrador reiniciar, ele retoma das etapas pendentes.
+
+**Compensação (antes do ponto de compromisso):**
+- **Estoque recusa a alocação** (`SALDO_INSUFICIENTE`, por exemplo): Reservas grava `FALHA_CONFIRMACAO`. A execução termina `COMPENSADA`.
+- **Retiradas recusa a preparação** (`AUTORIZACAO_NAO_CRIADA`): o Orquestrador libera a alocação em Estoque e depois grava `FALHA_CONFIRMACAO`.
+- **Autorização pode ter sido criada:** ela é revogada antes de a alocação ser liberada.
+
+A confirmação usa o quinto PostgreSQL, de Retiradas, e uma credencial de serviço do Orquestrador. Gere mais um token com o mesmo comando usado para os outros. Na primeira execução:
+
+```powershell
+docker run -d --name glico-retiradas-db -e POSTGRES_USER=glico -e POSTGRES_PASSWORD=glico-demo -e POSTGRES_DB=retiradas -p 127.0.0.1:54335:5432 -v glico-retiradas-data:/var/lib/postgresql/data postgres:17
+```
+
+Defina `$env:GLICO_ORQUESTRADOR_SERVICE_TOKEN = '<token do orquestrador>'` com o mesmo valor nos terminais de **Reservas**, **Estoque**, **Retiradas** e **Orquestrador**, e reinicie esses processos. Os comandos internos de cada participante só aceitam essa credencial. Reservas só aceita os cabeçalhos do profissional delegado (`X-Ator-*`) quando eles vêm com ela. Aplique a migração nova em Estoque e Reservas com os mesmos comandos de antes, sem `--demo` em Reservas.
+
+**Retiradas (porta 8007)**
+
+```powershell
+$env:GLICO_ORQUESTRADOR_SERVICE_TOKEN = '<token do orquestrador>'
+$env:RETIRADAS_DATABASE_URL = 'postgresql://glico:glico-demo@127.0.0.1:54335/retiradas'
+uv run --locked python -m servicos.migracoes retiradas
+uv run --locked uvicorn servicos.retiradas.main:app --host 127.0.0.1 --port 8007
+```
+
+O Orquestrador encontra os participantes por `RESERVAS_URL` (`:8004`), `ESTOQUE_URL` (`:8003`) e `RETIRADAS_URL` (`:8007`).
+
+**Para demonstrar uma falha com compensação:** inicie Retiradas com `$env:GLICO_FALHA_PREPARAR_AUTORIZACAO = '1'` e aceite uma solicitação. A alocação é feita e depois liberada, e a reserva termina `FALHA_CONFIRMACAO`. Para ver a compensação sem alocar nada, aceite uma solicitação com quantidade maior que o saldo.
+
+Para acompanhar uma execução:
+
+```powershell
+docker exec glico-orquestrador-db psql -U glico -d orquestrador -c "SELECT etapa_id, estado_tecnico, tentativas, erro_tecnico FROM saga_etapas ORDER BY criada_em DESC LIMIT 10"
+```
+
+Nesta etapa, a disponibilidade exibida ao cidadão ainda não muda após a alocação. A atualização da projeção CQRS por eventos chega na subtarefa 2.8. A tabela de decisão do executor tem uma verificação sem dependências, rodada com `uv run --locked python -m tests.decisao_saga`.
 
 ## Referências
 
