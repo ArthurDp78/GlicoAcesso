@@ -1,13 +1,14 @@
 import os
-from typing import Literal
+from typing import Annotated, Literal
 from uuid import UUID
 
-from fastapi import FastAPI, Header, HTTPException, Request, Response
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, TypeAdapter, ValidationError
 
 from servicos.contratos_reserva import ReservaInterna
 from servicos.http import cliente_http, consultar, requisitar
+from servicos.identidade_demo import Ator, profissional_autenticado
 
 
 app = FastAPI(title="GlicoAcesso — BFF Unidade", lifespan=cliente_http)
@@ -135,3 +136,37 @@ async def decidir(
     return JSONResponse({"reservaId": str(reservaId)}, status_code=202, headers={
         "Location": f"{API}/painel/reservas/{reservaId}", "Cache-Control": "no-store",
     })
+
+
+class EstoquePainelItem(BaseModel):
+    itemId: UUID
+    unidadeId: UUID
+    itemNome: str
+    estoqueFisicoAtual: int
+    quantidadeAlocada: int
+    quantidadeDisponivel: int
+    permiteReserva: bool
+    atualizadoEm: str  # Repassado como veio da projeção: é o instante do estado, não da consulta.
+
+
+ESTOQUE_PAINEL = TypeAdapter(list[EstoquePainelItem])
+
+
+@app.get(API + "/painel/estoque", response_model=list[EstoquePainelItem])
+async def painel_estoque(
+    request: Request, response: Response, profissional: Annotated[Ator, Depends(profissional_autenticado)],
+):
+    # O token é validado aqui para descobrir a unidade do profissional; Estoque confere o vínculo de novo.
+    resposta = await consultar(
+        request.app.state.http,
+        origem("ESTOQUE_URL", "http://127.0.0.1:8003") + f"/api/unidade/v1/estoque/{profissional.unidadeId}/itens",
+        headers=credencial(request),
+    )
+    if resposta.status_code != 200:
+        return repassar_erro(resposta)
+    try:
+        itens = ESTOQUE_PAINEL.validate_json(resposta.content)
+    except ValidationError as erro:
+        raise HTTPException(502, "Estoque retornou dados incompatíveis.") from erro
+    response.headers["Cache-Control"] = "no-store"
+    return itens

@@ -149,6 +149,29 @@ cd GlicoAcesso
 
 ## Desenvolvimento local
 
+### Rodar tudo com um comando (Windows)
+
+Pré-requisitos: Docker Desktop aberto e [uv](https://docs.astral.sh/uv/getting-started/installation/) instalado. Na raiz do repositório, em um PowerShell:
+
+```powershell
+.\scripts\demo-local.ps1
+```
+
+O script faz o seguinte:
+- sobe os cinco PostgreSQL e o RabbitMQ em Docker;
+- gera os tokens de demonstração uma única vez e os guarda em `.demo-local/`, que fica fora do Git;
+- aplica as migrações e inicia os oito processos em segundo plano;
+- mostra os endereços dos portais e os tokens.
+
+Se a porta 8000 estiver ocupada, use `-GatewayPorta 8010`. As outras opções:
+- `-FalharRetiradas`: Retiradas passa a recusar as autorizações, para demonstrar a compensação.
+- `-Zerar`: apaga os bancos e a fila de demonstração e começa do estado inicial.
+- `-Parar`: encerra os processos.
+
+Os logs ficam em `.demo-local/logs`. Se o Windows bloquear a execução de scripts, use `powershell -ExecutionPolicy Bypass -File .\scripts\demo-local.ps1`.
+
+As seções abaixo descrevem cada processo separadamente, para quem quiser subir serviço por serviço.
+
 A base executável da Parte 3 contém dois processos HTTP independentes: API Gateway e BFF Cidadão. Use [uv](https://docs.astral.sh/uv/getting-started/installation/) na raiz do repositório. O `uv` seleciona o Python 3.14 indicado em `.python-version` e instala as versões registradas em `uv.lock`.
 
 ```powershell
@@ -353,7 +376,27 @@ Para acompanhar uma execução:
 docker exec glico-orquestrador-db psql -U glico -d orquestrador -c "SELECT etapa_id, estado_tecnico, tentativas, erro_tecnico FROM saga_etapas ORDER BY criada_em DESC LIMIT 10"
 ```
 
-Nesta etapa, a disponibilidade exibida ao cidadão ainda não muda após a alocação. A atualização da projeção CQRS por eventos chega na subtarefa 2.8. A tabela de decisão do executor tem uma verificação sem dependências, rodada com `uv run --locked python -m tests.decisao_saga`.
+A tabela de decisão do executor tem uma verificação sem dependências, rodada com `uv run --locked python -m tests.decisao_saga`.
+
+### Projeção CQRS por eventos
+
+A disponibilidade não é lida do saldo canônico. Ela vem de uma projeção atualizada por eventos:
+
+1. Ao alocar ou liberar, Estoque altera `saldos` e grava o evento na tabela `outbox`, na mesma transação. Os eventos são `estoque.alocacao-criada.v1` e `estoque.alocacao-liberada.v1`.
+2. Um publicador, dentro do processo de Estoque, envia os eventos pendentes à exchange `glico.eventos` do RabbitMQ. Ele usa confirmação do broker e marca o evento como `PUBLICADO` só depois dela.
+3. O consumidor da projeção lê a fila `estoque.projecao-disponibilidade` e atualiza a tabela `disponibilidade`.
+
+Cada evento traz o estado completo do saldo e a sua `estoqueVersion`. Por isso, o consumidor ignora duplicatas pela `inbox` e não deixa a leitura regredir com eventos atrasados. Mensagens inválidas vão para a fila `estoque.projecao-disponibilidade.erros`.
+
+Com o broker fora do ar, a SAGA continua confirmando, e os eventos esperam na Outbox. Quando o broker volta, a projeção alcança o saldo. Em condições normais, isso leva menos de um segundo; a meta é de 5 s.
+
+Para subir o RabbitMQ manualmente:
+
+```powershell
+docker run -d --name glico-rabbitmq -p 127.0.0.1:5672:5672 -p 127.0.0.1:15672:15672 -v glico-rabbitmq-data:/var/lib/rabbitmq rabbitmq:4-management
+```
+
+Estoque usa `RABBITMQ_URL` (padrão `amqp://guest:guest@127.0.0.1:5672/%2F`). Para o painel de estoque da unidade, Estoque e BFF Unidade também precisam de `GLICO_PROFISSIONAL_TOKEN` e `GLICO_PROFISSIONAL_UNIDADE_ID`. O painel, em `/api/unidade/v1/painel/estoque`, mostra o estoque físico, o alocado, o disponível e o instante da projeção (`atualizadoEm`). O painel `/unidade` exibe esses dados abaixo das solicitações.
 
 ## Referências
 

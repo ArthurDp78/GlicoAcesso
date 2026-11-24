@@ -94,6 +94,8 @@ async function decidir(reserva, link, acoes, indicador) {
     if (status === 202) {
       indicador.textContent = "Confirmação em processamento";
       informar("Aceite registrado. A confirmação da reserva foi iniciada.");
+      // A projeção é eventual: consulta de novo depois que a SAGA e o evento tiveram tempo de passar.
+      setTimeout(carregarEstoque, 3000);
     } else {
       indicador.textContent = "Rejeitada";
       indicador.classList.add("neutro");
@@ -106,12 +108,51 @@ async function decidir(reserva, link, acoes, indicador) {
   }
 }
 
+const estoque = document.querySelector("#estoque");
+const mensagemEstoque = document.querySelector("#status-estoque");
+
+function cartaoEstoque(item) {
+  const artigo = document.createElement("article");
+  artigo.className = "cartao";
+  const cabecalho = document.createElement("header");
+  const indicador = texto("span", item.permiteReserva ? "Aceita reservas" : "Sem reservas");
+  indicador.className = item.permiteReserva ? "indicador" : "indicador neutro";
+  cabecalho.append(texto("h3", item.itemNome), indicador);
+  const dados = document.createElement("dl");
+  for (const [rotulo, valor] of [
+    ["Estoque físico", String(item.estoqueFisicoAtual)],
+    ["Alocado para reservas", String(item.quantidadeAlocada)],
+    ["Disponível", String(item.quantidadeDisponivel)],
+    ["Projeção atualizada em", data(item.atualizadoEm)],
+  ]) {
+    const campo = document.createElement("div");
+    campo.append(texto("dt", rotulo), texto("dd", valor));
+    dados.append(campo);
+  }
+  artigo.append(cabecalho, dados);
+  return artigo;
+}
+
+async function carregarEstoque() {
+  try {
+    const {corpo} = await chamar("/api/unidade/v1/painel/estoque");
+    estoque.replaceChildren(...corpo.map(cartaoEstoque));
+    mensagemEstoque.classList.remove("erro");
+    mensagemEstoque.textContent = corpo.length === 0 ? "Nenhum item com estoque projetado."
+      : "Leitura da projeção CQRS. Após uma confirmação, a atualização chega em alguns segundos.";
+  } catch (erro) {
+    mensagemEstoque.classList.add("erro");
+    mensagemEstoque.textContent = erro instanceof TypeError ? "Falha de conexão ao consultar o estoque." : erro.message;
+  }
+}
+
 formulario.addEventListener("submit", async (evento) => {
   evento.preventDefault();
   const botao = evento.submitter;
   botao.disabled = true;
   lista.replaceChildren();
   informar("Carregando solicitações…");
+  carregarEstoque();
   try {
     const {corpo} = await chamar("/api/unidade/v1/painel/reservas");
     lista.replaceChildren(...corpo.map(cartao));

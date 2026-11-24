@@ -57,6 +57,7 @@ async def encaminhar_reserva(request: Request, reservaId: UUID | None = None) ->
     return await repassar(request, os.environ.get("BFF_CIDADAO_URL", "http://127.0.0.1:8001"))
 
 
+@app.get("/api/unidade/v1/painel/estoque")
 @app.get("/api/unidade/v1/painel/reservas")
 @app.get("/api/unidade/v1/painel/reservas/{reservaId}")
 @app.post("/api/unidade/v1/reservas/{reservaId}/decisao")

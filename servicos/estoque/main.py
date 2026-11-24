@@ -1,3 +1,5 @@
+import threading
+from contextlib import asynccontextmanager
 from hashlib import sha256
 from typing import Annotated, Literal
 from uuid import UUID, uuid4
@@ -7,11 +9,20 @@ from fastapi.responses import JSONResponse, Response
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
 from servicos.banco import BancoIndisponivel, conectar
+from servicos.estoque.eventos import iniciar, registrar_evento
 from servicos.idempotencia import gravar_resultado, resultado_anterior
-from servicos.identidade_demo import orquestrador_autenticado, servico_reservas_autenticado
+from servicos.identidade_demo import Ator, orquestrador_autenticado, profissional_autenticado, servico_reservas_autenticado
 
 
-app = FastAPI(title="GlicoAcesso — Estoque")
+@asynccontextmanager
+async def ciclo(_app: FastAPI):
+    parar = threading.Event()
+    iniciar(parar)  # Publicador da Outbox e consumidor da projeção, em segundo plano.
+    yield
+    parar.set()
+
+
+app = FastAPI(title="GlicoAcesso — Estoque", lifespan=ciclo)
 
 
 class Item(BaseModel):
@@ -135,22 +146,26 @@ def alocar(pedido: PedidoAlocacao, chave: str, correlacao: UUID | None):
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             """, (alocacao_id, pedido.reservaId, pedido.sagaId, pedido.unidadeId, pedido.itemId,
                   pedido.quantidade, chave, correlacao))
-            conexao.execute("""
+            saldo = conexao.execute("""
                 UPDATE saldos SET quantidade_alocada = quantidade_alocada + %s,
                     estoque_version = estoque_version + 1, updated_at = now()
                 WHERE unidade_id = %s AND item_id = %s
-            """, (pedido.quantidade, pedido.unidadeId, pedido.itemId))
+                RETURNING unidade_id, item_id, estoque_fisico_atual, quantidade_alocada, permite_reserva,
+                    estoque_version, updated_at
+            """, (pedido.quantidade, pedido.unidadeId, pedido.itemId)).fetchone()
+            registrar_evento(conexao, "estoque.alocacao-criada.v1", "AlocacaoEstoque", alocacao_id, correlacao, saldo, {
+                "alocacaoId": str(alocacao_id), "reservaId": str(pedido.reservaId), "quantidade": pedido.quantidade})
             resultado = 201, {"alocacaoId": str(alocacao_id), **pedido.model_dump(mode="json")}
         return gravar_resultado(conexao, "alocar-estoque", PRINCIPAL, chave, resumo, resultado)
 
 
-def liberar(reserva_id: UUID, saga_id: UUID, chave: str):
+def liberar(reserva_id: UUID, saga_id: UUID, chave: str, correlacao: UUID | None):
     resumo = sha256(f"{reserva_id}:{saga_id}".encode()).hexdigest()
     with conectar(BANCO) as conexao:
         if (anterior := resultado_anterior(conexao, "liberar-alocacao", PRINCIPAL, chave, resumo)) is not None:
             return anterior
         alocacao = conexao.execute("""
-            SELECT unidade_id, item_id, quantidade, liberada_em, consumida_em
+            SELECT alocacao_id, unidade_id, item_id, quantidade, liberada_em, consumida_em
             FROM alocacoes WHERE reserva_id = %s FOR UPDATE
         """, (reserva_id,)).fetchone()
         if alocacao is not None and alocacao["consumida_em"] is not None:
@@ -159,11 +174,16 @@ def liberar(reserva_id: UUID, saga_id: UUID, chave: str):
             if alocacao is not None and alocacao["liberada_em"] is None:
                 conexao.execute("UPDATE alocacoes SET liberada_em = now(), updated_at = now() WHERE reserva_id = %s",
                                 (reserva_id,))
-                conexao.execute("""
+                saldo = conexao.execute("""
                     UPDATE saldos SET quantidade_alocada = quantidade_alocada - %s,
                         estoque_version = estoque_version + 1, updated_at = now()
                     WHERE unidade_id = %s AND item_id = %s
-                """, (alocacao["quantidade"], alocacao["unidade_id"], alocacao["item_id"]))
+                    RETURNING unidade_id, item_id, estoque_fisico_atual, quantidade_alocada, permite_reserva,
+                    estoque_version, updated_at
+                """, (alocacao["quantidade"], alocacao["unidade_id"], alocacao["item_id"])).fetchone()
+                registrar_evento(conexao, "estoque.alocacao-liberada.v1", "AlocacaoEstoque", alocacao["alocacao_id"],
+                                 correlacao, saldo, {"alocacaoId": str(alocacao["alocacao_id"]),
+                                                     "reservaId": str(reserva_id), "quantidade": alocacao["quantidade"]})
             # Liberada agora, já liberada ou inexistente: nada a reverter.
             resultado = 204, {}
         return gravar_resultado(conexao, "liberar-alocacao", PRINCIPAL, chave, resumo, resultado)
@@ -188,5 +208,34 @@ def alocar_estoque(
 def liberar_alocacao(
     reservaId: UUID, _orquestrador: Orquestrador, chave: Chave,
     saga_id: Annotated[UUID, Header(alias="X-Saga-Id")],
+    correlacao: Annotated[UUID | None, Header(alias="X-Correlation-Id")] = None,
 ):
-    return responder_comando(liberar(reservaId, saga_id, chave))
+    return responder_comando(liberar(reservaId, saga_id, chave, correlacao))
+
+
+class EstoqueUnidadeItem(BaseModel):
+    itemId: UUID
+    unidadeId: UUID
+    itemNome: str
+    estoqueFisicoAtual: int
+    quantidadeAlocada: int
+    quantidadeDisponivel: int
+    permiteReserva: bool
+    atualizadoEm: AwareDatetime
+
+
+@app.get("/api/unidade/v1/estoque/{unidadeId}/itens", response_model=list[EstoqueUnidadeItem])
+def listar_estoque_da_unidade(unidadeId: UUID, profissional: Annotated[Ator, Depends(profissional_autenticado)]):
+    # shortcut: confere só o vínculo do token; a checagem de unidade ativa fica em Reservas.
+    if unidadeId != profissional.unidadeId:
+        raise HTTPException(403, "Ator sem acesso à unidade.")
+    with conectar(BANCO) as conexao:
+        return conexao.execute("""
+            SELECT d.item_id AS "itemId", d.unidade_id AS "unidadeId", i.nome AS "itemNome",
+                   d.estoque_fisico_atual AS "estoqueFisicoAtual", d.quantidade_alocada AS "quantidadeAlocada",
+                   d.quantidade_disponivel AS "quantidadeDisponivel", d.permite_reserva AS "permiteReserva",
+                   d.atualizado_em AS "atualizadoEm"
+            FROM disponibilidade d JOIN itens i USING (item_id)
+            WHERE d.unidade_id = %s
+            ORDER BY i.nome, d.item_id
+        """, (unidadeId,)).fetchall()
