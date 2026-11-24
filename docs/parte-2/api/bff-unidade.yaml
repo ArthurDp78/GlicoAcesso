@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: BFF Unidade
-  version: "1.0.0"
+  version: "1.1.0"
   description: Agrega informações operacionais para a equipe da unidade.
 servers:
   - url: /api/unidade/v1
@@ -18,6 +18,18 @@ components:
       description: Reutilize a mesma chave ao repetir a mesma ação.
       schema: { type: string, minLength: 1 }
   schemas:
+    ErroComando:
+      type: object
+      required: [codigo]
+      properties:
+        codigo: { type: string }
+        mensagem: { type: string }
+    PedidoEmProcessamento:
+      type: object
+      additionalProperties: false
+      required: [reservaId]
+      properties:
+        reservaId: { type: string, format: uuid }
     Link:
       type: object
       required: [href, method]
@@ -166,7 +178,7 @@ paths:
       responses:
         '200': { description: Cadastro atualizado. }
         '403': { description: Ator não pertence à unidade correspondente. }
-        '409': { description: `Idempotency-Key` reutilizada com conteúdo diferente. }
+        '409': { description: "`Idempotency-Key` reutilizada com conteúdo diferente." }
   /unidade/horarios:
     put:
       summary: Atualizar horários da unidade autenticada
@@ -193,7 +205,7 @@ paths:
       responses:
         '200': { description: Horários atualizados. }
         '403': { description: Ator não pertence à unidade correspondente. }
-        '409': { description: `Idempotency-Key` reutilizada com conteúdo diferente. }
+        '409': { description: "`Idempotency-Key` reutilizada com conteúdo diferente." }
   /unidade/status:
     patch:
       summary: Ativar ou desativar a unidade autenticada
@@ -212,7 +224,7 @@ paths:
       responses:
         '200': { description: Situação operacional atualizada. }
         '403': { description: Ator não pertence à unidade correspondente. }
-        '409': { description: `Idempotency-Key` reutilizada com conteúdo diferente. }
+        '409': { description: "`Idempotency-Key` reutilizada com conteúdo diferente." }
   /unidade/prazo-analise:
     put:
       summary: Atualizar prazo de análise da unidade autenticada
@@ -231,7 +243,7 @@ paths:
       responses:
         '200': { description: Prazo atualizado; reservas existentes mantêm o prazo aplicado. }
         '403': { description: Ator não pertence à unidade correspondente. }
-        '409': { description: `Idempotency-Key` reutilizada com conteúdo diferente. }
+        '409': { description: "`Idempotency-Key` reutilizada com conteúdo diferente." }
   /painel/estoque/{unidadeId}/itens/{itemId}/permissao:
     put:
       summary: Configurar se o item permite reserva
@@ -260,7 +272,7 @@ paths:
         '200': { description: Configuração atualizada. }
         '403': { description: Ator sem permissão para a unidade. }
         '404': { description: Item ou saldo não encontrado. }
-        '409': { description: `Idempotency-Key` reutilizada com conteúdo diferente. }
+        '409': { description: "`Idempotency-Key` reutilizada com conteúdo diferente." }
   /painel/estoque/{unidadeId}/itens/{itemId}/entradas:
     post:
       summary: Registrar entrada de estoque
@@ -292,7 +304,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/MovimentacaoResumo' }
         '403': { description: Ator sem permissão para a unidade. }
-        '409': { description: `Idempotency-Key` reutilizada com conteúdo diferente. }
+        '409': { description: "`Idempotency-Key` reutilizada com conteúdo diferente." }
   /painel/estoque/{unidadeId}/itens/{itemId}/ajustes:
     post:
       summary: Ajustar saldo físico
@@ -331,7 +343,14 @@ paths:
   /reservas/{reservaId}/decisao:
     post:
       summary: Aceitar ou rejeitar uma solicitação
-      description: Encaminha a decisão do profissional autorizado ao serviço Reservas.
+      operationId: decidirSolicitacao
+      description: >-
+        O BFF consulta o resultado da operação de decisão em Reservas com a
+        chave e a identidade do profissional. REJEITAR é aplicado ali. Para
+        ACEITAR, somente o encaminhamento conclusivo ACEITE_ENCAMINHAR
+        autoriza o BFF a chamar o Orquestrador com a mesma chave. O status 202 confirma a gravação
+        do pedido para processamento. Consulte Location para o estado da reserva.
+        A mesma chave e conteúdo recuperam a resposta original.
       security: [{ bearerAuth: [] }]
       parameters:
         - name: reservaId
@@ -349,12 +368,43 @@ paths:
               properties:
                 decisao: { type: string, enum: [ACEITAR, REJEITAR] }
       responses:
-        '200': { description: Decisão registrada; retries reproduzem o resultado original. }
-        '403': { description: Profissional não pertence à unidade da reserva. }
-        '409': { description: Chave idempotente reutilizada com conteúdo diferente ou transição inválida. }
+        '200':
+          description: "Rejeição registrada em Reservas."
+        '202':
+          description: "Aceite registrado pelo Orquestrador para processamento."
+          headers:
+            Location:
+              description: "Caminho público para acompanhar o estado de negócio, /api/unidade/v1/painel/reservas/{reservaId}."
+              schema: { type: string, format: uri-reference }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PedidoEmProcessamento' }
+        '400':
+          description: "Entrada inválida ou cabeçalho obrigatório ausente."
+        '401':
+          description: "Credencial ausente ou inválida."
+        '403':
+          description: "Chamador ou ator sem permissão."
+        '404':
+          description: "Recurso não encontrado."
+        '409':
+          description: "Transição incompatível, execução concorrente ou chave usada com outro conteúdo."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErroComando' }
+        '503':
+          description: "Serviço temporariamente indisponível. Repita o comando com a mesma chave e conteúdo quando o resultado estiver incerto."
   /reservas/{reservaId}/cancelar:
     post:
       summary: Solicitar cancelamento da reserva pela unidade
+      operationId: solicitarCancelamentoReserva
+      description: >-
+        O BFF chama primeiro o cancelamento local condicional em Reservas.
+        O código CANCELAMENTO_DISTRIBUIDO seleciona o Orquestrador. Reservas
+        persiste esse encaminhamento idempotente, para que uma repetição use o
+        mesmo destino mesmo após a mudança de estado. É usada a mesma chave
+        e o mesmo conteúdo a cada repetição em cada serviço. Outros conflitos
+        ou um resultado incerto em Reservas não permitem redirecionar. A justificativa do profissional é obrigatória e deve ter ao menos cinco caracteres após remover espaços externos.
       security: [{ bearerAuth: [] }]
       parameters:
         - name: reservaId
@@ -372,8 +422,32 @@ paths:
               properties:
                 justificativa: { type: string, minLength: 5 }
       responses:
-        '202': { description: Cancelamento aceito e em andamento. }
-        '409': { description: Chave idempotente conflitante ou reserva em estado terminal. }
+        '200':
+          description: "Cancelamento local concluído em Reservas."
+        '202':
+          description: "Cancelamento distribuído registrado para processamento. Consulte Location para acompanhar o estado da reserva."
+          headers:
+            Location:
+              description: "Caminho público para acompanhar o estado de negócio, /api/unidade/v1/painel/reservas/{reservaId}."
+              schema: { type: string, format: uri-reference }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PedidoEmProcessamento' }
+        '400':
+          description: "Entrada inválida ou cabeçalho obrigatório ausente."
+        '401':
+          description: "Credencial ausente ou inválida."
+        '403':
+          description: "Chamador ou ator sem permissão."
+        '404':
+          description: "Recurso não encontrado."
+        '409':
+          description: "Cancelamento não permitido, em andamento com outro pedido ou chave usada com conteúdo diferente."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErroComando' }
+        '503':
+          description: "Serviço temporariamente indisponível. Repita o comando com a mesma chave e conteúdo quando o resultado estiver incerto."
   /retiradas:
     post:
       summary: Registrar entrega presencial
@@ -396,7 +470,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/RetiradaRegistrada' }
-        '409': { description: Autorização inexistente, cancelada ou já utilizada, reserva sem estado CONFIRMADA ou `Idempotency-Key` reutilizada com conteúdo diferente. }
+        '409': { description: "Autorização inexistente, cancelada ou já utilizada, reserva sem estado CONFIRMADA ou `Idempotency-Key` reutilizada com conteúdo diferente." }
         '503': { description: Não foi possível consultar o estado canônico; nenhuma nova entrega foi registrada. }
   /painel/reservas:
     get:

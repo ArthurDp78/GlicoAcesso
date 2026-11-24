@@ -1,16 +1,34 @@
 openapi: 3.0.3
 info:
   title: API de Retiradas
-  version: "1.1.0"
+  version: "1.2.0"
   description: Autorizações de balcão e registo de entrega física.
 servers:
   - url: /
 components:
   securitySchemes:
+    serviceAuth:
+      type: http
+      scheme: bearer
+      description: >-
+        Credencial de serviço verificada pelo destinatário. Comandos vinculados
+        a um ator exigem contexto delegado e verificável na credencial. O
+        destinatário identifica e autoriza tanto o chamador quanto o ator.
     bearerAuth:
       type: http
       scheme: bearer
   parameters:
+    CorrelationId:
+      name: X-Correlation-Id
+      in: header
+      required: false
+      schema: { type: string, format: uuid }
+    SagaIdHeader:
+      name: X-Saga-Id
+      in: header
+      required: true
+      description: Identificador da execução que solicitou o comando.
+      schema: { type: string, format: uuid }
     IdempotencyKey:
       name: Idempotency-Key
       in: header
@@ -18,6 +36,23 @@ components:
       description: Chave estável para repetir o mesmo comando com o mesmo resultado.
       schema: { type: string, minLength: 1 }
   schemas:
+    ErroComando:
+      type: object
+      required: [codigo]
+      properties:
+        codigo: { type: string }
+        mensagem: { type: string }
+    ConflitoRevogacao:
+      oneOf:
+        - type: object
+          required: [codigo, retiradaId]
+          properties:
+            codigo: { type: string, enum: [ENTREGA_JA_REGISTRADA] }
+            retiradaId: { type: string, format: uuid }
+        - type: object
+          required: [codigo]
+          properties:
+            codigo: { type: string, enum: [CHAVE_IDEMPOTENTE_CONFLITANTE] }
     Autorizacao:
       type: object
       required: [autorizacaoId, reservaId, sagaId, unidadeId, itemId, quantidade, status]
@@ -94,9 +129,13 @@ paths:
   /internal/v1/autorizacoes:
     post:
       summary: Preparar Autorização (SAGA)
-      description: A criação conclui a etapa de Retiradas na SAGA, mas não autoriza entrega por si só. O registro da retirada exige consulta posterior ao estado canônico de Reservas.
-      security:
-        - bearerAuth: []
+      operationId: prepararAutorizacao
+      description: >-
+        Somente o Orquestrador após confirmar a alocação. Retiradas grava
+        autorização e resultado idempotente na mesma transação. Uma repetição
+        idêntica reproduz o resultado conclusivo. A entrega exige validação
+        posterior do estado CONFIRMADA em Reservas.
+      security: [{ serviceAuth: [] }]
       requestBody:
         required: true
         content:
@@ -112,6 +151,7 @@ paths:
                 quantidade: { type: integer, minimum: 1 }
       parameters:
         - { $ref: '#/components/parameters/IdempotencyKey' }
+        - { $ref: '#/components/parameters/CorrelationId' }
       responses:
         '201':
           description: Autorização criada; repetição idêntica reproduz o status e corpo originais.
@@ -119,20 +159,60 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/Autorizacao' }
         '409':
-          description: `Idempotency-Key` reutilizada com conteúdo diferente ou autorização incompatível já existente.
+          description: "AUTORIZACAO_INCOMPATIVEL ou CHAVE_IDEMPOTENTE_CONFLITANTE. Esses conflitos não comprovam ausência de autorização para a reserva."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErroComando' }
+        '422':
+          description: "AUTORIZACAO_NAO_CRIADA registra recusa conclusiva com ausência de autorização vinculada à reserva."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErroComando' }
+        '400':
+          description: "Entrada inválida ou cabeçalho obrigatório ausente."
+        '401':
+          description: "Credencial ausente ou inválida."
+        '403':
+          description: "Operação restrita ao Orquestrador."
+        '503':
+          description: "Serviço temporariamente indisponível. Repita o comando com a mesma chave e conteúdo quando o resultado estiver incerto."
   /internal/v1/autorizacoes/{reservaId}/cancelar:
     post:
       summary: Cancelar Autorização (Compensação SAGA)
-      security:
-        - bearerAuth: []
+      operationId: cancelarAutorizacao
+      description: >-
+        Somente o Orquestrador, para compensação ou cancelamento. O sagaId identifica a execução que solicita a revogação. Retiradas serializa revogação e entrega no registro da autorização e persiste o resultado antes de responder.
+        Repetições idênticas devolvem o resultado conclusivo gravado.
+      security: [{ serviceAuth: [] }]
       parameters:
         - name: reservaId
           in: path
           required: true
           schema: { type: string, format: uuid }
         - { $ref: '#/components/parameters/IdempotencyKey' }
+        - { $ref: '#/components/parameters/SagaIdHeader' }
+        - { $ref: '#/components/parameters/CorrelationId' }
       responses:
         '200':
-          description: Autorização revogada.
+          description: "Autorização revogada ou já revogada. Resultado durável que permite prosseguir."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Autorizacao' }
+        '404':
+          description: "AUTORIZACAO_NAO_ENCONTRADA. O Orquestrador reconcilia os comandos anteriores antes de concluir que a autorização nunca existiu."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErroComando' }
         '409':
-          description: Entrega já registrada ou `Idempotency-Key` reutilizada com conteúdo diferente.
+          description: "ENTREGA_JA_REGISTRADA prova que a entrega venceu e impede a liberação. CHAVE_IDEMPOTENTE_CONFLITANTE identifica uso da chave com conteúdo divergente."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConflitoRevogacao' }
+        '400':
+          description: "Entrada inválida ou cabeçalho obrigatório ausente."
+        '401':
+          description: "Credencial ausente ou inválida."
+        '403':
+          description: "Operação restrita ao Orquestrador."
+        '503':
+          description: "Serviço temporariamente indisponível. Repita o comando com a mesma chave e conteúdo quando o resultado estiver incerto."

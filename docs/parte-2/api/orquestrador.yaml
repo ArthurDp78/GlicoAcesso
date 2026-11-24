@@ -1,0 +1,170 @@
+openapi: 3.0.3
+info:
+  title: API interna do Orquestrador da SAGA
+  version: "1.0.0"
+  description: >-
+    Recebe pedidos da SAGA por HTTP interno. A recepção e seu resultado
+    idempotente são persistidos na mesma transação. O estado da execução é
+    técnico e pode se atualizar em momento diferente do estado de Reservas.
+servers:
+  - url: /
+components:
+  securitySchemes:
+    serviceAuth:
+      type: http
+      scheme: bearer
+      description: >-
+        Credencial de serviço verificada pelo destinatário. Comandos vinculados
+        a um ator exigem contexto delegado e verificável na credencial. O
+        destinatário identifica e autoriza tanto o chamador quanto o ator.
+  parameters:
+    ReservaId:
+      name: reservaId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    CorrelationId:
+      name: X-Correlation-Id
+      in: header
+      required: false
+      schema: { type: string, format: uuid }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: >-
+        Reutilize a chave e o conteúdo no mesmo comando. O escopo inclui
+        operação e principal delegado. Repetição idêntica devolve o resultado
+        original. Mesma chave com outro conteúdo retorna conflito.
+      schema: { type: string, minLength: 1 }
+  schemas:
+    ErroComando:
+      type: object
+      required: [codigo]
+      properties:
+        codigo: { type: string }
+        mensagem: { type: string }
+    PedidoCancelamento:
+      type: object
+      additionalProperties: false
+      properties:
+        justificativa: { type: string, minLength: 5 }
+    PedidoRecebido:
+      type: object
+      additionalProperties: false
+      required: [sagaId, reservaId]
+      properties:
+        sagaId: { type: string, format: uuid }
+        reservaId: { type: string, format: uuid }
+    SituacaoPedido:
+      type: object
+      additionalProperties: false
+      required: [sagaId, reservaId, tipo]
+      description: >-
+        Enquanto a admissão de um cancelamento estiver pendente, estadoExecucao
+        pode ser omitido. Uma recusa antes de ativar a execução é identificada
+        pelo motivo de encerramento, sem criar estado técnico adicional.
+      properties:
+        sagaId: { type: string, format: uuid }
+        reservaId: { type: string, format: uuid }
+        tipo: { type: string, enum: [CONFIRMACAO, CANCELAMENTO] }
+        estadoExecucao:
+          type: string
+          enum: [EM_EXECUCAO, COMPENSANDO, COMPENSACAO_PENDENTE, CANCELANDO, CANCELAMENTO_PENDENTE, INTERROMPIDA, CONCLUIDA, COMPENSADA, CANCELADA]
+        motivoEncerramento: { type: string }
+paths:
+  /internal/v1/reservas/{reservaId}/confirmacoes:
+    post:
+      operationId: solicitarConfirmacao
+      summary: Solicitar confirmação de reserva
+      description: >-
+        Somente BFF Unidade em nome de profissional. O Orquestrador valida a identidade de serviço do BFF e o papel delegado de profissional. Reservas valida o vínculo com a unidade, a decisão e o prazo na transação de aceite. A resposta confirma a gravação do pedido e da primeira intenção. A conclusão de negócio é consultada em Reservas.
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/ReservaId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+        - { $ref: '#/components/parameters/CorrelationId' }
+      responses:
+        '202':
+          description: "Comando concluído e resultado persistido."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PedidoRecebido' }
+        '400':
+          description: "Entrada inválida ou cabeçalho obrigatório ausente."
+        '401':
+          description: "Credencial ausente ou inválida."
+        '403':
+          description: "Chamador ou ator sem permissão."
+        '404':
+          description: "Recurso não encontrado."
+        '409':
+          description: "EXECUCAO_CONCORRENTE, ESTADO_INCOMPATIVEL ou CHAVE_IDEMPOTENTE_CONFLITANTE. A repetição idêntica de pedido já admitido recupera a resposta original."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErroComando' }
+        '503':
+          description: "Serviço temporariamente indisponível. Repita o comando com a mesma chave e conteúdo quando o resultado estiver incerto."
+  /internal/v1/reservas/{reservaId}/cancelamentos:
+    post:
+      operationId: solicitarCancelamentoDistribuido
+      summary: Solicitar cancelamento distribuído
+      description: >-
+        BFF Cidadão ou BFF Unidade, em nome do ator autenticado. Para profissional, justificativa é obrigatória e deve ter ao menos cinco caracteres após remover espaços externos. Para cidadão, o corpo é omitido. O Orquestrador verifica com Reservas a permissão do ator e registra o pedido antes de responder. A transição é revalidada antes de qualquer reversão. O processamento usa uma execução distinta de eventual confirmação ativa e respeita o resultado durável de Retiradas.
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/ReservaId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+        - { $ref: '#/components/parameters/CorrelationId' }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PedidoCancelamento' }
+      responses:
+        '202':
+          description: "Comando concluído e resultado persistido."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PedidoRecebido' }
+        '400':
+          description: "Entrada inválida ou cabeçalho obrigatório ausente."
+        '401':
+          description: "Credencial ausente ou inválida."
+        '403':
+          description: "Chamador ou ator sem permissão."
+        '404':
+          description: "Recurso não encontrado."
+        '409':
+          description: "EXECUCAO_CONCORRENTE, ESTADO_INCOMPATIVEL ou CHAVE_IDEMPOTENTE_CONFLITANTE. A repetição idêntica de pedido já admitido recupera a resposta original."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErroComando' }
+        '503':
+          description: "Serviço temporariamente indisponível. Repita o comando com a mesma chave e conteúdo quando o resultado estiver incerto."
+  /internal/v1/sagas/{sagaId}:
+    get:
+      operationId: consultarPedidoSaga
+      summary: Consultar o processamento interno de um pedido da SAGA
+      description: Acesso restrito ao BFF do ator que solicitou o pedido. A resposta identifica o andamento técnico.
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - name: sagaId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - { $ref: '#/components/parameters/CorrelationId' }
+      responses:
+        '200':
+          description: "Pedido encontrado."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SituacaoPedido' }
+        '401':
+          description: "Credencial ausente ou inválida."
+        '403':
+          description: "Chamador ou ator sem acesso."
+        '404':
+          description: "Pedido não encontrado."
+        '503':
+          description: "Serviço temporariamente indisponível. Repita o comando com a mesma chave e conteúdo quando o resultado estiver incerto."

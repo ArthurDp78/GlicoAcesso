@@ -1,16 +1,34 @@
 openapi: 3.0.3
 info:
   title: API de Estoque
-  version: "1.0.0"
+  version: "1.1.0"
   description: Catálogo, saldo físico, movimentações, alocações e projeção de disponibilidade.
 servers:
   - url: /
 components:
   securitySchemes:
+    serviceAuth:
+      type: http
+      scheme: bearer
+      description: >-
+        Credencial de serviço verificada pelo destinatário. Comandos vinculados
+        a um ator exigem contexto delegado e verificável na credencial. O
+        destinatário identifica e autoriza tanto o chamador quanto o ator.
     bearerAuth:
       type: http
       scheme: bearer
   parameters:
+    CorrelationId:
+      name: X-Correlation-Id
+      in: header
+      required: false
+      schema: { type: string, format: uuid }
+    SagaIdHeader:
+      name: X-Saga-Id
+      in: header
+      required: true
+      description: Identificador da execução que solicitou o comando.
+      schema: { type: string, format: uuid }
     IdempotencyKey:
       name: Idempotency-Key
       in: header
@@ -18,6 +36,12 @@ components:
       description: Chave estável para repetir o mesmo comando com o mesmo resultado.
       schema: { type: string, minLength: 1 }
   schemas:
+    ErroComando:
+      type: object
+      required: [codigo]
+      properties:
+        codigo: { type: string }
+        mensagem: { type: string }
     Item:
       type: object
       required: [itemId, nome, tipo]
@@ -158,7 +182,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/PermissaoReserva' }
-        '404': { description: Unidade, item ou configuração de saldo não encontrada. }
+        '404': { description: "Unidade, item ou configuração de saldo não encontrada." }
         '503': { description: Modelo canônico de Estoque indisponível. }
   /internal/v1/itens:
     post:
@@ -269,7 +293,7 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/MovimentacaoEstoque' }
         '403': { description: Ator sem permissão para a unidade. }
-        '404': { description: Unidade, item ou saldo não encontrado. }
+        '404': { description: "Unidade, item ou saldo não encontrado." }
         '409': { description: Chave idempotente reutilizada com conteúdo diferente. }
   /api/unidade/v1/estoque/{unidadeId}/itens/{itemId}/ajustes:
     post:
@@ -306,13 +330,20 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/MovimentacaoEstoque' }
         '403': { description: Ator sem permissão para a unidade. }
-        '404': { description: Unidade, item ou saldo não encontrado. }
+        '404': { description: "Unidade, item ou saldo não encontrado." }
         '409': { description: Ajuste incompatível com alocações ativas ou chave reutilizada com conteúdo diferente. }
   /internal/v1/alocacoes:
     post:
       summary: Alocar estoque para a SAGA
-      security: [{ bearerAuth: [] }]
-      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      operationId: alocarEstoque
+      description: >-
+        Somente o Orquestrador. Valida permissão e saldo no modelo de escrita.
+        Estoque grava o efeito e o resultado idempotente na mesma transação.
+        Repetição com a mesma chave e conteúdo reproduz o resultado conclusivo.
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+        - { $ref: '#/components/parameters/CorrelationId' }
       requestBody:
         required: true
         content:
@@ -332,17 +363,50 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Alocacao' }
-        '409': { description: Saldo insuficiente, comando conflitante ou mesma chave com conteúdo diferente. }
+        '409':
+          description: "SALDO_INSUFICIENTE, RESERVA_NAO_PERMITIDA, ALOCACAO_INCOMPATIVEL ou CHAVE_IDEMPOTENTE_CONFLITANTE. A recusa de saldo ou permissão indica que o comando não criou alocação."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErroComando' }
+        '404':
+          description: "Item ou saldo da unidade não encontrado. Nenhuma alocação foi criada."
+        '400':
+          description: "Entrada inválida ou cabeçalho obrigatório ausente."
+        '401':
+          description: "Credencial ausente ou inválida."
+        '403':
+          description: "Operação restrita ao Orquestrador."
+        '503':
+          description: "Serviço temporariamente indisponível. Repita o comando com a mesma chave e conteúdo quando o resultado estiver incerto."
   /internal/v1/alocacoes/{reservaId}:
     delete:
       summary: Liberar alocação (compensação SAGA)
-      security: [{ bearerAuth: [] }]
+      operationId: liberarAlocacao
+      description: >-
+        Somente o Orquestrador, para compensação ou cancelamento. O sagaId identifica a execução que solicita a liberação. A alocação é localizada pelo reservaId. A liberação nunca altera saldo físico nem reabre alocação consumida.
+        Repetições idênticas devolvem o resultado conclusivo gravado.
+      security: [{ serviceAuth: [] }]
       parameters:
         - name: reservaId
           in: path
           required: true
           schema: { type: string, format: uuid }
         - { $ref: '#/components/parameters/IdempotencyKey' }
+        - { $ref: '#/components/parameters/SagaIdHeader' }
+        - { $ref: '#/components/parameters/CorrelationId' }
       responses:
-        '204': { description: Liberação confirmada; repetição devolve o resultado original. }
-        '409': { description: Chave idempotente reutilizada com conteúdo diferente ou alocação já consumida. }
+        '204':
+          description: "Liberação confirmada ou ausência de alocação ativa a liberar, incluindo alocação já liberada."
+        '409':
+          description: "ALOCACAO_CONSUMIDA ou CHAVE_IDEMPOTENTE_CONFLITANTE. Nenhuma alocação é reaberta."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErroComando' }
+        '400':
+          description: "Entrada inválida ou cabeçalho obrigatório ausente."
+        '401':
+          description: "Credencial ausente ou inválida."
+        '403':
+          description: "Operação restrita ao Orquestrador."
+        '503':
+          description: "Serviço temporariamente indisponível. Repita o comando com a mesma chave e conteúdo quando o resultado estiver incerto."

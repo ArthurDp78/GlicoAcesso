@@ -1,16 +1,33 @@
 openapi: 3.0.3
 info:
   title: API de Reservas
-  version: "1.1.0"
-  description: Ciclo de vida da solicitação, HATEOAS e orquestração da SAGA.
+  version: "1.2.0"
+  description: Ciclo de vida da solicitação e transições canônicas da reserva.
 servers:
   - url: /
 components:
   securitySchemes:
+    serviceAuth:
+      type: http
+      scheme: bearer
+      description: >-
+        Credencial de serviço verificada pelo destinatário. Comandos vinculados
+        a um ator exigem contexto delegado e verificável na credencial. O
+        destinatário identifica e autoriza tanto o chamador quanto o ator.
     bearerAuth:
       type: http
       scheme: bearer
   parameters:
+    ReservaId:
+      name: reservaId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    CorrelationId:
+      name: X-Correlation-Id
+      in: header
+      required: false
+      schema: { type: string, format: uuid }
     IdempotencyKey:
       name: Idempotency-Key
       in: header
@@ -18,6 +35,63 @@ components:
       description: Chave estável para repetir o mesmo comando com o mesmo resultado.
       schema: { type: string, minLength: 1 }
   schemas:
+    ErroComando:
+      type: object
+      required: [codigo]
+      properties:
+        codigo: { type: string }
+        mensagem: { type: string }
+    ConflitoDecisao:
+      type: object
+      required: [codigo]
+      properties:
+        codigo:
+          type: string
+          enum: [ACEITE_ENCAMINHAR, ESTADO_INCOMPATIVEL, CHAVE_IDEMPOTENTE_CONFLITANTE]
+        mensagem: { type: string }
+    ConflitoCancelamentoLocal:
+      type: object
+      required: [codigo]
+      properties:
+        codigo:
+          type: string
+          enum: [CANCELAMENTO_DISTRIBUIDO, CANCELAMENTO_EM_ANDAMENTO, ESTADO_INCOMPATIVEL, CHAVE_IDEMPOTENTE_CONFLITANTE]
+        mensagem: { type: string }
+    ComandoSaga:
+      type: object
+      additionalProperties: false
+      required: [sagaId]
+      properties:
+        sagaId: { type: string, format: uuid }
+    IniciarCancelamento:
+      type: object
+      additionalProperties: false
+      required: [sagaId]
+      properties:
+        sagaId: { type: string, format: uuid }
+        justificativa: { type: string, minLength: 5 }
+    Justificativa:
+      type: object
+      additionalProperties: false
+      required: [justificativa]
+      properties:
+        justificativa: { type: string, minLength: 5 }
+    DecisaoProfissional:
+      type: object
+      additionalProperties: false
+      required: [decisao]
+      properties:
+        decisao: { type: string, enum: [ACEITAR, REJEITAR] }
+    AceiteRegistrado:
+      type: object
+      additionalProperties: false
+      required: [reservaId, unidadeId, itemId, quantidade, status]
+      properties:
+        reservaId: { type: string, format: uuid }
+        unidadeId: { type: string, format: uuid }
+        itemId: { type: string, format: uuid }
+        quantidade: { type: integer, minimum: 1 }
+        status: { type: string, enum: [EM_CONFIRMACAO] }
     Reserva:
       type: object
       required: [reservaId, cidadaoId, unidadeId, itemId, quantidade, status]
@@ -131,23 +205,39 @@ paths:
         '422':
           description: Unidade inexistente/inativa ou combinação unidade/item sem permissão para reserva.
         '409':
-          description: `Idempotency-Key` reutilizada com conteúdo diferente.
+          description: "`Idempotency-Key` reutilizada com conteúdo diferente."
   /api/cidadao/v1/reservas/{reservaId}/cancelar:
     post:
-      summary: Cancelar reserva pelo cidadão
-      security:
-        - bearerAuth: []
+      operationId: cancelarSolicitacaoCidadao
+      summary: Cancelar solicitação pendente do cidadão
+      description: >-
+        Somente o BFF correspondente, com identidade delegada do ator. Após verificar a autorização, Reservas aplica a transição condicional apenas em SOLICITADA. Para EM_CONFIRMACAO ou CONFIRMADA, registra e devolve 409 com codigo CANCELAMENTO_DISTRIBUIDO, sem alterar a reserva. A decisão de encaminhamento ou resultado local é persistida para replay da mesma chave e conteúdo, antes de reavaliar o estado em retries.
+      security: [{ serviceAuth: [] }]
       parameters:
-        - name: reservaId
-          in: path
-          required: true
-          schema: { type: string, format: uuid }
+        - { $ref: '#/components/parameters/ReservaId' }
         - { $ref: '#/components/parameters/IdempotencyKey' }
+        - { $ref: '#/components/parameters/CorrelationId' }
       responses:
-        '202':
-          description: Cancelamento em andamento.
+        '200':
+          description: "Comando concluído e resultado persistido."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EstadoReserva' }
+        '400':
+          description: "Entrada inválida ou cabeçalho obrigatório ausente."
+        '401':
+          description: "Credencial ausente ou inválida."
+        '403':
+          description: "Chamador ou ator sem permissão."
+        '404':
+          description: "Recurso não encontrado."
         '409':
-          description: Reserva em estado terminal ou `Idempotency-Key` reutilizada com conteúdo diferente.
+          description: "CANCELAMENTO_DISTRIBUIDO indica encaminhamento ao Orquestrador. CANCELAMENTO_EM_ANDAMENTO, ESTADO_INCOMPATIVEL e CHAVE_IDEMPOTENTE_CONFLITANTE identificam outros conflitos e não autorizam redirecionamento."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConflitoCancelamentoLocal' }
+        '503':
+          description: "Serviço temporariamente indisponível. Repita o comando com a mesma chave e conteúdo quando o resultado estiver incerto."
   /api/unidade/v1/reservas:
     get:
       summary: Listar solicitações pendentes da unidade do profissional
@@ -164,51 +254,286 @@ paths:
         '403': { description: Profissional sem unidade vinculada. }
   /api/unidade/v1/reservas/{reservaId}/decisao:
     post:
-      summary: Registar decisão da unidade (Aceitar/Rejeitar)
-      security:
-        - bearerAuth: []
+      operationId: encaminharDecisaoUnidade
+      summary: Registrar rejeição ou encaminhar aceite
+      description: >-
+        Somente BFF Unidade em nome de profissional vinculado. REJEITAR aplica a transição local de uma solicitação SOLICITADA dentro do prazo. Para ACEITAR elegível, grava e devolve 409 ACEITE_ENCAMINHAR sem registrar o aceite nem alterar o estado da reserva. O encaminhamento ou a rejeição é persistido sob a mesma operação e chave para impedir que uma repetição com outra decisão use outro destino. O Orquestrador envia o comando de aceite e Reservas revalida prazo, ator e estado.
+      security: [{ serviceAuth: [] }]
       parameters:
-        - name: reservaId
-          in: path
-          required: true
-          schema: { type: string, format: uuid }
+        - { $ref: '#/components/parameters/ReservaId' }
         - { $ref: '#/components/parameters/IdempotencyKey' }
+        - { $ref: '#/components/parameters/CorrelationId' }
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              type: object
-              required: [decisao]
-              properties:
-                decisao: { type: string, enum: [ACEITAR, REJEITAR] }
+            schema: { $ref: '#/components/schemas/DecisaoProfissional' }
       responses:
         '200':
-          description: Decisão registada.
+          description: "Comando concluído e resultado persistido."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EstadoReserva' }
+        '400':
+          description: "Entrada inválida ou cabeçalho obrigatório ausente."
+        '401':
+          description: "Credencial ausente ou inválida."
         '403':
-          description: Profissional não pertence à unidade.
+          description: "Chamador ou ator sem permissão."
+        '404':
+          description: "Recurso não encontrado."
         '409':
-          description: `Idempotency-Key` reutilizada com conteúdo diferente ou transição concorrente incompatível.
+          description: "ACEITE_ENCAMINHAR indica encaminhamento ao Orquestrador. ESTADO_INCOMPATIVEL e CHAVE_IDEMPOTENTE_CONFLITANTE não permitem encaminhar."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConflitoDecisao' }
+        '503':
+          description: "Serviço temporariamente indisponível. Repita o comando com a mesma chave e conteúdo quando o resultado estiver incerto."
   /api/unidade/v1/reservas/{reservaId}/cancelar:
     post:
-      summary: Cancelar reserva pela unidade
-      security:
-        - bearerAuth: []
+      operationId: cancelarSolicitacaoUnidade
+      summary: Cancelar solicitação pendente pela unidade
+      description: >-
+        Somente o BFF correspondente, com identidade delegada do ator. Após verificar a autorização, Reservas aplica a transição condicional apenas em SOLICITADA. Para EM_CONFIRMACAO ou CONFIRMADA, registra e devolve 409 com codigo CANCELAMENTO_DISTRIBUIDO, sem alterar a reserva. A decisão de encaminhamento ou resultado local é persistida para replay da mesma chave e conteúdo, antes de reavaliar o estado em retries. A justificativa é obrigatória e deve ter ao menos cinco caracteres após remover espaços externos.
+      security: [{ serviceAuth: [] }]
       parameters:
-        - name: reservaId
-          in: path
-          required: true
-          schema: { type: string, format: uuid }
+        - { $ref: '#/components/parameters/ReservaId' }
         - { $ref: '#/components/parameters/IdempotencyKey' }
+        - { $ref: '#/components/parameters/CorrelationId' }
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              type: object
-              required: [justificativa]
-              properties:
-                justificativa: { type: string, minLength: 5 }
+            schema: { $ref: '#/components/schemas/Justificativa' }
       responses:
-        '202':
-          description: Cancelamento processado.
+        '200':
+          description: "Comando concluído e resultado persistido."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EstadoReserva' }
+        '400':
+          description: "Entrada inválida ou cabeçalho obrigatório ausente."
+        '401':
+          description: "Credencial ausente ou inválida."
+        '403':
+          description: "Chamador ou ator sem permissão."
+        '404':
+          description: "Recurso não encontrado."
+        '409':
+          description: "CANCELAMENTO_DISTRIBUIDO indica encaminhamento ao Orquestrador. CANCELAMENTO_EM_ANDAMENTO, ESTADO_INCOMPATIVEL e CHAVE_IDEMPOTENTE_CONFLITANTE identificam outros conflitos e não autorizam redirecionamento."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConflitoCancelamentoLocal' }
+        '503':
+          description: "Serviço temporariamente indisponível. Repita o comando com a mesma chave e conteúdo quando o resultado estiver incerto."
+  /internal/v1/reservas/{reservaId}/aceite:
+    post:
+      operationId: aceitarReserva
+      summary: Registrar aceite na reserva
+      description: >-
+        Somente o Orquestrador com identidade delegada do profissional. Valida a unidade, o prazo e o estado SOLICITADA. Grava a decisão, EM_CONFIRMACAO, auditoria e resultado idempotente em transação local. Os dados retornados permitem alocar e preparar autorização.
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/ReservaId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+        - { $ref: '#/components/parameters/CorrelationId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ComandoSaga' }
+      responses:
+        '200':
+          description: "Comando concluído e resultado persistido."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AceiteRegistrado' }
+        '400':
+          description: "Entrada inválida ou cabeçalho obrigatório ausente."
+        '401':
+          description: "Credencial ausente ou inválida."
+        '403':
+          description: "Chamador ou ator sem permissão."
+        '404':
+          description: "Recurso não encontrado."
+        '409':
+          description: "Transição incompatível ou chave reutilizada com conteúdo diferente."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErroComando' }
+        '503':
+          description: "Serviço temporariamente indisponível. Repita o comando com a mesma chave e conteúdo quando o resultado estiver incerto."
+  /internal/v1/reservas/{reservaId}/confirmar:
+    post:
+      operationId: finalizarConfirmacao
+      summary: Gravar confirmação da reserva
+      description: >-
+        Somente o Orquestrador após obter resultados conclusivos de alocação e preparação. Valida a transição a partir de EM_CONFIRMACAO e grava CONFIRMADA como ponto de compromisso. Repetição retorna o resultado gravado mesmo que a reserva já tenha avançado.
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/ReservaId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+        - { $ref: '#/components/parameters/CorrelationId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ComandoSaga' }
+      responses:
+        '200':
+          description: "Comando concluído e resultado persistido."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EstadoReserva' }
+        '400':
+          description: "Entrada inválida ou cabeçalho obrigatório ausente."
+        '401':
+          description: "Credencial ausente ou inválida."
+        '403':
+          description: "Chamador ou ator sem permissão."
+        '404':
+          description: "Recurso não encontrado."
+        '409':
+          description: "Transição incompatível ou chave reutilizada com conteúdo diferente."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErroComando' }
+        '503':
+          description: "Serviço temporariamente indisponível. Repita o comando com a mesma chave e conteúdo quando o resultado estiver incerto."
+  /internal/v1/reservas/{reservaId}/falhar-confirmacao:
+    post:
+      operationId: registrarFalhaConfirmacao
+      summary: Registrar falha definitiva da confirmação
+      description: >-
+        Somente o Orquestrador após concluir compensações aplicáveis antes do ponto de compromisso. Valida EM_CONFIRMACAO e grava FALHA_CONFIRMACAO.
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/ReservaId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+        - { $ref: '#/components/parameters/CorrelationId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ComandoSaga' }
+      responses:
+        '200':
+          description: "Comando concluído e resultado persistido."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EstadoReserva' }
+        '400':
+          description: "Entrada inválida ou cabeçalho obrigatório ausente."
+        '401':
+          description: "Credencial ausente ou inválida."
+        '403':
+          description: "Chamador ou ator sem permissão."
+        '404':
+          description: "Recurso não encontrado."
+        '409':
+          description: "Transição incompatível ou chave reutilizada com conteúdo diferente."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErroComando' }
+        '503':
+          description: "Serviço temporariamente indisponível. Repita o comando com a mesma chave e conteúdo quando o resultado estiver incerto."
+  /internal/v1/reservas/{reservaId}/iniciar-cancelamento:
+    post:
+      operationId: iniciarCancelamentoDistribuido
+      summary: Registrar início do cancelamento distribuído
+      description: >-
+        Somente o Orquestrador com identidade delegada. Reservas valida o ator e o estado EM_CONFIRMACAO ou CONFIRMADA para gravar CANCELAMENTO_EM_ANDAMENTO. Justificativa é obrigatória para profissional e deve ter ao menos cinco caracteres após remover espaços externos.
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/ReservaId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+        - { $ref: '#/components/parameters/CorrelationId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/IniciarCancelamento' }
+      responses:
+        '200':
+          description: "Comando concluído e resultado persistido."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EstadoReserva' }
+        '400':
+          description: "Entrada inválida ou cabeçalho obrigatório ausente."
+        '401':
+          description: "Credencial ausente ou inválida."
+        '403':
+          description: "Chamador ou ator sem permissão."
+        '404':
+          description: "Recurso não encontrado."
+        '409':
+          description: "Transição incompatível ou chave reutilizada com conteúdo diferente."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErroComando' }
+        '503':
+          description: "Serviço temporariamente indisponível. Repita o comando com a mesma chave e conteúdo quando o resultado estiver incerto."
+  /internal/v1/reservas/{reservaId}/finalizar-cancelamento:
+    post:
+      operationId: finalizarCancelamentoDistribuido
+      summary: Registrar cancelamento concluído
+      description: >-
+        Somente o Orquestrador após confirmar a revogação e a liberação aplicáveis. Valida a transição de CANCELAMENTO_EM_ANDAMENTO para CANCELADA. A guarda de estado impede finalizar uma reserva RETIRADA.
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/ReservaId' }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+        - { $ref: '#/components/parameters/CorrelationId' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ComandoSaga' }
+      responses:
+        '200':
+          description: "Comando concluído e resultado persistido."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EstadoReserva' }
+        '400':
+          description: "Entrada inválida ou cabeçalho obrigatório ausente."
+        '401':
+          description: "Credencial ausente ou inválida."
+        '403':
+          description: "Chamador ou ator sem permissão."
+        '404':
+          description: "Recurso não encontrado."
+        '409':
+          description: "Transição incompatível ou chave reutilizada com conteúdo diferente."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErroComando' }
+        '503':
+          description: "Serviço temporariamente indisponível. Repita o comando com a mesma chave e conteúdo quando o resultado estiver incerto."
+  /internal/v1/reservas/{reservaId}/permissao-cancelamento:
+    get:
+      operationId: consultarPermissaoCancelamento
+      summary: Consultar permissão do ator para cancelar
+      description: >-
+        Somente Orquestrador com identidade delegada. Reservas valida propriedade
+        ou vínculo do profissional e devolve o estado canônico para avaliação.
+        A consulta é somente leitura e a transição revalida a autorização e o estado.
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - { $ref: '#/components/parameters/ReservaId' }
+        - { $ref: '#/components/parameters/CorrelationId' }
+      responses:
+        '200':
+          description: "Ator autorizado a consultar a reserva para avaliar cancelamento."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EstadoReserva' }
+        '401':
+          description: "Credencial ausente ou inválida."
+        '403':
+          description: "Chamador ou ator sem acesso."
+        '404':
+          description: "Reserva não encontrada."
+        '503':
+          description: "Serviço temporariamente indisponível. Repita o comando com a mesma chave e conteúdo quando o resultado estiver incerto."

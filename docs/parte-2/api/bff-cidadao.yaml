@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: BFF Cidadão
-  version: "1.0.0"
+  version: "1.1.0"
   description: Agrega Unidades, Estoque e Reservas para o cidadão. Não exibe dados sensíveis operacionais.
 servers:
   - url: /api/cidadao/v1
@@ -18,6 +18,18 @@ components:
       description: Reutilize a mesma chave ao repetir a mesma ação.
       schema: { type: string, minLength: 1 }
   schemas:
+    ErroComando:
+      type: object
+      required: [codigo]
+      properties:
+        codigo: { type: string }
+        mensagem: { type: string }
+    PedidoEmProcessamento:
+      type: object
+      additionalProperties: false
+      required: [reservaId]
+      properties:
+        reservaId: { type: string, format: uuid }
     Link:
       type: object
       required: [href, method]
@@ -116,10 +128,18 @@ paths:
         '422':
           description: Unidade inexistente/inativa ou combinação unidade/item sem permissão para reserva.
         '409':
-          description: `Idempotency-Key` reutilizada com conteúdo diferente.
+          description: "`Idempotency-Key` reutilizada com conteúdo diferente."
   /reservas/{reservaId}/cancelar:
     post:
       summary: Solicitar cancelamento da reserva pelo cidadão
+      operationId: solicitarCancelamentoReserva
+      description: >-
+        O BFF chama primeiro o cancelamento local condicional em Reservas.
+        O código CANCELAMENTO_DISTRIBUIDO seleciona o Orquestrador. Reservas
+        persiste esse encaminhamento idempotente, para que uma repetição use o
+        mesmo destino mesmo após a mudança de estado. É usada a mesma chave
+        e o mesmo conteúdo a cada repetição em cada serviço. Outros conflitos
+        ou um resultado incerto em Reservas não permitem redirecionar.
       security:
         - bearerAuth: []
       parameters:
@@ -129,10 +149,32 @@ paths:
           schema: { type: string, format: uuid }
         - { $ref: '#/components/parameters/IdempotencyKey' }
       responses:
+        '200':
+          description: "Cancelamento local concluído em Reservas."
         '202':
-          description: Cancelamento aceito e em andamento, quando houver efeitos a compensar.
+          description: "Cancelamento distribuído registrado para processamento. Consulte Location para acompanhar o estado da reserva."
+          headers:
+            Location:
+              description: "Caminho público para acompanhar o estado de negócio, /api/cidadao/v1/reservas/{reservaId}."
+              schema: { type: string, format: uri-reference }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PedidoEmProcessamento' }
+        '400':
+          description: "Entrada inválida ou cabeçalho obrigatório ausente."
+        '401':
+          description: "Credencial ausente ou inválida."
+        '403':
+          description: "Chamador ou ator sem permissão."
+        '404':
+          description: "Recurso não encontrado."
         '409':
-          description: Reserva em estado terminal ou cancelamento não permitido.
+          description: "Cancelamento não permitido, em andamento com outro pedido ou chave usada com conteúdo diferente."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErroComando' }
+        '503':
+          description: "Serviço temporariamente indisponível. Repita o comando com a mesma chave e conteúdo quando o resultado estiver incerto."
   /reservas/{reservaId}:
     get:
       summary: Consultar reserva agregada (Cidadão)
