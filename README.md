@@ -138,13 +138,35 @@ A proposta é atuar como uma **ponte entre a informação existente na rede part
 
 ## Estado do projeto e consulta local
 
-O repositório contém a concepção do projeto e a especificação da arquitetura da Parte 2. A arquitetura documenta quatro serviços de domínio e um Orquestrador da SAGA independente, com PostgreSQL próprio para cada serviço. A aplicação executável ainda está pendente.
+O repositório contém a concepção do projeto e a especificação da arquitetura da Parte 2. A arquitetura documenta quatro serviços de domínio e um Orquestrador da SAGA independente, com PostgreSQL próprio para cada serviço. A implementação começou pela base HTTP do Gateway e do BFF Cidadão.
 
 Para consultar a documentação localmente, clone o repositório e abra os arquivos Markdown:
 
 ```bash
 git clone https://github.com/ArthurDp78/GlicoAcesso.git
 cd GlicoAcesso
+```
+
+## Desenvolvimento local
+
+A base executável da Parte 3 contém dois processos HTTP independentes: API Gateway e BFF Cidadão. Use [uv](https://docs.astral.sh/uv/getting-started/installation/) na raiz do repositório. O `uv` seleciona o Python 3.14 indicado em `.python-version` e instala as versões registradas em `uv.lock`.
+
+```powershell
+uv sync --locked
+```
+
+Inicie os serviços em terminais separados:
+
+| Serviço | Comando |
+|---|---|
+| API Gateway | `uv run --locked uvicorn servicos.gateway.main:app --host 127.0.0.1 --port 8000` |
+| BFF Cidadão | `uv run --locked uvicorn servicos.bff_cidadao.main:app --host 127.0.0.1 --port 8001` |
+
+Configure endereço e porta no comando de cada processo. Os dois serviços expõem `GET /health` e identificam qual processo está respondendo. Esse endpoint verifica o processo HTTP. A verificação de dependências entra quando os serviços passarem a usá-las.
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8000/health
+Invoke-RestMethod http://127.0.0.1:8001/health
 ```
 
 ## Referências
