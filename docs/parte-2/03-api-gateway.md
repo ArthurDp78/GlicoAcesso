@@ -54,24 +54,27 @@ Fontes: [contrato do BFF Cidadão](./api/bff-cidadao.yaml) e [contrato do BFF Un
 
 Os contratos de domínio também descrevem as operações que os BFFs encaminham aos serviços responsáveis. No tráfego externo, o Gateway expõe somente as rotas dos BFFs listadas acima; os clientes não acessam diretamente os serviços de domínio.
 
-## 3. Rotas internas
+## 3. Comunicação interna
 
-Os endpoints sob `/internal/v1` pertencem à comunicação entre serviços e não são publicados pelo Gateway. As chamadas seguem diretamente do serviço chamador ao serviço responsável, conforme os fluxos existentes.
+Os endpoints sob `/internal/v1` pertencem à comunicação entre serviços e não são publicados pelo Gateway. As chamadas seguem diretamente do serviço chamador ao serviço responsável, conforme os documentos 00 e 01. O Gateway encaminha a rota pública ao BFF indicado na tabela, que seleciona o serviço interno conforme a operação. O Orquestrador é acessível somente pela rede interna.
 
-| Comunicação | Exemplo real do contrato |
+| Comunicação | Operação ou rota interna |
 |---|---|
-| Reservas → Estoque | `POST /internal/v1/alocacoes` e `DELETE /internal/v1/alocacoes/{reservaId}`. |
-| Reservas → Retiradas | `POST /internal/v1/autorizacoes` e `POST /internal/v1/autorizacoes/{reservaId}/cancelar`. |
+| BFF Unidade → Orquestrador | Iniciar confirmação após o aceite do profissional. |
+| BFFs → Orquestrador | Solicitar cancelamento com efeitos distribuídos. |
+| Orquestrador → Reservas | Solicitar aceite, finalização e transições de falha ou cancelamento. |
+| Orquestrador → Estoque | `POST /internal/v1/alocacoes` e `DELETE /internal/v1/alocacoes/{reservaId}`. |
+| Orquestrador → Retiradas | `POST /internal/v1/autorizacoes` e `POST /internal/v1/autorizacoes/{reservaId}/cancelar`. |
 | Reservas → Unidades | `GET /internal/v1/unidades/{unidadeId}` para validar unidade ativa e obter prazo de análise. |
 | Reservas → Estoque | `GET /internal/v1/unidades/{unidadeId}/itens/{itemId}/permissao-reserva` para ler a permissão canônica antes de criar a solicitação. |
 | Retiradas → Reservas | `GET /internal/v1/reservas/{reservaId}/estado`, antes de registrar uma entrega. |
-| BFFs → Reservas | `GET /internal/v1/reservas/{reservaId}` para agregar a consulta da reserva com autorização por ator. |
+| BFFs → Reservas | Consultar com autorização por ator via `GET /internal/v1/reservas/{reservaId}`. Criação, rejeição e cancelamento pendente sem efeitos distribuídos seguem para Reservas, conforme o ator. |
 | BFFs → Unidades | `GET /api/cidadao/v1/unidades` para listagem pública e `GET /internal/v1/unidades/{unidadeId}` para compor detalhes autorizados. |
 | BFF Cidadão → Estoque | `GET /api/cidadao/v1/estoque/itens` para listar itens pesquisáveis. |
-| BFF Unidade → Retiradas | `GET /internal/v1/autorizacoes/{reservaId}` para agregar a situação operacional da autorização. |
+| BFF Unidade → Retiradas | `GET /internal/v1/autorizacoes/{reservaId}` para agregar a situação operacional da autorização. O registro da entrega também segue diretamente a Retiradas. |
 | BFF Unidade → Estoque | `GET /api/unidade/v1/estoque/{unidadeId}/itens` para compor o painel e os dados do item da reserva. |
 
-Assim, a entrada externa segue **cliente → Gateway → BFF**; as integrações internas seguem **serviço → serviço**. A publicação e o consumo de eventos RabbitMQ também pertencem aos serviços, fora do encaminhamento HTTP do Gateway.
+Os comandos do Orquestrador e as chamadas dos BFFs para ele serão detalhados nos contratos internos na revisão OpenAPI. Os caminhos públicos da seção 2 continuam sendo o ponto de entrada para os clientes. Os serviços publicam e consomem eventos pelo RabbitMQ.
 
 ## 4. Autenticação e autorização
 
@@ -79,7 +82,7 @@ O diagrama de arquitetura prevê validação na borda e nos serviços responsáv
 
 Os YAMLs utilizam o esquema HTTP Bearer `bearerAuth`. Ele é exigido nas operações de reserva do cidadão e nas operações da unidade; as consultas públicas de itens, unidades e disponibilidade permanecem sem autenticação. A exigência respeita cada operação, sem tratar todos os endpoints como autenticados por uma regra global não definida.
 
-A autorização de negócio continua no serviço responsável, com os BFFs apresentando apenas os dados e ações adequados ao ator. Por exemplo, Reservas valida a propriedade da solicitação ou o vínculo do profissional com a unidade. A proteção da borda não substitui essas verificações.
+A autorização de negócio continua no serviço responsável, com os BFFs apresentando apenas os dados e ações adequados ao ator. Por exemplo, Reservas valida a propriedade da solicitação ou o vínculo do profissional com a unidade. Na confirmação ou no cancelamento distribuído, o BFF propaga o contexto autenticado do ator para que o Orquestrador solicite a validação de negócio em Reservas, conforme o documento 00.
 
 Os documentos não fixam um provedor de identidade, a configuração de validação dos tokens nem o formato de propagação da identidade entre componentes. Esses detalhes permanecem para alinhamento de implementação, preservando os requisitos já declarados nos contratos.
 
@@ -105,7 +108,7 @@ O header `X-Correlation-Id` está explicitamente documentado como opcional na co
 | Cadastro de unidade | Unidades. |
 | Composição específica do cidadão | BFF Cidadão. |
 | Composição operacional da unidade | BFF Unidade. |
-| Orquestração da confirmação e do cancelamento | Reservas, pela SAGA. |
+| Orquestração da confirmação e do cancelamento distribuído | Orquestrador da SAGA. |
 
 O Gateway permanece um componente de entrada, sem se tornar proprietário de dados de domínio ou um coordenador central do processo distribuído.
 
@@ -120,6 +123,8 @@ Exemplo: `GET /api/cidadao/v1/explorar?itemId={itemId}`.
 5. O Gateway devolve a resposta do BFF ao cliente, preservando seu status e sua representação HTTP.
 
 Essa consulta é informativa; as regras de validação e alocação continuam no modelo canônico de Estoque. A composição da resposta e suas diferenças por público são detalhadas no documento 04.
+
+Na rota de decisão da unidade, o Gateway encaminha aceite e rejeição ao mesmo BFF Unidade. Em seguida, o BFF encaminha o aceite ao Orquestrador e a rejeição a Reservas. Acompanha-se o resultado da confirmação pelo recurso Reserva.
 
 ## 8. Relação com os demais documentos
 
