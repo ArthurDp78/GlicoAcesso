@@ -1,0 +1,80 @@
+/* Azul, verde e vermelho amostrados da logo. A tipografia é uma aproximação. */
+:root {
+  --azul: #023e94;
+  --verde: #037649;
+  --vermelho: #de151b;
+  --texto: #0e2945;
+  --muted: #495e72;
+  --linha: #d7e4ef;
+  --titulo: "Century Gothic", "Trebuchet MS", sans-serif;
+  font-family: "Segoe UI", Arial, sans-serif;
+  color: var(--texto);
+  background: #f5f8fc;
+  color-scheme: light;
+}
+* { box-sizing: border-box; }
+body { margin: 0; }
+.largura { width: min(1080px, calc(100% - 48px)); margin-inline: auto; }
+.topo { background: #fff; border-bottom: 1px solid var(--linha); }
+.barra { min-height: 68px; display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.marca { color: var(--azul); font: 800 1.52rem var(--titulo); letter-spacing: -.065em; text-decoration: none; }
+.marca span { color: var(--verde); }
+.portal { color: var(--muted); font-size: .9rem; font-weight: 600; }
+.hero {
+  display: grid; grid-template-columns: 1fr 220px; align-items: center; gap: 20px;
+  margin-top: 32px; min-height: 260px; padding: 42px 48px;
+  border: 1px solid #d7e9f8; border-radius: 22px;
+  background: linear-gradient(115deg, #edf5ff, #e4f5f3);
+}
+h1, h2, h3 { font-family: var(--titulo); margin: 0; line-height: 1.16; }
+h1 { max-width: 660px; font-size: clamp(2.05rem, 4.15vw, 3.2rem); letter-spacing: -.065em; }
+.hero p { max-width: 490px; color: var(--muted); font-size: 1.07rem; line-height: 1.55; margin: 16px 0 0; }
+.selo {
+  width: 206px; height: 206px; display: grid; place-items: center; justify-self: center;
+  border-radius: 50%; background: #ffffffad; border: 1px solid #fff;
+  box-shadow: 0 0 0 11px #ffffff65, 0 18px 40px #023e9415;
+}
+.simbolo { position: relative; width: 152px; height: 160px; overflow: hidden; }
+.simbolo img { position: absolute; width: 320px; max-width: none; left: 50%; top: -33px; translate: -50% 0; }
+.consulta {
+  margin-top: 22px; padding: 25px 28px 28px; background: white;
+  border: 1px solid var(--linha); border-radius: 16px;
+}
+h2 { font-size: 1.33rem; letter-spacing: -.033em; }
+form { display: flex; align-items: end; gap: 12px; margin-top: 17px; }
+.campo { flex: 1; min-width: 0; }
+label { display: block; font-weight: 600; font-size: .9rem; margin-bottom: 7px; }
+select, button { font: inherit; min-height: 46px; border-radius: 9px; }
+select { width: 100%; background: #fff; color: var(--texto); border: 1px solid #afbfd1; padding: 0 12px; }
+button {
+  display: inline-flex; justify-content: center; align-items: center; gap: 8px;
+  padding: 0 20px; border: 1px solid transparent; font-weight: 650;
+  color: #fff; background: var(--azul); cursor: pointer;
+}
+button svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+button:not(:disabled):hover { background: #002e71; }
+button:disabled { background: #61778f; cursor: default; }
+button[hidden] { display: none; }
+.secundario { margin-top: 12px; }
+:focus-visible { outline: 3px solid #089aea; outline-offset: 3px; }
+.resultados { margin-top: 29px; }
+.status { color: var(--muted); margin: 10px 0 0; line-height: 1.45; }
+.status.erro { padding-left: 12px; border-left: 3px solid var(--vermelho); color: #88232a; }
+.lista { display: grid; gap: 12px; margin-top: 14px; }
+.cartao { display: grid; gap: 12px; padding: 20px 25px; border: 1px solid var(--linha); border-radius: 14px; background: white; }
+.cartao header { display: flex; align-items: start; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.cartao h3 { font-size: 1.18rem; }
+.indicador { border-radius: 99px; background: #e4f5ee; color: var(--verde); padding: 5px 10px; font-size: .82rem; font-weight: 700; }
+.indicador.neutro { background: #eef2f7; color: #344c65; }
+.cartao dl { margin: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 20px; }
+.cartao dt { font-size: .82rem; font-weight: 700; }
+.cartao dd { margin: 3px 0 0; color: var(--muted); overflow-wrap: anywhere; line-height: 1.45; }
+footer { color: var(--muted); margin: 22px 0 28px; font-size: .86rem; }
+@media (max-width: 680px) {
+  .largura { width: calc(100% - 32px); }
+  .hero { margin-top: 17px; grid-template-columns: 1fr; padding: 25px 21px; min-height: 0; }
+  .selo, .quebra { display: none; }
+  .consulta { padding: 20px; }
+  form { flex-direction: column; align-items: stretch; }
+  .cartao dl { grid-template-columns: 1fr; }
+}

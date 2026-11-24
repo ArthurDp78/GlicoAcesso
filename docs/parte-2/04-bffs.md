@@ -41,6 +41,8 @@ Todos os comandos `POST`/`PUT`/`PATCH` dos BFFs exigem `Idempotency-Key`. O clie
 | Unidade: `GET /painel/reservas/{id}` | Reservas: `GET /internal/v1/reservas/{reservaId}`; Retiradas: `GET /internal/v1/autorizacoes/{reservaId}`; Unidades e Estoque fornecem nomes e saldo pelos contratos de consulta existentes. |
 | Unidade: `POST /retiradas` | Retiradas: `POST /api/unidade/v1/retiradas`, após consulta do estado canônico de Reservas. |
 
+Na consulta de disponibilidade, uma combinação sem projeção (`404` de Estoque) é omitida do resultado. Uma falha de comunicação torna a consulta indisponível para que o cidadão possa tentar novamente.
+
 ### 2.1 Encaminhamento de decisões e cancelamentos
 
 1. Os BFFs chamam a operação condicional de Reservas com a identidade delegada, o corpo da ação e a chave idempotente. Reservas executa a rejeição ou o cancelamento pendente localmente quando permitido.

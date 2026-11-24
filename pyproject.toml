@@ -5,6 +5,7 @@ description = "Serviços do GlicoAcesso"
 requires-python = ">=3.14,<3.15"
 dependencies = [
     "fastapi>=0.121,<1",
+    "httpx>=0.28,<1",
     "psycopg[binary]>=3.3,<4",
     "pydantic>=2,<3",
     "uvicorn>=0.38,<1",

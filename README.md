@@ -138,7 +138,7 @@ A proposta é atuar como uma **ponte entre a informação existente na rede part
 
 ## Estado do projeto e consulta local
 
-O repositório contém a concepção do projeto e a especificação da arquitetura da Parte 2. A arquitetura documenta quatro serviços de domínio e um Orquestrador da SAGA independente, com PostgreSQL próprio para cada serviço. A base HTTP do Gateway e do BFF Cidadão já inicia localmente. Unidades e Estoque oferecem consultas com dados de demonstração em bancos independentes.
+O repositório contém a concepção do projeto e a especificação da arquitetura da Parte 2. A arquitetura documenta quatro serviços de domínio e um Orquestrador da SAGA independente, com PostgreSQL próprio para cada serviço. O portal do cidadão consulta unidades e itens através do Gateway e do BFF Cidadão. Unidades e Estoque usam bancos independentes com dados de demonstração.
 
 Para consultar a documentação localmente, clone o repositório e abra os arquivos Markdown:
 
@@ -206,7 +206,21 @@ Invoke-RestMethod 'http://127.0.0.1:8003/api/cidadao/v1/estoque/itens'
 Invoke-RestMethod 'http://127.0.0.1:8003/api/cidadao/v1/estoque/disponibilidade?unidadeId=10000000-0000-4000-8000-000000000001&itemId=20000000-0000-4000-8000-000000000001'
 ```
 
-Nessa etapa, as consultas são feitas diretamente aos serviços. A disponibilidade já vem da tabela de projeção, inicializada com o saldo de demonstração. O encaminhamento pelo Gateway e a atualização da projeção por eventos entram nas subtarefas seguintes.
+### Portal do cidadão
+
+Com os quatro serviços em execução, abra [http://127.0.0.1:8000/cidadao](http://127.0.0.1:8000/cidadao), selecione **Tiras reagentes para glicemia** e clique em **Consultar**. A tela exibe a unidade, o horário, a permissão de reserva e o instante em que a disponibilidade foi atualizada. A disponibilidade vem da projeção inicial de Estoque.
+
+As consultas públicas passam pelo Gateway. Para conferir a resposta agregada em JSON:
+
+```powershell
+Invoke-RestMethod 'http://127.0.0.1:8000/api/cidadao/v1/explorar?itemId=20000000-0000-4000-8000-000000000001'
+```
+
+| Processo | Variável de ambiente | Padrão |
+|---|---|---|
+| Gateway | `BFF_CIDADAO_URL` | `http://127.0.0.1:8001` |
+| BFF Cidadão | `UNIDADES_URL` | `http://127.0.0.1:8002` |
+| BFF Cidadão | `ESTOQUE_URL` | `http://127.0.0.1:8003` |
 
 ## Referências
 

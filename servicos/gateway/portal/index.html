@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Consultar disponibilidade | GlicoAcesso</title>
+  <link rel="stylesheet" href="/cidadao/assets/portal.css">
+  <script src="/cidadao/assets/portal.js" defer></script>
+</head>
+<body>
+  <header class="topo">
+    <div class="largura barra">
+      <a class="marca" href="/cidadao" aria-label="GlicoAcesso, início">Glico<span>Acesso</span></a>
+      <span class="portal">Portal do cidadão</span>
+    </div>
+  </header>
+  <main class="largura">
+    <section class="hero" aria-labelledby="titulo">
+      <div>
+        <h1 id="titulo">Encontre seu item<br class="quebra"> nas unidades de saúde</h1>
+        <p>Consulte a disponibilidade de medicamentos e insumos para diabetes nas unidades participantes.</p>
+      </div>
+      <div class="selo" aria-hidden="true">
+        <div class="simbolo"><img src="/cidadao/logo.png" alt=""></div>
+      </div>
+    </section>
+
+    <section class="consulta" aria-labelledby="titulo-consulta">
+      <h2 id="titulo-consulta">Consultar disponibilidade</h2>
+      <form id="consulta">
+        <div class="campo">
+          <label for="item">Medicamento ou insumo</label>
+          <select id="item" name="itemId" required disabled>
+            <option value="">Carregando itens…</option>
+          </select>
+        </div>
+        <button id="buscar" type="submit" disabled>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></svg>
+          Consultar
+        </button>
+      </form>
+      <button id="recarregar" class="secundario" type="button" hidden>Recarregar catálogo</button>
+    </section>
+
+    <section class="resultados" aria-labelledby="titulo-resultados">
+      <h2 id="titulo-resultados">Unidades participantes</h2>
+      <p id="status" class="status" role="status" aria-live="polite">Selecione um item para ver as unidades.</p>
+      <div id="lista" class="lista"></div>
+    </section>
+
+    <footer>A disponibilidade é informativa e pode mudar antes do atendimento.</footer>
+  </main>
+</body>
+</html>

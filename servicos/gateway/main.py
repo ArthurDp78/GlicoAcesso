@@ -1,10 +1,44 @@
-from fastapi import FastAPI
+import os
+from pathlib import Path
+
+from fastapi import FastAPI, Request, Response
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+
+from servicos.http import cliente_http, consultar
 
 
-app = FastAPI(title="GlicoAcesso — API Gateway")
+PASTA_PORTAL = Path(__file__).resolve().parent / "portal"
+LOGO = Path(__file__).resolve().parents[2] / "identidade-visual" / "logo-sem-fundo.png"
+app = FastAPI(title="GlicoAcesso — API Gateway", lifespan=cliente_http)
+app.mount("/cidadao/assets", StaticFiles(directory=PASTA_PORTAL), name="portal-cidadao")
 
 
 @app.get("/health")
 def verificar_saude() -> dict[str, str]:
-    """Informa que o processo HTTP do Gateway está respondendo."""
     return {"servico": "gateway", "status": "ok"}
+
+
+@app.get("/cidadao", include_in_schema=False)
+def portal_cidadao():
+    return FileResponse(PASTA_PORTAL / "index.html")
+
+
+@app.get("/cidadao/logo.png", include_in_schema=False)
+def logo_portal():
+    return FileResponse(LOGO, media_type="image/png")
+
+
+@app.get("/api/cidadao/v1/itens")
+@app.get("/api/cidadao/v1/unidades")
+@app.get("/api/cidadao/v1/explorar")
+async def encaminhar_consulta(request: Request) -> Response:
+    destino = os.environ.get("BFF_CIDADAO_URL", "http://127.0.0.1:8001").rstrip("/")
+    resposta = await consultar(
+        request.app.state.http, destino + request.url.path, params=request.query_params.multi_items()
+    )
+    return Response(
+        content=resposta.content,
+        status_code=resposta.status_code,
+        media_type=resposta.headers.get("content-type", "application/json"),
+    )
