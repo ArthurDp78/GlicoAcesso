@@ -1,13 +1,13 @@
 # GlicoAcesso - decomposição e fronteiras dos microsserviços
 
-**Etapa:** 2 — Arquitetura  
-**Documento:** 01 - Microsserviços  
-**Versão:** 1.0  
-**Situação:** detalhamento das fronteiras definidas no contrato compartilhado  
-**Documento normativo:** [00 - Decisões arquiteturais compartilhadas](./00-decisoes-compartilhadas.md)  
-**Última revisão:** 20 de outubro de 2026
+**Etapa:** 2 — Arquitetura\
+**Documento:** 01 - Microsserviços\
+**Versão:** 1.1\
+**Situação:** detalhamento das fronteiras definidas no contrato compartilhado\
+**Documento normativo:** [00 - Decisões arquiteturais compartilhadas](./00-decisoes-compartilhadas.md)\
+**Última revisão:** 24 de novembro de 2026
 
-> Este documento explica quais são os quatro microsserviços de domínio do GlicoAcesso, qual problema cada um resolve, quais informações controla, quais responsabilidades não lhe pertencem e por que as fronteiras foram escolhidas. Ele detalha o contrato do documento 00; não cria uma segunda definição de estados, eventos, identificadores ou tecnologias.
+> Este documento explica quais são os quatro microsserviços de domínio do GlicoAcesso, por que suas fronteiras foram escolhidas e como o serviço independente de orquestração coopera com eles. Ele detalha o contrato do documento 00; não cria uma segunda definição de estados, eventos, identificadores ou tecnologias.
 
 ## 1. Objetivo e relação com o enunciado
 
@@ -17,7 +17,7 @@ O requisito 4.1 do enunciado da Etapa 2 pede:
 2. a justificativa das fronteiras adotadas;
 3. um diagrama de componentes e de comunicação entre serviços.
 
-Este documento atende aos dois primeiros itens. O diagrama geral de componentes e comunicação está no [02 - Diagrama de arquitetura](./02-diagrama-arquitetura.md), que deve representar exatamente as fronteiras descritas aqui.
+Este documento atende aos dois primeiros itens. O [02 - Diagrama de arquitetura](./02-diagrama-arquitetura.md) será alinhado a estas fronteiras na próxima subtarefa.
 
 O objetivo é permitir que uma pessoa que não participou das conversas do grupo consiga responder, sem depender de explicações externas:
 
@@ -42,7 +42,7 @@ A decomposição contém exatamente estes quatro microsserviços de domínio:
 
 Os clientes cidadão e unidade, o API Gateway e os BFFs são componentes da arquitetura de entrada e apresentação. Eles não são serviços adicionais de domínio e não passam a ser donos dos dados descritos neste documento. A arquitetura de entrada e seus caminhos são detalhados nos documentos 02, 03 e 04.
 
-O projeto não cria um quinto microsserviço de identidade nesta etapa. A autenticação pode ser fornecida por um provedor de identidade externo. Os serviços de domínio recebem somente o identificador estável necessário para reconhecer o ator e autorizar a operação; não copiam senha, token ou perfil completo para seus bancos.
+Além dos quatro serviços de domínio, o **Orquestrador da SAGA** é um serviço independente na camada de coordenação, com instância PostgreSQL própria. A autenticação pode ser fornecida por um provedor de identidade externo. Os serviços de domínio recebem somente o identificador estável necessário para reconhecer o ator e autorizar a operação; não copiam senha, token ou perfil completo para seus bancos.
 
 ## 3. Critérios usados para definir uma fronteira
 
@@ -52,7 +52,7 @@ Uma fronteira de microsserviço representa uma responsabilidade de negócio com 
 2. **Referências entre domínios, não cópias autoritativas.** Um serviço pode guardar identificadores externos necessários à própria operação, mas não replica a tabela de outro serviço como fonte de verdade.
 3. **Integração por contrato.** A consulta ou solicitação de mudança em outro domínio ocorre por API do serviço responsável; fatos que precisam atualizar projeções são propagados por eventos.
 4. **Sem acesso cruzado a bancos.** Nenhum microsserviço lê ou escreve diretamente na instância PostgreSQL de outro.
-5. **Transações locais.** Cada serviço confirma as alterações do próprio domínio em sua transação local. A coordenação de efeitos que atravessam serviços é feita pela SAGA de confirmação, detalhada em [06 - SAGA](./06-saga.md).
+5. **Transações locais.** Cada serviço confirma as alterações do próprio domínio em sua transação local. O Orquestrador coordena os efeitos distribuídos de confirmação e cancelamento conforme o contrato compartilhado.
 6. **Separação entre estado de negócio e fato físico.** Uma reserva confirmada não é uma retirada. Reservas controla o ciclo de vida da solicitação; Retiradas controla a autorização e o fato de a entrega presencial ter ocorrido.
 
 Esses critérios evitam que a divisão seja apenas técnica. Cada serviço corresponde a uma área que possui regras e informações próprias do negócio.
@@ -63,10 +63,18 @@ Esses critérios evitam que a divisão seja apenas técnica. Cada serviço corre
 |---|---|---|---|
 | **Unidades** | “Quais unidades existem e quais são suas informações de atendimento?” | Cadastro da unidade, endereço, contatos institucionais, horários, informações de atendimento e prazo de análise das solicitações da unidade. | Catálogo e saldo de itens, permissão de reserva por item, solicitações, autorizações e retiradas. |
 | **Estoque** | “Qual item existe, qual quantidade pertence à unidade e qual quantidade pode ser alocada?” | Catálogo de medicamentos e insumos, estoque físico, movimentações, configuração de permissão de reserva por unidade/item, alocações e projeção de disponibilidade. | Identidade do cidadão, decisão de aceitar uma solicitação, ciclo de vida da reserva, autorização de retirada e prova da entrega. |
-| **Reservas** | “Qual é a situação da solicitação e qual etapa distribuída precisa ocorrer?” | Solicitação, decisão da unidade, estado de negócio, referências ao cidadão/unidade/item, prazo aplicado à solicitação e estado durável da SAGA. | Saldo canônico de estoque, cadastro canônico de unidade/item, autorização de balcão e registro da entrega física. |
+| **Reservas** | “Qual é a situação da solicitação e quem tomou a decisão?” | Solicitação, decisão da unidade, estado de negócio, referências ao cidadão/unidade/item, prazo aplicado e histórico de transições. | Andamento da SAGA, saldo canônico, cadastro de unidade/item, autorização de balcão e registro da entrega física. |
 | **Retiradas** | “Existe autorização válida para esta reserva e a entrega já foi registrada?” | Autorização preparada ou cancelada, referência à reserva e registro de quem e quando efetuou a entrega presencial. | Saldo de estoque, disponibilidade, decisão de aceitar solicitação e ciclo de vida completo da reserva. |
 
-As instâncias de banco são separadas. Cada serviço possui sua própria instância PostgreSQL; “possuir” uma informação significa controlar sua fonte de verdade e as alterações nela, não necessariamente expor todos os campos dessa informação a todos os clientes.
+Os quatro serviços de domínio e o Orquestrador têm cinco instâncias PostgreSQL independentes. Para os serviços de domínio, “possuir” uma informação significa controlar sua fonte de verdade e as alterações nela, não necessariamente expor todos os campos dessa informação a todos os clientes.
+
+### 4.1 Serviço independente de orquestração
+
+O Orquestrador recebe confirmações do BFF Unidade e cancelamentos distribuídos de ambos os BFFs. Envia comandos HTTP internos e idempotentes a Reservas, Estoque e Retiradas e verifica os resultados antes de avançar ou compensar.
+
+Sua instância PostgreSQL guarda `saga_execucoes`, `saga_etapas`, chaves de idempotência, intenções de comando, resultados, tentativas e a Inbox de retirada. O Orquestrador registra a intenção antes de cada chamada, retoma execuções interrompidas e serializa o trabalho por `reservaId`. A cópia de `retirada.concluida.v1` em sua fila auxilia a reconciliação de cancelamentos. A liberação de estoque depende do resultado durável de Retiradas quando há autorização.
+
+A propriedade dos dados segue as fronteiras de domínio. Reservas valida e grava a transição, Estoque valida e altera a alocação e Retiradas controla a autorização e a entrega. O Orquestrador usa as APIs desses serviços e persiste apenas os dados necessários à coordenação.
 
 ## 5. Microsserviço Unidades
 
@@ -176,15 +184,15 @@ Estoque não:
 
 ### 6.6 Motivo da fronteira
 
-O saldo e as alocações exigem uma regra de integridade local: duas solicitações concorrentes não podem consumir a mesma quantidade. Reservas, por sua vez, representa uma solicitação e seu fluxo de decisão, que podem existir mesmo antes de qualquer alocação. Separar esses domínios permite que Estoque proteja o saldo como autoridade e que Reservas coordene o processo sem gravar dados de estoque.
+O saldo e as alocações exigem uma regra de integridade local: duas solicitações concorrentes não podem consumir a mesma quantidade. Reservas, por sua vez, representa uma solicitação e seu fluxo de decisão, que podem existir mesmo antes de qualquer alocação. Separar esses domínios permite que Estoque proteja o saldo como autoridade e que Reservas cuide das transições da solicitação. O Orquestrador solicita as ações a cada serviço.
 
-A separação também dá lugar ao CQRS definido no documento 00: o modelo de escrita de Estoque protege as invariantes e a projeção de leitura otimiza a consulta de disponibilidade. Esses modelos continuam pertencendo ao mesmo microsserviço e não criam um quinto serviço.
+A separação também dá lugar ao CQRS definido no documento 00: o modelo de escrita de Estoque protege as invariantes e a projeção de leitura otimiza a consulta de disponibilidade. Esses modelos continuam no mesmo microsserviço, em tabelas distintas da mesma instância PostgreSQL.
 
 ## 7. Microsserviço Reservas
 
 ### 7.1 Propósito
 
-Reservas controla a solicitação do cidadão desde sua criação até um resultado de negócio, como rejeição, expiração, confirmação, cancelamento, falha final ou retirada registrada. Também coordena a SAGA usada para confirmar uma solicitação aceita.
+Reservas controla a solicitação do cidadão desde sua criação até um resultado de negócio, como rejeição, expiração, confirmação, cancelamento, falha final ou retirada registrada.
 
 ### 7.2 Informações que controla
 
@@ -197,7 +205,7 @@ Reservas é a fonte de verdade para:
 - decisão da unidade, incluindo ator e instante;
 - status de negócio da reserva;
 - histórico de transições e cancelamentos necessário à auditoria;
-- execução durável da SAGA, incluindo sagaId, etapa, estado, tentativas e dados necessários à recuperação;
+- registros de idempotência dos comandos recebidos e Inbox para o evento de retirada;
 - resultado da confirmação e atualização do estado da reserva quando recebe o fato de retirada concluída.
 
 Reservas guarda identificadores de cidadão, unidade e item conforme a necessidade do fluxo. Isso não transfere para Reservas a propriedade do perfil, cadastro de unidade ou catálogo de itens.
@@ -213,10 +221,9 @@ Reservas:
 - autoriza a unidade correspondente a decidir sobre a solicitação;
 - registra aceitação ou rejeição e seus responsáveis;
 - fornece seu estado canônico por consulta interna para Retiradas validar uma entrega;
-- ao aceitar, inicia e coordena a SAGA de confirmação;
-- envia comandos internos idempotentes a Estoque e Retiradas, mantendo o estado durável do processo;
-- altera a reserva para CONFIRMADA somente após a alocação no Estoque e a preparação da autorização em Retiradas terem sido confirmadas;
-- processa cancelamentos de reserva conforme os estados permitidos e coordena a reversão dos efeitos distribuídos, quando houver;
+- valida e grava, de forma idempotente, o aceite e a transição para `EM_CONFIRMACAO` quando recebe o comando do Orquestrador;
+- valida e grava `CONFIRMADA` quando o Orquestrador solicita a finalização após confirmar alocação e autorização;
+- cancela localmente uma solicitação ainda `SOLICITADA` e valida e grava as transições solicitadas pelo Orquestrador em cancelamentos distribuídos;
 - expira automaticamente somente solicitações SOLICITADA cujo prazo decisaoAte venceu, conforme a regra do documento 00;
 - atualiza o status de negócio para RETIRADA após processar o evento canônico de retirada concluída publicado por Retiradas.
 
@@ -233,13 +240,13 @@ Reservas não:
 - declara que a entrega física ocorreu sem o registro confirmado por Retiradas;
 - realiza uma transação distribuída ACID entre bancos.
 
-Reservas é o coordenador da SAGA, não o dono de todos os dados que participam dela. Estoque continua dono da alocação; Retiradas continua dona da autorização e do registro da entrega.
+O andamento, a repetição de comandos e a decisão de compensar pertencem ao Orquestrador. Reservas recebe comandos pela API e responde pelo resultado das próprias transições.
 
 ### 7.5 Motivo da fronteira
 
 O fluxo de uma solicitação tem regras próprias: quem pode decidir, em quais condições ela expira, quais estados são permitidos e quando uma confirmação pode ser comunicada. Essas regras não pertencem ao serviço de Estoque, que precisa concentrar-se na integridade de quantidades, nem a Retiradas, que precisa registrar autorização e entrega.
 
-Reservas coordena as etapas porque conhece o estado do processo de negócio. Isso não significa que ele possa editar os dados dos participantes: cada participante aplica sua própria regra e confirma seu próprio efeito local. Como a confirmação atravessa Reservas, Estoque e Retiradas, a coordenação é feita por SAGA orquestrada, e não por transação compartilhada.
+Essa fronteira mantém a validação e o histórico da solicitação no mesmo serviço. Assim, aceite, expiração e cancelamento local disputam a transição no banco de Reservas, enquanto o Orquestrador acompanha comandos e resultados em sua própria instância.
 
 ## 8. Microsserviço Retiradas
 
@@ -265,11 +272,11 @@ Retiradas mantém apenas os dados necessários para reconhecer a reserva e cumpr
 Retiradas:
 
 - prepara, de forma idempotente, a autorização solicitada pela SAGA depois que Estoque confirmou a alocação;
-- cancela uma autorização quando Reservas coordena cancelamento ou compensação;
+- cancela uma autorização ao receber do Orquestrador o comando de revogação durante cancelamento ou compensação, com resultado durável para reconciliar a disputa com a entrega;
 - consulta o estado canônico em Reservas antes de entregar e exige `CONFIRMADA`; timeout, indisponibilidade ou outro estado impedem o registro naquele momento;
 - revalida, na transação local, que a autorização corresponde à reserva e à unidade e não foi revogada nem utilizada;
 - registra uma única vez a entrega física, com ator e instante;
-- publica o evento retirada.concluida.v1 depois de confirmar localmente a entrega;
+- grava a entrega e `retirada.concluida.v1` na Outbox na mesma transação local e publica o evento após o commit;
 - assegura que cancelamento da autorização e registro da retirada física sejam mutuamente exclusivos.
 
 O contrato [retirada.yaml](./api/retirada.yaml) inclui `GET /internal/v1/autorizacoes/{reservaId}` para compor a visão operacional do BFF Unidade. Esse GET é uma consulta de dados; o registro da entrega continua sendo `POST /api/unidade/v1/retiradas` e exige a validação canônica em Reservas.
@@ -289,7 +296,7 @@ Quando Retiradas confirma a entrega, esse serviço grava o fato em seu próprio 
 
 ### 8.5 Motivo da fronteira
 
-Uma autorização preparada não significa que houve entrega. A unidade pode não comparecer para retirar o item, e uma reserva confirmada pode depois ser cancelada antes da entrega. Por isso, autorização, cancelamento da autorização e entrega presencial são regras próprias de Retiradas.
+Uma autorização preparada não significa que houve entrega. O cidadão pode não comparecer para retirar o item, e uma reserva confirmada pode depois ser cancelada antes da entrega. Por isso, autorização, cancelamento da autorização e entrega presencial são regras próprias de Retiradas.
 
 Manter esse serviço separado impede que Reservas registre como fato físico algo que ainda não aconteceu e impede que Estoque seja responsável por uma interação de balcão. Também cria uma fronteira clara para a concorrência entre cancelar e entregar: apenas Retiradas pode serializar esses dois resultados sobre a autorização.
 
@@ -304,7 +311,8 @@ O dono de cada informação canônica é único. Os demais serviços podem guard
 | Catálogo de medicamentos e insumos | Estoque | itemId em Reservas e Retiradas | Obter por contrato de Estoque; não manter cópia como fonte canônica. |
 | Estoque físico, movimentações e alocações | Estoque | reservaId e referências de unidade/item | Somente Estoque altera o saldo e as alocações. |
 | Disponibilidade para consulta | Estoque | Respostas compostas apresentadas por BFFs | Tratar como projeção atualizável; não usar como validação final de alocação. |
-| Solicitação, decisão, status e SAGA | Reservas | reservaId em Estoque e Retiradas | Somente Reservas altera o ciclo de vida da reserva e coordena a SAGA. |
+| Solicitação, decisão, status e histórico | Reservas | `reservaId` em Estoque, Retiradas e Orquestrador | Somente Reservas valida e grava as transições da reserva. |
+| Execuções, etapas e tentativas da SAGA | Orquestrador | `sagaId` nos comandos aos participantes | Somente o Orquestrador altera o andamento da execução e decide avançar ou compensar. |
 | Autorização e entrega presencial | Retiradas | reservaId, unidadeId e itemId quando necessários | Somente Retiradas prepara/cancela autorização e registra o fato da entrega. |
 | Identidade de autenticação | Provedor de identidade | cidadaoId ou identificador estável do ator | Não copiar credenciais, tokens ou perfil completo para bancos de domínio. |
 
@@ -318,13 +326,18 @@ Esta seção descreve responsabilidades e direção das chamadas em nível arqui
 |---|---|---|---|
 | BFF Cidadão ou BFF Unidade | Unidades | Consultar informações de unidades necessárias às jornadas de cada público. | API do serviço Unidades; a autorização de cada operação é validada pelo serviço. |
 | BFF Cidadão ou BFF Unidade | Estoque | Consultar disponibilidade ou executar ações de estoque permitidas ao perfil da unidade. | API do serviço Estoque; a disponibilidade é projeção e o comando de alocação é autoridade. |
-| BFF Cidadão ou BFF Unidade | Reservas | Criar e acompanhar solicitações; permitir decisão e ações da equipe autorizada. | API do serviço Reservas; clientes não coordenam diretamente a SAGA. |
+| BFF Cidadão ou BFF Unidade | Reservas | Criar ou acompanhar solicitações, rejeitar pela unidade e cancelar pedidos pendentes sem efeitos distribuídos, conforme o ator. | API do serviço Reservas. |
+| BFF Unidade | Orquestrador | Encaminhar o aceite do profissional para iniciar a confirmação. | Comando HTTP interno. |
+| BFF Cidadão ou BFF Unidade | Orquestrador | Pedir cancelamento distribuído autorizado. | Comando HTTP interno. |
 | BFF Unidade | Retiradas | Consultar autorização e registrar uma entrega presencial por profissional autorizado. | API do serviço Retiradas. |
 | Reservas | Unidades | Validar que a unidade está ativa e obter prazoAnalise para definir decisaoAte ao criar uma solicitação. | `GET /internal/v1/unidades/{unidadeId}` no serviço proprietário. |
-| Reservas | Estoque | Consultar a permissão canônica `permiteReserva` ao criar a solicitação; executar alocação ou liberação durante a SAGA. | `GET /internal/v1/unidades/{unidadeId}/itens/{itemId}/permissao-reserva`, além dos comandos REST internos idempotentes e versionados. |
-| Reservas | Retiradas | Preparar ou cancelar autorização durante confirmação, compensação ou cancelamento. | Comandos REST internos, idempotentes e versionados. |
+| Reservas | Estoque | Consultar a permissão canônica ao criar a solicitação. | Consulta HTTP interna de `permiteReserva`. |
+| Orquestrador | Reservas | Solicitar aceite, finalização ou transições de falha e cancelamento. | Comandos HTTP internos e idempotentes. |
+| Orquestrador | Estoque | Alocar ou liberar a quantidade da reserva. | Comandos HTTP internos e idempotentes. |
+| Orquestrador | Retiradas | Preparar ou revogar a autorização. | Comandos HTTP internos e idempotentes. |
 | Estoque | Consumidores interessados | Informar alterações persistidas que atualizam disponibilidade e projeções. | Eventos publicados por Outbox no RabbitMQ; consumidores deduplicam por eventId. |
-| Retiradas | Reservas | Verificar a confirmação antes da entrega e informar a retirada após o registro. | GET interno do estado canônico antes da entrega; evento retirada.concluida.v1 publicado por Outbox depois dela. |
+| Retiradas | Reservas | Verificar a confirmação antes da entrega. | GET interno do estado canônico. |
+| Retiradas, via RabbitMQ | Reservas, Estoque e Orquestrador | Informar a entrega registrada aos três consumidores. | `retirada.concluida.v1` publicado por Outbox, com uma fila própria por consumidor. |
 
 Os clientes chamam o API Gateway, e o Gateway encaminha cada público ao BFF correspondente. Clientes não chamam APIs dos microsserviços de domínio diretamente. Os BFFs podem agregar respostas para uma tela, mas não possuem regras de domínio, não gravam nos bancos dos microsserviços e não orquestram a SAGA.
 
@@ -338,7 +351,7 @@ Unidades controla o estabelecimento e as informações institucionais; Estoque c
 
 ### 11.2 Por que Estoque e Reservas são serviços diferentes
 
-Estoque precisa manter a verdade quantitativa e proteger a invariável de não alocar mais que o saldo disponível. Reservas precisa manter a solicitação, decisão, estados e coordenação do processo. A solicitação pode ser criada antes de qualquer alocação; somente depois da aceitação a SAGA solicita a alocação. Essa separação permite que o Estoque seja a autoridade quantitativa enquanto Reservas é a autoridade do fluxo da reserva.
+Estoque precisa manter a verdade quantitativa e proteger a invariável de não alocar mais que o saldo disponível. Reservas precisa manter a solicitação, decisão, estados e histórico. A solicitação pode ser criada antes de qualquer alocação; somente depois da aceitação a SAGA solicita a alocação. Essa separação permite que o Estoque seja a autoridade quantitativa enquanto Reservas é a autoridade do fluxo da reserva.
 
 ### 11.3 Por que Reservas e Retiradas são serviços diferentes
 
@@ -348,17 +361,15 @@ Reservas controla a solicitação e sua confirmação administrativa. Retiradas 
 
 O Estoque registra quantidades e alocações; Retiradas registra a autorização e o fato operacional de entrega a uma pessoa na unidade. A alocação reduz o que está disponível para novas reservas, mas não é baixa física nem comprovação de entrega. Retiradas não pode editar diretamente o saldo ou a alocação no banco de Estoque. A integração está definida por `retirada.concluida.v1`: Estoque consome o evento, valida a alocação e registra baixa física e encerramento como consumida em sua transação local, conforme a seção 13.1.
 
-### 11.5 Por que Reservas coordena a SAGA
+### 11.5 Por que o Orquestrador é independente
 
-Reservas recebe a decisão de negócio que inicia a confirmação e é dono do estado visível da solicitação. Por isso mantém o registro durável da SAGA e coordena os participantes Estoque e Retiradas. Os participantes continuam donos dos efeitos que executam e das respectivas compensações. Essa divisão mantém uma sequência compreensível sem criar um serviço coordenador adicional.
+As regras de aceite, expiração e transição pertencem a Reservas. Ordenar chamadas remotas, recuperar resultados incertos e compensar efeitos distribuídos exige outro tipo de controle. Separar essas responsabilidades permite recuperar execuções no banco do Orquestrador e mantém cada participante responsável pela validade e pela gravação de seus efeitos. A confirmação continua atravessando Reservas, Estoque e Retiradas e mantém um único coordenador.
 
-### 11.6 Por que não criar outros microsserviços nesta decomposição
+### 11.6 Por que manter quatro fronteiras de domínio
 
-O escopo aprovado exige quatro serviços de domínio e o fluxo de confirmação precisa atravessar pelo menos três serviços. As quatro fronteiras acima cobrem cadastro de unidades, estoque, solicitação e retirada, além de sustentarem a SAGA Reservas–Estoque–Retiradas. Criar um serviço de identidade, catálogo separado ou orquestrador independente nesta etapa acrescentaria fronteiras e integrações que não são necessárias para demonstrar os requisitos definidos. Identidade é atendida por provedor externo; o catálogo continua dentro de Estoque; Reservas mantém a orquestração.
+As quatro fronteiras cobrem cadastro de unidades, estoque, solicitação e retirada. O catálogo faz parte de Estoque e a autenticação pode ser fornecida por um provedor externo. O Orquestrador acrescenta uma fronteira técnica dedicada ao fluxo distribuído.
 
-Esta escolha não impede uma evolução futura. Uma nova fronteira só deve ser criada quando houver responsabilidade de negócio, dados e regras que justifiquem a autonomia, e após revisar o impacto no documento 00, nos contratos, na SAGA, nos eventos e nos diagramas.
-
-## 12. Resumo das autoridades de negócio
+## 12. Resumo da propriedade dos dados
 
 Para eliminar interpretações divergentes, as perguntas abaixo têm um único serviço responsável:
 
@@ -369,7 +380,7 @@ Para eliminar interpretações divergentes, as perguntas abaixo têm um único s
 | A unidade permite reserva deste item? | **Estoque** |
 | Qual é o saldo físico e quanto pode ser alocado? | **Estoque** |
 | Qual é a situação da solicitação e quem tomou a decisão? | **Reservas** |
-| Quais etapas da confirmação ou do cancelamento ainda precisam ser reconciliadas? | **Reservas**, por meio do estado durável da SAGA |
+| Quais etapas da confirmação ou do cancelamento ainda precisam ser reconciliadas? | **Orquestrador**, por meio do estado durável da SAGA |
 | A autorização da reserva está apta ou cancelada? | **Retiradas** |
 | A entrega presencial aconteceu, por quem e quando? | **Retiradas** |
 
@@ -391,9 +402,9 @@ Os detalhes ficam nos documentos OpenAPI e 02–12 indicados na estrutura compar
 
 ### 13.1 Decisão de integração para a retirada física
 
-Retiradas registra a entrega física e o evento `retirada.concluida.v1` na própria Outbox, na mesma transação local. Após o commit, o publicador envia o evento ao RabbitMQ, que o entrega em filas duráveis independentes: uma de Reservas e outra de Estoque. Assim, os dois serviços processam o fato sem competir pela mesma mensagem.
+Retiradas registra a entrega física e o evento `retirada.concluida.v1` na própria Outbox, na mesma transação local. Após o commit, o publicador envia o evento ao RabbitMQ, que o entrega em filas duráveis independentes: uma para Reservas, uma para Estoque e uma para o Orquestrador. Cada consumidor usa sua Inbox para deduplicar o processamento local.
 
-Reservas muda a reserva de `CONFIRMADA` ou `CANCELAMENTO_EM_ANDAMENTO` para `RETIRADA`. Se a retirada venceu um cancelamento em andamento, encerra a execução de cancelamento como `INTERROMPIDA` na mesma transação local da deduplicação, da atualização da reserva e da auditoria, conforme o documento 00, seção 9.3. Estoque valida a alocação ativa vinculada ao `reservaId` e, em transação local idempotente, registra a saída física, encerra a alocação como consumida e grava `estoque.retirada-baixada.v1` em sua Outbox.
+Reservas muda a reserva de `CONFIRMADA` ou `CANCELAMENTO_EM_ANDAMENTO` para `RETIRADA`. O Orquestrador usa a própria cópia para reconciliar eventual cancelamento e registrar seu desfecho técnico em transação separada. A disputa entre revogação e entrega é resolvida em Retiradas. Se a entrega vencer, o Orquestrador preserva a alocação para a baixa física em Estoque, conforme o documento 00, seção 9.3. Estoque valida a alocação ativa vinculada ao `reservaId` e, em transação local idempotente, registra a saída física, encerra a alocação como consumida e grava `estoque.retirada-baixada.v1` em sua Outbox.
 
 O payload de `retirada.concluida.v1` inclui `retiradaId`, `reservaId`, `unidadeId`, `itemId` e `quantidade`; não inclui dados pessoais do cidadão. Estoque deduplica pelo `eventId` e confere se unidade, item e quantidade correspondem à alocação ativa. Se houver divergência, não realiza baixa parcial ou arbitrária: registra uma ocorrência operacional observável para reconciliação e reprocessamento.
 
@@ -410,10 +421,11 @@ Uma proposta de API, banco, evento, Gateway, BFF ou diagrama está de acordo com
 - nenhum serviço lê ou grava diretamente no banco de outro;
 - referências externas usam identificadores estáveis, sem copiar a fonte de verdade do serviço proprietário;
 - Estoque é a autoridade de saldo e alocação;
-- Reservas é a autoridade da solicitação e coordenador da SAGA;
+- Reservas é a autoridade da solicitação e das transições de negócio;
+- o Orquestrador é o único coordenador da SAGA, com persistência independente e comunicação por contratos;
 - Retiradas é a autoridade da autorização e da entrega física;
 - Unidades é a autoridade dos dados institucionais e do prazoAnalise configurado;
-- o processamento de retirada não altera o banco de Estoque diretamente; `retirada.concluida.v1` atualiza Reservas e Estoque por filas independentes, e Estoque baixa o saldo e encerra a alocação na própria transação local, conforme os documentos 00, 02, 05, 09 e 11;
+- o processamento de retirada não altera o banco de Estoque diretamente; `retirada.concluida.v1` chega a Reservas, Estoque e Orquestrador por filas independentes, e Estoque baixa o saldo e encerra a alocação na própria transação local, conforme os documentos 00, 02, 05, 09 e 11;
 - Gateway e BFFs permanecem componentes de borda e não se tornam donos ou coordenadores do domínio;
 - o diagrama de arquitetura do documento 02 mostra as mesmas fronteiras e os caminhos de comunicação descritos aqui.
 
@@ -426,4 +438,4 @@ Se qualquer item falhar, a proposta deve ser corrigida ou a decisão compartilha
 - [05 - Fluxo de reservas](./05-fluxo-reservas.md): fluxo de negócio, atores, decisões e transições da reserva.
 - [06 - SAGA](./06-saga.md): orquestração, etapas, compensações, falhas, recuperação e idempotência.
 
-Os arquivos especializados acima estão presentes na estrutura atual da Etapa 2. Alterações em fronteiras ou fluxos exigem atualizar essas referências e os contratos dependentes no mesmo conjunto de mudanças.
+Os documentos especializados e os contratos dependentes serão alinhados a estas fronteiras nas subtarefas correspondentes.
