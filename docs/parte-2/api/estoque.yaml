@@ -131,6 +131,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/DisponibilidadeItem' }
+        '404': { description: Combinação de unidade e item sem projeção. }
   /api/unidade/v1/estoque/itens:
     get:
       summary: Listar catálogo de itens

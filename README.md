@@ -138,7 +138,7 @@ A proposta é atuar como uma **ponte entre a informação existente na rede part
 
 ## Estado do projeto e consulta local
 
-O repositório contém a concepção do projeto e a especificação da arquitetura da Parte 2. A arquitetura documenta quatro serviços de domínio e um Orquestrador da SAGA independente, com PostgreSQL próprio para cada serviço. A implementação começou pela base HTTP do Gateway e do BFF Cidadão.
+O repositório contém a concepção do projeto e a especificação da arquitetura da Parte 2. A arquitetura documenta quatro serviços de domínio e um Orquestrador da SAGA independente, com PostgreSQL próprio para cada serviço. A base HTTP do Gateway e do BFF Cidadão já inicia localmente. Unidades e Estoque oferecem consultas com dados de demonstração em bancos independentes.
 
 Para consultar a documentação localmente, clone o repositório e abra os arquivos Markdown:
 
@@ -168,6 +168,45 @@ Configure endereço e porta no comando de cada processo. Os dois serviços expõ
 Invoke-RestMethod http://127.0.0.1:8000/health
 Invoke-RestMethod http://127.0.0.1:8001/health
 ```
+
+### Unidades e Estoque
+
+A etapa de consultas usa dois PostgreSQL 17 independentes. Em um PowerShell com Docker Desktop em execução, crie os bancos locais de demonstração:
+
+```powershell
+docker run -d --name glico-unidades-db -e POSTGRES_USER=glico -e POSTGRES_PASSWORD=glico-demo -e POSTGRES_DB=unidades -p 127.0.0.1:54331:5432 -v glico-unidades-data:/var/lib/postgresql/data postgres:17
+docker run -d --name glico-estoque-db -e POSTGRES_USER=glico -e POSTGRES_PASSWORD=glico-demo -e POSTGRES_DB=estoque -p 127.0.0.1:54332:5432 -v glico-estoque-data:/var/lib/postgresql/data postgres:17
+```
+
+Esses comandos são para a primeira execução. Nos próximos usos, inicie os contêineres existentes com `docker start glico-unidades-db glico-estoque-db`. Aguarde os bancos aceitarem conexões antes de aplicar as migrações. As credenciais do exemplo são para a demonstração local.
+
+Na raiz do projeto, configure a URL do banco no terminal de cada serviço:
+
+**Unidades (porta 8002)**
+
+```powershell
+$env:UNIDADES_DATABASE_URL = 'postgresql://glico:glico-demo@127.0.0.1:54331/unidades'
+uv run --locked python -m servicos.migracoes unidades --demo
+uv run --locked uvicorn servicos.unidades.main:app --host 127.0.0.1 --port 8002
+```
+
+**Estoque (porta 8003)**
+
+```powershell
+$env:ESTOQUE_DATABASE_URL = 'postgresql://glico:glico-demo@127.0.0.1:54332/estoque'
+uv run --locked python -m servicos.migracoes estoque --demo
+uv run --locked uvicorn servicos.estoque.main:app --host 127.0.0.1 --port 8003
+```
+
+O parâmetro `--demo` carrega uma unidade ativa, um item e 10 unidades disponíveis. Reaplicar as migrações e os dados de demonstração preserva os registros existentes.
+
+```powershell
+Invoke-RestMethod 'http://127.0.0.1:8002/api/cidadao/v1/unidades'
+Invoke-RestMethod 'http://127.0.0.1:8003/api/cidadao/v1/estoque/itens'
+Invoke-RestMethod 'http://127.0.0.1:8003/api/cidadao/v1/estoque/disponibilidade?unidadeId=10000000-0000-4000-8000-000000000001&itemId=20000000-0000-4000-8000-000000000001'
+```
+
+Nessa etapa, as consultas são feitas diretamente aos serviços. A disponibilidade já vem da tabela de projeção, inicializada com o saldo de demonstração. O encaminhamento pelo Gateway e a atualização da projeção por eventos entram nas subtarefas seguintes.
 
 ## Referências
 
