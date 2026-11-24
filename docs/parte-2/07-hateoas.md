@@ -60,7 +60,7 @@ Para os estados `CANCELAMENTO_EM_ANDAMENTO`, `RETIRADA`, `REJEITADA`, `CANCELADA
 *   **Links (Comuns):**
     *   `self`: Link para recarregar a reserva.
 
-Os links apontam para os BFFs. O aceite inicia a confirmação no Orquestrador. A rejeição e o cancelamento de solicitação ainda pendente são operações locais de Reservas. A ação `cancelar` mantém a rota pública quando exige coordenação distribuída, conforme [04 - BFFs](./04-bffs.md). O estado pode mudar depois da consulta, por isso cada comando valida novamente as condições. Após um aceite para processamento ou um conflito de estado, o cliente consulta `self` para acompanhar a reserva e obter os links atuais.
+Os links apontam para os BFFs. O aceite inicia a confirmação no Orquestrador. A rejeição e o cancelamento de solicitação ainda pendente são operações locais de Reservas. A ação `cancelar` mantém a rota pública quando exige coordenação distribuída, conforme [04 - BFFs](./04-bffs.md). O estado pode mudar depois da consulta, por isso cada comando valida novamente as condições. Após um `202`, o cliente consulta a reserva pelo endereço em `Location`, que corresponde a `self`. Se houver conflito de estado, o cliente usa `self` para recuperar os links atuais.
 
 ## 3. Exemplos de Respostas JSON
 

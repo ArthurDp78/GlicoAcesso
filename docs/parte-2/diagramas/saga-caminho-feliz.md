@@ -12,6 +12,8 @@ sequenceDiagram
     participant R as Reservas
     participant E as Estoque
     participant T as Retiradas
+    B->>R: Consultar decisão idempotente para ACEITAR
+    R-->>B: ACEITE_ENCAMINHAR sem alterar a reserva
     B->>O: Encaminhar aceite autenticado
     O->>DB: Gravar pedido, execução e intenção de aceite
     O-->>B: Pedido registrado para processamento

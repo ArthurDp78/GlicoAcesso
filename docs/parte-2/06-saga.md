@@ -63,7 +63,7 @@ O BFF Unidade registra a entrega diretamente em Retiradas. Retiradas exige o est
 
 ### 5.1 Reserva em `SOLICITADA`
 
-Reservas valida e grava o cancelamento local condicionalmente. Se o aceite vencer, o BFF reavalia o estado canônico e encaminha o pedido ao Orquestrador quando aplicável.
+Reservas valida e grava o cancelamento local condicionalmente. Se o aceite vencer e Reservas devolver `CANCELAMENTO_DISTRIBUIDO`, o BFF encaminha o pedido ao Orquestrador. A mesma chave recupera a decisão de encaminhamento, conforme os [contratos dos BFFs](./04-bffs.md).
 
 ### 5.2 Reserva em `EM_CONFIRMACAO`
 

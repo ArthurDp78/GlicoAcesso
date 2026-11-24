@@ -14,14 +14,16 @@ O aceite e a gravação de `CONFIRMADA` ocorrem no banco de Reservas. O início 
 
 ## 2. Contratos e limites
 
-Os caminhos abaixo constam nos contratos atuais de Estoque, Retiradas e Reservas. A revisão OpenAPI definirá o contrato interno do Orquestrador e os comandos que ele envia a Reservas, além de alinhar os contratos dos participantes e dos BFFs.
+Os [contratos OpenAPI](./api/) especificam os caminhos abaixo. Os comandos de transição em Reservas partem do Orquestrador. A recepção do pedido pelo Orquestrador tem contrato próprio.
 
 | Operação | Contrato e método | Dados documentados | Respostas documentadas |
 |---|---|---|---|
+| Iniciar confirmação ou cancelamento distribuído | Orquestrador: `POST /internal/v1/reservas/{reservaId}/confirmacoes` ou `/cancelamentos` sob o mesmo recurso | `reservaId`, ator delegado, `Idempotency-Key` e justificativa em cancelamento por profissional | `202` com `Location` interno de acompanhamento |
+| Alterar estado da reserva | Reservas: `POST /internal/v1/reservas/{reservaId}/aceite`, `/confirmar`, `/falhar-confirmacao`, `/iniciar-cancelamento` ou `/finalizar-cancelamento` sob o mesmo recurso | `reservaId`, `sagaId`, `Idempotency-Key` e dados exigidos para cada transição | `200` após gravação local |
 | Alocar estoque | Estoque: `POST /internal/v1/alocacoes` | Corpo: `sagaId`, `reservaId`, `unidadeId`, `itemId`, `quantidade`; cabeçalho `Idempotency-Key` | `201`; `409` para saldo insuficiente ou conflito |
-| Liberar alocação | Estoque: `DELETE /internal/v1/alocacoes/{reservaId}` | Path `reservaId`; cabeçalho `Idempotency-Key` | `204` |
+| Liberar alocação | Estoque: `DELETE /internal/v1/alocacoes/{reservaId}` | Path `reservaId`; cabeçalhos `Idempotency-Key` e `X-Saga-Id` | `204` |
 | Preparar autorização | Retiradas: `POST /internal/v1/autorizacoes` | Corpo: `sagaId`, `reservaId`, `unidadeId`, `itemId`, `quantidade`; cabeçalho `Idempotency-Key` | `201` |
-| Cancelar autorização | Retiradas: `POST /internal/v1/autorizacoes/{reservaId}/cancelar` | Path `reservaId`; cabeçalho `Idempotency-Key` | `200`; `409` se a entrega já foi registrada |
+| Cancelar autorização | Retiradas: `POST /internal/v1/autorizacoes/{reservaId}/cancelar` | Path `reservaId`; cabeçalhos `Idempotency-Key` e `X-Saga-Id` | `200` se revogada; `409` com `ENTREGA_JA_REGISTRADA` e `retiradaId` se a entrega venceu |
 | Consultar estado para retirada (fora da SAGA) | Reservas: `GET /internal/v1/reservas/{reservaId}/estado` | Path `reservaId`; identidade de serviço de Retiradas; `X-Correlation-Id` opcional; sem chave idempotente | `200` com `reservaId` e `status`; `401`; `403`; `404`; `503` |
 
 A semântica esperada de repetição segue o contrato central. Com a mesma chave, conteúdo e principal autenticado, o participante reproduz o resultado conclusivo. Com conteúdo divergente, devolve conflito de idempotência. O GET de autorização atende ao painel da unidade. O GET de estado da reserva valida a entrega. A recuperação do resultado de um comando usa sua chave e seu conteúdo originais.

@@ -135,11 +135,11 @@ O estado deve ser atualizado condicionalmente no banco de Reservas para impedir 
 
 ### 6.3 Aceitação
 
-1. No aceite, o BFF Unidade encaminha o pedido ao Orquestrador.
+1. No aceite, o BFF Unidade obtém o encaminhamento idempotente de Reservas e envia o pedido ao Orquestrador.
 2. O Orquestrador persiste a execução e a intenção do primeiro comando. Reservas valida o ator, a unidade, o prazo e o estado. Em sua própria transação, grava a decisão e `EM_CONFIRMACAO`.
 3. O Orquestrador solicita a alocação a Estoque. Confirmada a alocação, solicita a Retiradas a preparação da autorização.
 4. Com ambos os efeitos confirmados, o Orquestrador solicita a finalização. Reservas grava `CONFIRMADA`, que é o ponto de compromisso. O Orquestrador registra a conclusão em seu banco.
-5. O cliente acompanha o estado pelo recurso Reserva. A recepção do pedido e o estado `EM_CONFIRMACAO` representam processamento em curso.
+5. O cliente acompanha o estado pelo recurso Reserva indicado em `Location` na resposta `202`. A recepção do pedido e o estado `EM_CONFIRMACAO` representam processamento em curso.
 
 Se uma etapa falhar definitivamente antes do ponto de compromisso, o Orquestrador coordena as compensações necessárias. Depois de confirmá-las, pede a Reservas que grave `FALHA_CONFIRMACAO`. Uma resposta perdida exige recuperar o resultado com a mesma chave e conteúdo.
 
@@ -160,7 +160,7 @@ O cancelamento é permitido antes da retirada física enquanto a reserva estiver
 
 | Estado no pedido de cancelamento | Comportamento |
 |---|---|
-| `SOLICITADA` | Reservas cancela localmente, sem chamar Estoque ou Retiradas, e grava `CANCELADA`. |
+| `SOLICITADA` | Reservas cancela localmente, sem chamar Estoque ou Retiradas, e grava `CANCELADA`. O BFF devolve `200`. |
 | `EM_CONFIRMACAO` | O Orquestrador reconcilia comandos de confirmação já emitidos. Reservas valida o pedido e grava `CANCELAMENTO_EM_ANDAMENTO` quando aplicável. O Orquestrador coordena a reversão e pede a Reservas que finalize após confirmar os efeitos. |
 | `CONFIRMADA` | O Orquestrador pede a Reservas que inicie o cancelamento. Confirma a revogação em Retiradas antes de solicitar a liberação em Estoque. Reservas só grava `CANCELADA` após as operações aplicáveis. Se a retirada vencer, segue-se o fluxo da seção 9. |
 | `CANCELAMENTO_EM_ANDAMENTO` | Não inicia um segundo cancelamento concorrente. Retorna o estado atual e permite consultar o andamento. |

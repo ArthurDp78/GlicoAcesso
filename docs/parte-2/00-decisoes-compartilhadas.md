@@ -1,13 +1,13 @@
 # GlicoAcesso - decisões arquiteturais compartilhadas
 
 **Etapa:** 2 — Arquitetura\
-**Versão:** 1.1\
+**Versão:** 1.2\
 **Situação:** contrato-base para os documentos da Etapa 2\
 **Última revisão:** 24 de novembro de 2026
 
 > Este documento estabelece a linguagem e as decisões que devem ser usadas por todas as pessoas do grupo. Os documentos de APIs, persistência, SAGA, Gateway e BFFs detalham estas decisões; não podem redefinir o mesmo conceito de outra forma. Se uma decisão precisar mudar, a alteração deve ser registrada aqui e propagada aos documentos afetados antes de ser considerada válida.
 
-> **Refatoração em andamento.** Esta versão define a arquitetura revisada. Os documentos especializados, contratos OpenAPI e diagramas de sequência ainda serão alinhados a ela.
+> **Arquitetura revisada.** O [resumo e índice](./resumo-arquitetura.md) reúne os documentos, contratos e diagramas da Parte 2.
 
 ## 1. Para que serve este documento
 
@@ -253,11 +253,11 @@ Antes do ponto de compromisso, uma falha definitiva leva à compensação dos ef
 
 ### 9.3 Fluxo distribuído de cancelamento
 
-O cancelamento de `SOLICITADA` é local a Reservas e usa uma transição condicional. Se um aceite concorrente já mudou o estado, o BFF reavalia o caminho com o estado canônico e encaminha a operação distribuída ao Orquestrador quando aplicável. A rejeição e a expiração também são locais.
+O cancelamento de `SOLICITADA` é local a Reservas e usa uma transição condicional. O BFF encaminha ao Orquestrador quando Reservas devolve `CANCELAMENTO_DISTRIBUIDO` com base no estado canônico. Reservas persiste o encaminhamento por chave e conteúdo para que a repetição siga o mesmo caminho. A rejeição e a expiração também são locais.
 
 1. O BFF encaminha ao Orquestrador o pedido de cancelamento de uma reserva `EM_CONFIRMACAO` ou `CONFIRMADA`. O Orquestrador registra o pedido duravelmente e serializa o trabalho por `reservaId`.
 2. Se a confirmação estiver ativa, o Orquestrador valida o pedido com Reservas antes de interromper seu avanço, pausa novos passos e reconcilia todos os comandos já emitidos. Se a finalização já tiver gravado `CONFIRMADA`, conclui a confirmação e trata o cancelamento como uma execução posterior. Se a confirmação já estiver compensando por falha definitiva, conclui a recuperação e reavalia o pedido pelo estado canônico.
-3. O Orquestrador atribui um novo `sagaId` ao cancelamento e registra os efeitos conhecidos da confirmação. Persiste a intenção de pedir a Reservas a transição para `CANCELAMENTO_EM_ANDAMENTO`. Reservas valida o ator e o estado na própria transação e, para profissional, exige e registra justificativa. Se houver confirmação ainda ativa, o pedido e a intenção ficam vinculados a ela até o resultado conclusivo. Se Reservas aceitar, o Orquestrador grava `INTERROMPIDA` e ativa a execução sucessora na mesma transação local. Se Reservas rejeitar, encerra o pedido e retoma a confirmação quando aplicável. Sem confirmação ativa, a própria execução de cancelamento mantém a intenção e seu resultado.
+3. O Orquestrador atribui um novo `sagaId` ao cancelamento e registra os efeitos conhecidos da confirmação. Persiste a intenção de pedir a Reservas a transição para `CANCELAMENTO_EM_ANDAMENTO`. Reservas valida o ator e o estado na própria transação e, para profissional, exige e registra justificativa. Os contratos exigem pelo menos cinco caracteres após remover espaços externos. Se houver confirmação ainda ativa, o pedido e a intenção ficam vinculados a ela até o resultado conclusivo. Se Reservas aceitar, o Orquestrador grava `INTERROMPIDA` e ativa a execução sucessora na mesma transação local. Se Reservas rejeitar, encerra o pedido e retoma a confirmação quando aplicável. Sem confirmação ativa, a própria execução de cancelamento mantém a intenção e seu resultado.
 4. O Orquestrador solicita `CancelarAutorizacao` a Retiradas se houver autorização. Retiradas serializa revogação e entrega na mesma fronteira transacional. Só após confirmação durável da revogação, ou evidência conclusiva de que nunca houve autorização, o Orquestrador pode pedir a liberação da alocação aplicável.
 5. Após confirmar as operações aplicáveis, o Orquestrador pede a Reservas que grave `CANCELADA` e então conclui a execução. Resultado incerto mantém o cancelamento em andamento e exige repetição com a mesma chave e conteúdo.
 
@@ -386,7 +386,7 @@ O modelo de leitura é atualizado por eventos persistidos na Outbox e publicados
 
 ## 12. Contratos HTTP, Gateway, BFFs e HATEOAS
 
-Os contratos OpenAPI são a definição detalhada dos endpoints. A revisão inclui um contrato interno próprio para o Orquestrador. O Gateway mantém as rotas públicas nos BFFs. Devem obedecer às regras compartilhadas abaixo:
+Os contratos OpenAPI são a definição detalhada dos endpoints. O [contrato do Orquestrador](./api/orquestrador.yaml) define sua API interna. Os contratos seguem as regras compartilhadas abaixo:
 
 1. APIs públicas seguem `/api/cidadao/v1/...` ou `/api/unidade/v1/...`; operações internas usam `/internal/v1/...` e não são roteadas publicamente.
 2. Gateway encaminha cada cliente para seu BFF. Ele aplica responsabilidades transversais definidas em `03-api-gateway.md`, mas não contém regra de negócio da reserva.
@@ -394,7 +394,9 @@ Os contratos OpenAPI são a definição detalhada dos endpoints. A revisão incl
 4. HATEOAS deve ser demonstrado no recurso Reserva. O cidadão proprietário pode cancelar enquanto a reserva estiver ativa e antes da retirada física; profissional autorizado da unidade também pode cancelar e deve fornecer justificativa. A ação não é oferecida para `CANCELAMENTO_EM_ANDAMENTO`, `RETIRADA`, `REJEITADA`, `CANCELADA`, `EXPIRADA` ou `FALHA_CONFIRMACAO`.
 5. Criar uma solicitação não é sinônimo de confirmação. O contrato deve devolver `SOLICITADA`; aceitar uma solicitação inicia um processo assíncrono. O cliente acompanha o recurso até obter o resultado de negócio, inclusive se houver cancelamento concorrente. A aceitação HTTP de um pedido pelo Orquestrador exige registro durável e não implica conclusão da SAGA.
 6. Resultados de negócio esperados — como estoque insuficiente — devem ser distinguíveis de falhas técnicas, autorização negada e recurso inexistente.
-7. A API de disponibilidade pode retornar `atualizadoEm` e indicador de defasagem. A API de comando de alocação é decisiva para confirmar.
+7. A API de disponibilidade retorna `atualizadoEm` e pode incluir indicador de defasagem. A API de comando de alocação é decisiva para confirmar.
+
+8. Nos BFFs, a operação local concluída retorna `200`. Um pedido distribuído persistido retorna `202` e `Location` para consultar a Reserva. Reservas registra `ACEITE_ENCAMINHAR` ou `CANCELAMENTO_DISTRIBUIDO` para fixar o destino de uma repetição idempotente. O encaminhamento de aceite em si preserva o estado de negócio até o comando do Orquestrador.
 
 Os detalhes de status HTTP, esquemas, parâmetros, autenticação, limites e exemplos completos ficam nos arquivos OpenAPI, `07-hateoas.md`, `03-api-gateway.md` e `04-bffs.md`.
 
@@ -416,9 +418,9 @@ O contrato-base é responsabilidade de **Marcos** e deve ser estabilizado antes 
 
 | Pessoa | Frente e entregáveis principais | Dependência |
 |---|---|---|
-| **Marcos** | Fronteiras e justificativa dos quatro serviços; arquitetura geral; fluxo e estados; SAGA, compensações e diagramas de sucesso/falha. `01`, `02`, `05`, `06` e `diagramas/`. | Define primeiro este contrato-base. Depois alinha nomes de comandos/eventos com Guilerme e Lana. |
-| **Guilerme** | Contratos REST/OpenAPI dos quatro serviços de domínio e do Orquestrador, além de HATEOAS da Reserva. `api/*.yaml` e `07-hateoas.md`. | Usa serviços, estados, campos e transições definidos aqui. |
-| **Arthur** | API Gateway e dois BFFs, com rotas, autenticação e respostas específicas dos dois clientes. `03-api-gateway.md` e `04-bffs.md`. | Usa os contratos REST de Guilerme e não altera regras dos serviços. Pode esboçar rotas antes e fechar após o OpenAPI. |
+| **Marcos** | Fronteiras e justificativa dos quatro serviços; arquitetura geral; fluxo e estados; SAGA, compensações e diagramas de sucesso/falha. `01`, `02`, `05`, `06` e `diagramas/`. | Define primeiro este contrato-base. Depois alinha nomes de comandos/eventos com Guilherme e Lana. |
+| **Guilherme** | Contratos REST/OpenAPI dos quatro serviços de domínio e do Orquestrador, além de HATEOAS da Reserva. `api/*.yaml` e `07-hateoas.md`. | Usa serviços, estados, campos e transições definidos aqui. |
+| **Arthur** | API Gateway e dois BFFs, com rotas, autenticação e respostas específicas dos dois clientes. `03-api-gateway.md` e `04-bffs.md`. | Usa os contratos REST de Guilherme e não altera regras dos serviços. Pode esboçar rotas antes e fechar após o OpenAPI. |
 | **Lana** | Bancos por serviço, consistência eventual, Outbox e CQRS no Estoque. `09`–`12`. | Usa propriedade de dados, eventos, envelope, broker e defasagem definidos aqui. |
 
 Todas as pessoas devem revisar os documentos integrados e participar da apresentação, conforme o enunciado. Cada integrante deve manter contribuição autoral verificável no GitHub; a divisão de tarefas não substitui essa exigência.
@@ -426,7 +428,7 @@ Todas as pessoas devem revisar os documentos integrados e participar da apresent
 ### 14.1 Ordem de trabalho
 
 1. Marcos publica este contrato-base com fronteiras, estados e fluxo inicial.
-2. Guilerme, Arthur e Lana trabalham em paralelo, seguindo o contrato.
+2. Guilherme, Arthur e Lana trabalham em paralelo, seguindo o contrato.
 3. Marcos confere que os contratos HTTP e eventos concretos mantêm a sequência e a semântica acordadas.
 4. O grupo executa revisão cruzada: uma pessoa verifica os documentos de outra frente e registra divergências para correção.
 5. README e índice de `/docs` apontam para os arquivos efetivamente existentes; não se deve deixar link quebrado ou referência a decisão ainda não escrita.
@@ -435,7 +437,7 @@ Para a apresentação de 22/10, o enunciado determina congelamento do repositór
 
 ## 15. Estrutura documental e rastreabilidade
 
-Estrutura alvo de `/docs/parte-2/`:
+Estrutura de `/docs/parte-2/`:
 
 ```text
 00-decisoes-compartilhadas.md
@@ -451,6 +453,7 @@ Estrutura alvo de `/docs/parte-2/`:
 10-consistencia.md
 11-outbox.md
 12-cqrs.md
+resumo-arquitetura.md
 api/
   unidade.yaml
   estoque.yaml
@@ -464,6 +467,7 @@ diagramas/
   saga-falha.md
   saga-caminho-feliz.md
   saga-compensacao.md
+  saga-cancelamento-retirada.md
 ```
 
 | Requisito do enunciado | Documento(s) que o demonstram |
@@ -478,30 +482,31 @@ diagramas/
 
 ## 16. Checklist de consistência antes de integrar
 
-Os itens abaixo serão conferidos na revisão integrada da arquitetura revisada, depois da atualização dos documentos e contratos.
+Revisão integrada local da documentação, contratos e diagramas da Parte 2, em 24/11/2026.
 
-- [ ] Todos os documentos preservam os quatro serviços de domínio e mostram o Orquestrador como único coordenador da SAGA.
-- [ ] Cada serviço tem uma instância de banco própria; nenhum diagrama mostra leitura cruzada de bancos.
-- [ ] Uma reserva contém um único item (medicamento ou insumo), uma unidade e quantidade positiva.
-- [ ] A criação valida unidade ativa e permissão canônica `permiteReserva`; consulta de disponibilidade projetada não autoriza a solicitação.
-- [ ] Os mesmos nomes de estado e transições aparecem em APIs, HATEOAS, SAGA, banco e diagramas, incluindo cancelamento em andamento e expiração da solicitação pendente.
-- [ ] A reserva só fica `CONFIRMADA` depois de alocação no Estoque e autorização em Retiradas.
-- [ ] A retirada física ocorre depois da confirmação e só muda o estado para `RETIRADA` após registro em Retiradas.
-- [ ] Antes da entrega, Retiradas consulta o estado canônico em Reservas e exige `CONFIRMADA`; falha de consulta impede o registro, e a transação local serializa entrega e revogação.
-- [ ] A SAGA tem três participantes — Reservas, Estoque e Retiradas — e as compensações são idempotentes e reversas.
-- [ ] Timeout não é interpretado automaticamente como falha remota; resultado incerto é repetido com a mesma chave idempotente e conteúdo.
-- [ ] Eventos usam envelope e nomes canônicos; cada produtor usa Outbox quando publica eventos.
-- [ ] Mensagens podem chegar duplicadas. Reservas, Estoque e Orquestrador recebem a retirada em filas próprias e deduplicam localmente.
-- [ ] Disponibilidade de leitura é marcada com instante de atualização; a escrita do Estoque é autoridade.
-- [ ] Profissional da unidade informa justificativa ao cancelar; nenhuma reserva pode ser cancelada após a retirada física ser registrada.
-- [ ] Gateway expõe os BFFs, não as APIs internas dos microsserviços.
-- [ ] O BFF Cidadão e o BFF Unidade apresentam respostas e ações apropriadas a públicos diferentes.
-- [ ] Os sete arquivos OpenAPI (quatro serviços de domínio, Orquestrador e dois BFFs) descrevem operações, schemas de entrada obrigatórios e versão `/v1` compatíveis com os fluxos documentados.
-- [ ] Todo comando HTTP de alteração exige `Idempotency-Key` no cabeçalho; repetição idêntica recupera o resultado original, e conteúdo divergente produz conflito.
-- [ ] Cada operação HATEOAS usa caminho, método e corpo declarados no contrato do BFF correspondente.
-- [ ] As rotas de cliente documentadas no Gateway cobrem as operações declaradas pelos dois BFFs.
-- [ ] Os links Markdown relativos e os destinos do README apontam para arquivos existentes.
-- [ ] Os diagramas Mermaid foram renderizados e verificados no GitHub.
+- [x] Todos os documentos preservam os quatro serviços de domínio e mostram o Orquestrador como único coordenador da SAGA.
+- [x] Cada serviço tem uma instância de banco própria; nenhum diagrama mostra leitura cruzada de bancos.
+- [x] Uma reserva contém um único item (medicamento ou insumo), uma unidade e quantidade positiva.
+- [x] A criação valida unidade ativa e permissão canônica `permiteReserva`; consulta de disponibilidade projetada não autoriza a solicitação.
+- [x] Os mesmos nomes de estado e transições aparecem em APIs, HATEOAS, SAGA, banco e diagramas, incluindo cancelamento em andamento e expiração da solicitação pendente.
+- [x] A reserva só fica `CONFIRMADA` depois de alocação no Estoque e autorização em Retiradas.
+- [x] A retirada física ocorre depois da confirmação e só muda o estado para `RETIRADA` após registro em Retiradas.
+- [x] Antes da entrega, Retiradas consulta o estado canônico em Reservas e exige `CONFIRMADA`; falha de consulta impede o registro, e a transação local serializa entrega e revogação.
+- [x] A SAGA tem três participantes — Reservas, Estoque e Retiradas — e as compensações são idempotentes e reversas.
+- [x] Timeout não é interpretado automaticamente como falha remota; resultado incerto é repetido com a mesma chave idempotente e conteúdo.
+- [x] Eventos usam envelope e nomes canônicos; cada produtor usa Outbox quando publica eventos.
+- [x] Mensagens podem chegar duplicadas. Reservas, Estoque e Orquestrador recebem a retirada em filas próprias e deduplicam localmente.
+- [x] Disponibilidade de leitura é marcada com instante de atualização; a escrita do Estoque é autoridade.
+- [x] Profissional da unidade informa justificativa ao cancelar; nenhuma reserva pode ser cancelada após a retirada física ser registrada.
+- [x] Gateway expõe os BFFs, não as APIs internas dos microsserviços.
+- [x] O BFF Cidadão e o BFF Unidade apresentam respostas e ações apropriadas a públicos diferentes.
+- [x] Os sete arquivos OpenAPI (quatro serviços de domínio, Orquestrador e dois BFFs) descrevem operações, schemas de entrada obrigatórios e versão `/v1` compatíveis com os fluxos documentados.
+- [x] Todo comando HTTP de alteração exige `Idempotency-Key` no cabeçalho; repetição idêntica recupera o resultado original, e conteúdo divergente produz conflito.
+- [x] Cada operação HATEOAS usa caminho, método e corpo declarados no contrato do BFF correspondente.
+- [x] As rotas de cliente documentadas no Gateway cobrem as operações declaradas pelos dois BFFs.
+- [x] Os links Markdown relativos e os destinos do README apontam para arquivos existentes.
+- [x] Os diagramas Mermaid foram renderizados localmente.
+- [ ] Conferir a renderização no GitHub após a publicação da branch.
 
 ## 17. Como alterar uma decisão
 

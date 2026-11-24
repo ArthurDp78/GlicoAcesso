@@ -60,9 +60,9 @@ Os endpoints sob `/internal/v1` pertencem à comunicação entre serviços e nã
 
 | Comunicação | Operação ou rota interna |
 |---|---|
-| BFF Unidade → Orquestrador | Iniciar confirmação após o aceite do profissional. |
-| BFFs → Orquestrador | Solicitar cancelamento com efeitos distribuídos. |
-| Orquestrador → Reservas | Solicitar aceite, finalização e transições de falha ou cancelamento. |
+| BFF Unidade → Orquestrador | `POST /internal/v1/reservas/{reservaId}/confirmacoes` para iniciar a confirmação. |
+| BFFs → Orquestrador | `POST /internal/v1/reservas/{reservaId}/cancelamentos` para solicitar reversão de efeitos distribuídos. |
+| Orquestrador → Reservas | Comandos de aceite, finalização, falha e cancelamento sob `/internal/v1/reservas/{reservaId}`, no contrato de Reservas. |
 | Orquestrador → Estoque | `POST /internal/v1/alocacoes` e `DELETE /internal/v1/alocacoes/{reservaId}`. |
 | Orquestrador → Retiradas | `POST /internal/v1/autorizacoes` e `POST /internal/v1/autorizacoes/{reservaId}/cancelar`. |
 | Reservas → Unidades | `GET /internal/v1/unidades/{unidadeId}` para validar unidade ativa e obter prazo de análise. |
@@ -74,7 +74,7 @@ Os endpoints sob `/internal/v1` pertencem à comunicação entre serviços e nã
 | BFF Unidade → Retiradas | `GET /internal/v1/autorizacoes/{reservaId}` para agregar a situação operacional da autorização. O registro da entrega também segue diretamente a Retiradas. |
 | BFF Unidade → Estoque | `GET /api/unidade/v1/estoque/{unidadeId}/itens` para compor o painel e os dados do item da reserva. |
 
-Os comandos do Orquestrador e as chamadas dos BFFs para ele serão detalhados nos contratos internos na revisão OpenAPI. Os caminhos públicos da seção 2 continuam sendo o ponto de entrada para os clientes. Os serviços publicam e consomem eventos pelo RabbitMQ.
+Os [contratos do Orquestrador](./api/orquestrador.yaml) e de [Reservas](./api/reserva.yaml) detalham esses comandos. Os caminhos públicos da seção 2 continuam sendo o ponto de entrada para os clientes. Os serviços publicam e consomem eventos pelo RabbitMQ.
 
 ## 4. Autenticação e autorização
 
@@ -96,7 +96,7 @@ Os documentos não fixam um provedor de identidade, a configuração de validaç
 | Convenções HTTP | Preservar métodos, parâmetros, corpos, respostas e `Idempotency-Key` definidos nos contratos, incluindo JSON UTF-8 e o versionamento dos caminhos. |
 | Separação das APIs | Impedir a exposição pública dos endpoints internos dos serviços. |
 
-O header `X-Correlation-Id` está explicitamente documentado como opcional na consulta interna do estado da reserva. O formato geral de transporte da correlação nas demais operações ainda não está detalhado nos OpenAPI. A tecnologia do Gateway, os endereços dos BFFs e a configuração física do roteamento também permanecem indefinidos.
+`X-Correlation-Id` é opcional nos comandos internos da SAGA e na consulta do estado canônico de Reservas. A tecnologia do Gateway, os endereços dos BFFs e a configuração física do roteamento também permanecem indefinidos.
 
 ## 6. O que não pertence ao Gateway
 
@@ -124,7 +124,7 @@ Exemplo: `GET /api/cidadao/v1/explorar?itemId={itemId}`.
 
 Essa consulta é informativa; as regras de validação e alocação continuam no modelo canônico de Estoque. A composição da resposta e suas diferenças por público são detalhadas no documento 04.
 
-Na rota de decisão da unidade, o Gateway encaminha aceite e rejeição ao mesmo BFF Unidade. Em seguida, o BFF encaminha o aceite ao Orquestrador e a rejeição a Reservas. Acompanha-se o resultado da confirmação pelo recurso Reserva.
+Na rota de decisão da unidade, o Gateway encaminha aceite e rejeição ao mesmo BFF Unidade. O BFF consulta a decisão em Reservas para aplicar a rejeição local ou obter o encaminhamento idempotente do aceite. Ao encaminhar o aceite ao Orquestrador, repassa `202` após a gravação do pedido e indica a consulta pública da Reserva em `Location`.
 
 ## 8. Relação com os demais documentos
 

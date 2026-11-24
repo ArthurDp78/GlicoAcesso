@@ -131,20 +131,21 @@ A proposta é atuar como uma **ponte entre a informação existente na rede part
 
 ## Documentação
 
-O detalhamento do problema, da proposta e do impacto social está em:
+- [Parte 1 — Concepção e pitch](./docs/parte-1-concepcao-e-pitch.md)
+- [Parte 2 — Resumo e índice da arquitetura](./docs/parte-2/resumo-arquitetura.md)
+- [Decisões compartilhadas](./docs/parte-2/00-decisoes-compartilhadas.md) e [diagrama de arquitetura](./docs/parte-2/02-diagrama-arquitetura.md)
+- [Contratos OpenAPI](./docs/parte-2/api/) e [diagramas de sequência](./docs/parte-2/diagramas/)
 
-- [`docs/parte-1-concepcao-e-pitch.md`](./docs/parte-1-concepcao-e-pitch.md)
+## Estado do projeto e consulta local
 
-## Como executar
+O repositório contém a concepção do projeto e a especificação da arquitetura da Parte 2. A arquitetura documenta quatro serviços de domínio e um Orquestrador da SAGA independente, com PostgreSQL próprio para cada serviço. A aplicação executável ainda está pendente.
 
-Este repositório ainda não contém uma aplicação executável. Para consultar os arquivos localmente:
+Para consultar a documentação localmente, clone o repositório e abra os arquivos Markdown:
 
 ```bash
 git clone https://github.com/ArthurDp78/GlicoAcesso.git
 cd GlicoAcesso
 ```
-
-As instruções para executar a aplicação serão incluídas quando ela estiver disponível.
 
 ## Referências
 

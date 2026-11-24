@@ -43,12 +43,12 @@ Todos os comandos `POST`/`PUT`/`PATCH` dos BFFs exigem `Idempotency-Key`. O clie
 
 ### 2.1 Encaminhamento de decisões e cancelamentos
 
-- **Aceite:** o BFF Unidade encaminha o pedido ao Orquestrador com a identidade autenticada do profissional. O Orquestrador registra o pedido duravelmente antes de aceitá-lo e solicita a Reservas a validação e gravação do aceite. O BFF apresenta a aceitação do processamento separadamente do resultado de negócio, que o cliente acompanha no recurso Reserva.
-- **Rejeição:** o BFF Unidade chama Reservas, que valida a autorização do ator e a transição local.
-- **Cancelamento:** o BFF usa o estado canônico para selecionar o destino. Uma solicitação `SOLICITADA` pode ser cancelada em Reservas por transição condicional. Se um aceite concorrente impedir essa transição, o BFF confere o estado canônico e encaminha ao Orquestrador quando a reserva estiver `EM_CONFIRMACAO` ou `CONFIRMADA`. Reservas valida a propriedade do cidadão ou o vínculo do profissional e a justificativa exigida para este ator.
-- **Repetição:** o BFF preserva a chave, o conteúdo e o contexto do pedido para recuperar o resultado da operação original. Um timeout exige repetir a chamada ao mesmo destino. O redirecionamento de um cancelamento local depende de uma recusa conclusiva pela transição concorrente. A revisão OpenAPI deve definir como resolver repetições após mudanças de estado, incluindo o encaminhamento ao destino original, e os retornos de processamento em andamento.
+1. Os BFFs chamam a operação condicional de Reservas com a identidade delegada, o corpo da ação e a chave idempotente. Reservas executa a rejeição ou o cancelamento pendente localmente quando permitido.
+2. Para um aceite elegível ou um cancelamento distribuído, Reservas devolve `409` interno com `ACEITE_ENCAMINHAR` ou `CANCELAMENTO_DISTRIBUIDO`, respectivamente. Registra esse resultado para que a mesma chave e conteúdo recuperem o destino original mesmo após a mudança de estado. Outros conflitos e resultados incertos não autorizam encaminhamento.
+3. O BFF encaminha ao Orquestrador somente com o código aplicável e preserva a chave e o contexto. O Orquestrador valida o chamador e registra o pedido antes de devolver `202`. Reservas revalida ator e estado ao aplicar uma transição.
+4. O BFF devolve `200` para rejeição ou cancelamento local concluídos. Para pedido distribuído persistido, devolve `202` com `Location` da consulta pública de Reserva correspondente ao ator. Uma repetição com resultado incerto usa a mesma chave e conteúdo.
 
-O Orquestrador controla etapas e compensações. Os BFFs consultam o estado de negócio em Reservas para compor as respostas e links oferecidos a cada ator. Os caminhos internos e os códigos de resposta das operações distribuídas serão detalhados na revisão OpenAPI.
+O Orquestrador controla etapas e compensações. Os BFFs consultam o estado de negócio em Reservas para compor respostas e links. A interação interna está nos contratos de [Reservas](./api/reserva.yaml) e do [Orquestrador](./api/orquestrador.yaml).
 
 ## 3. Diferenças entre as respostas para o mesmo recurso
 

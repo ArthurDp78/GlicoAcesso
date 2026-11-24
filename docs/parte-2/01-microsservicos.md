@@ -17,7 +17,7 @@ O requisito 4.1 do enunciado da Etapa 2 pede:
 2. a justificativa das fronteiras adotadas;
 3. um diagrama de componentes e de comunicação entre serviços.
 
-Este documento atende aos dois primeiros itens. O [02 - Diagrama de arquitetura](./02-diagrama-arquitetura.md) será alinhado a estas fronteiras na próxima subtarefa.
+Este documento atende aos dois primeiros itens. O [02 - Diagrama de arquitetura](./02-diagrama-arquitetura.md) representa estas fronteiras.
 
 O objetivo é permitir que uma pessoa que não participou das conversas do grupo consiga responder, sem depender de explicações externas:
 
@@ -438,4 +438,4 @@ Se qualquer item falhar, a proposta deve ser corrigida ou a decisão compartilha
 - [05 - Fluxo de reservas](./05-fluxo-reservas.md): fluxo de negócio, atores, decisões e transições da reserva.
 - [06 - SAGA](./06-saga.md): orquestração, etapas, compensações, falhas, recuperação e idempotência.
 
-Os documentos especializados e os contratos dependentes serão alinhados a estas fronteiras nas subtarefas correspondentes.
+O [resumo de arquitetura](./resumo-arquitetura.md) reúne as referências de implementação e os contratos das operações descritas aqui.
