@@ -273,9 +273,37 @@ paths:
         '403': { description: Ator sem permissão para a unidade. }
         '404': { description: Item ou saldo não encontrado. }
         '409': { description: "`Idempotency-Key` reutilizada com conteúdo diferente." }
+  /painel/estoque/catalogo:
+    get:
+      summary: Listar catálogo para entrada de estoque
+      description: Identifica a unidade vinculada ao profissional e lista os itens do catálogo, inclusive os que ainda não têm saldo na unidade.
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Unidade vinculada e itens disponíveis para seleção.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [unidadeId, itens]
+                properties:
+                  unidadeId: { type: string, format: uuid }
+                  itens:
+                    type: array
+                    items:
+                      type: object
+                      required: [itemId, nome, tipo]
+                      properties:
+                        itemId: { type: string, format: uuid }
+                        nome: { type: string }
+                        tipo: { type: string, enum: [MEDICAMENTO, INSUMO] }
+                        descricao: { type: string }
+        '401': { description: Credencial ausente ou inválida. }
+        '403': { description: Operação exclusiva de profissional da unidade. }
   /painel/estoque/{unidadeId}/itens/{itemId}/entradas:
     post:
       summary: Registrar entrada de estoque
+      description: O profissional vinculado à unidade seleciona um item do catálogo e informa a quantidade recebida. A entrada pode criar o primeiro saldo do item na unidade.
       security: [{ bearerAuth: [] }]
       parameters:
         - name: unidadeId
@@ -293,18 +321,22 @@ paths:
           application/json:
             schema:
               type: object
-              required: [quantidade, motivo]
+              required: [quantidade]
               properties:
-                quantidade: { type: integer, minimum: 1 }
-                motivo: { type: string, minLength: 1 }
+                quantidade: { type: integer, minimum: 1, maximum: 2147483647 }
+                motivo: { type: string, minLength: 1, default: Entrada de estoque }
       responses:
         '201':
           description: Entrada registrada.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/MovimentacaoResumo' }
+        '401': { description: Credencial ausente ou inválida. }
         '403': { description: Ator sem permissão para a unidade. }
-        '409': { description: "`Idempotency-Key` reutilizada com conteúdo diferente." }
+        '404': { description: Unidade ativa ou item do catálogo não encontrado. }
+        '409': { description: CHAVE_IDEMPOTENTE_CONFLITANTE ou LIMITE_ESTOQUE_EXCEDIDO. }
+        '422': { description: Quantidade ou chave idempotente inválida. }
+        '503': { description: Banco de Estoque indisponível ou validação de unidade indisponível. }
   /painel/estoque/{unidadeId}/itens/{itemId}/ajustes:
     post:
       summary: Ajustar saldo físico

@@ -68,6 +68,8 @@ Contrato relacionado: [estoque.yaml](./api/estoque.yaml).
 
 `itens` separa o cadastro canônico do item de suas quantidades em cada unidade. A API limita `tipo` a `MEDICAMENTO` ou `INSUMO`; o banco pode armazená-lo como `text` com constraint equivalente, sem exigir um tipo ENUM específico do PostgreSQL.
 
+O catálogo de medicamentos é carregado por migração com identificadores estáveis para cada apresentação do elenco adotado. A primeira entrada física de um item em uma unidade cria seu saldo com `quantidadeAlocada = 0` e `permiteReserva = false`. Entradas posteriores somam à quantidade física. A gravação inclui a movimentação, a Outbox e a resposta idempotente em uma transação.
+
 ### Saldo, alocação e movimentação
 
 `saldos` é a fonte canônica operacional. A disponibilidade operacional é calculada por `estoqueFisicoAtual - quantidadeAlocada`, sem armazenar uma terceira quantidade redundante nessa tabela. `quantidadeAlocada` permite acesso rápido ao total; `alocacoes` identifica quais reservas compõem esse total e permite liberar o efeito correto da SAGA.

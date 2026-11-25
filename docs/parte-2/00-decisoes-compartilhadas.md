@@ -43,13 +43,41 @@ O sistema coordena informações e etapas administrativas. Ele **não** diagnost
 
 ### 3.1 Atores
 
-| Ator | O que pode fazer no escopo da Etapa 2 |
+| Ator | Responsabilidades |
 |---|---|
 | Cidadão | Consultar unidades e disponibilidade; criar, acompanhar e cancelar a própria solicitação antes da retirada física. |
 | Profissional da unidade | Consultar solicitações destinadas à sua unidade; rejeitar ou aceitar uma solicitação; administrar o estoque da unidade; registrar uma retirada autorizada. |
+| Gestor da rede | Cadastrar unidades participantes por meio do comando administrativo. |
 | Serviços internos | Executar a confirmação distribuída, publicar eventos e atualizar projeções de leitura. |
 
 As credenciais e a identidade do ator são verificadas na borda/API. Nos dados de domínio, os serviços usam um identificador estável do ator, sem copiar perfil, senha ou dados de autenticação para os bancos dos microsserviços.
+
+#### Cadastros administrativos
+
+Na demonstração há um gestor com identificador estável `gestor-rede-demo`. A credencial é um Bearer exclusivo, gerado aleatoriamente com 32 bytes e configurado como `GLICO_GESTOR_REDE_TOKEN` na CLI e em Unidades. Unidades exige essa credencial e responde `401` a outros tokens. A CLI acessa o cadastro de unidade diretamente pela rede interna.
+
+O serviço Unidades cria a unidade ativa, com horários, contatos e prazo de análise. A chave de negócio para duplicidade combina nome, logradouro, número, bairro, cidade, estado e CEP.
+
+Para comparar a chave de negócio, desconsideram-se diferenças de maiúsculas e minúsculas e espaços nas bordas dos campos. Acentos e espaços internos são preservados. O CEP é comparado pelos oito dígitos e pode ser informado com ou sem hífen. Unidades garante a unicidade no próprio banco, inclusive em requisições concorrentes e para unidades inativas.
+
+Cada criação exige `Idempotency-Key` de 1 a 128 caracteres, com pelo menos um caractere diferente de espaço em branco. A repetição com o mesmo principal, operação, chave e conteúdo canônico recupera a resposta original, inclusive o identificador criado. Uma chave já associada a outro conteúdo retorna `409 CHAVE_IDEMPOTENTE_CONFLITANTE`. Uma nova chave para um cadastro duplicado retorna `409 CADASTRO_DUPLICADO`. Essas regras seguem a convenção da seção 7.1.
+
+#### Catálogo de medicamentos e entrada de estoque
+
+Estoque mantém um catálogo predefinido e versionado, carregado por migração. A referência do projeto é a seção **DIABETES** do *Elenco de Medicamentos e Insumos* do Programa Farmácia Popular do Brasil, atualização de 31/08/2026, página 1.
+
+| Medicamento | Apresentação da lista |
+|---|---|
+| Cloridrato de metformina | 500 mg |
+| Cloridrato de metformina | 500 mg, ação prolongada |
+| Cloridrato de metformina | 850 mg |
+| Glibenclamida | 5 mg |
+| Insulina humana regular | 100 UI/mL |
+| Insulina humana | 100 UI/mL |
+
+O PDF apresenta dapagliflozina 10 mg em uma categoria separada, **DIABETES MELLITUS + DOENÇA CARDIOVASCULAR**. O recorte do catálogo de medicamentos usa apenas a seção **DIABETES**.
+
+O profissional seleciona um item do catálogo pelo `itemId` e informa a quantidade inteira positiva recebida na sua unidade. A concentração é um atributo do catálogo. A primeira entrada cria o saldo com permissão de reserva desativada. Entradas seguintes somam ao saldo físico e mantêm a permissão atual. Estoque grava saldo, movimentação, resultado idempotente e evento na Outbox na mesma transação. A consulta de disponibilidade converge pelo consumidor da projeção.
 
 ### 3.2 Unidade de solicitação
 
