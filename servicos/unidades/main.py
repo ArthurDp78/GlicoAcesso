@@ -11,6 +11,7 @@ from pydantic import BaseModel
 
 from servicos.contratos_unidade import HorariosUnidade, PrazoUnidade, SituacaoUnidade, UnidadeInput
 
+from servicos.contratos_unidade import PRAZO_MAXIMO_HORAS
 from servicos.banco import BancoIndisponivel, conectar
 from servicos.idempotencia import gravar_resultado, resultado_anterior
 from servicos.identidade_demo import (
@@ -246,6 +247,8 @@ def consultar_prazo(unidadeId: UUID):
         """, (unidadeId,)).fetchone()
     if prazo is None:
         raise HTTPException(404, "Unidade ativa não encontrada.")
+    if prazo["prazoAnaliseHoras"] > PRAZO_MAXIMO_HORAS:
+        raise HTTPException(422, "Atualize o prazo de análise cadastrado para até 720 horas.")
     return prazo
 
 

@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse
 from psycopg.types.json import Jsonb
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from servicos.contratos_unidade import PRAZO_MAXIMO_HORAS
 from servicos.banco import BancoIndisponivel, conectar
 from servicos.idempotencia import gravar_resultado, resultado_anterior
 from servicos.contratos_reserva import JustificativaCancelamento, PedidoReserva, ReservaInterna
@@ -133,6 +134,8 @@ async def verificar_pedido(request: Request, pedido: PedidoReserva) -> int:
     unidade = await unidade_ativa(request, pedido.unidadeId)
     if unidade is None:
         raise HTTPException(422, "Unidade inexistente ou inativa.")
+    if unidade.prazoAnaliseHoras > PRAZO_MAXIMO_HORAS:
+        raise HTTPException(422, "A unidade precisa atualizar o prazo de análise para até 720 horas.")
     permissao = await verificar_dependencia(
         cliente, f"{estoque}/internal/v1/unidades/{pedido.unidadeId}/itens/{pedido.itemId}/permissao-reserva",
         token, Permissao,

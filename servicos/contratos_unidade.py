@@ -9,6 +9,10 @@ TextoEndereco = Annotated[Texto, Field(max_length=120)]
 TextoEnderecoCurto = Annotated[Texto, Field(max_length=40)]
 
 
+PRAZO_MAXIMO_HORAS = 720
+PrazoAnalise = Annotated[int, Field(strict=True, ge=1, le=PRAZO_MAXIMO_HORAS)]
+
+
 class ContatoInput(BaseModel):
     tipo: TextoEnderecoCurto
     valor: Annotated[Texto, Field(max_length=400)]
@@ -44,7 +48,7 @@ class UnidadeInput(BaseModel):
     orientacoesRetirada: Texto
     contatos: list[ContatoInput]
     horarios: list[HorarioInput]
-    prazoAnaliseHoras: Annotated[int, Field(strict=True, ge=1, le=2_147_483_647)]
+    prazoAnaliseHoras: PrazoAnalise
 
     @field_validator("cep")
     @classmethod
@@ -80,4 +84,4 @@ class SituacaoUnidade(BaseModel):
 
 
 class PrazoUnidade(BaseModel):
-    prazoAnaliseHoras: Annotated[int, Field(strict=True, ge=1, le=2_147_483_647)]
+    prazoAnaliseHoras: PrazoAnalise

@@ -206,7 +206,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/Reserva'
         '422':
-          description: Unidade inexistente/inativa ou combinação unidade/item sem permissão para reserva.
+          description: Unidade inexistente, inativa, com prazo legado acima de 720 horas ou combinação unidade/item sem permissão para reserva.
         '409':
           description: "`Idempotency-Key` reutilizada com conteúdo diferente."
         '401': { description: Credencial do cidadão ausente ou inválida. }

@@ -223,6 +223,8 @@ Prepare um arquivo `unidade.json` com os campos abaixo. O serviço Unidades gera
 }
 ```
 
+O prazo de análise aceita de 1 a 720 horas (30 dias). Se uma unidade antiga tiver prazo superior, o profissional precisa ajustá-lo para receber novas solicitações. Reservas já criadas conservam o prazo original.
+
 Depois de subir o Compose principal, execute o comando pelo `compose.admin.yml`. Ele acessa `unidades:8002` pela rede `GLICO_REDE_ADMINISTRATIVA` e usa a mesma `GLICO_GESTOR_REDE_TOKEN` do `.env`.
 
 ```powershell
