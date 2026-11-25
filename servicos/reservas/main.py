@@ -269,6 +269,11 @@ def registrar_decisao(profissional: str, unidade: UUID, reserva_id: UUID, decisa
         if anterior is not None:
             if anterior["request_hash"] != resumo:
                 return conflito("CHAVE_IDEMPOTENTE_CONFLITANTE", "Chave reutilizada com outra reserva ou decisão.")
+            pertence = conexao.execute(
+                "SELECT 1 FROM reservas WHERE reserva_id = %s AND unidade_id = %s", (reserva_id, unidade)
+            ).fetchone()
+            if pertence is None:
+                raise HTTPException(403, "Reserva de outra unidade.")
             return anterior["http_status"], anterior["resposta"]
         if somente_consulta:
             return None
