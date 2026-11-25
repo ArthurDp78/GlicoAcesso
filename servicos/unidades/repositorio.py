@@ -97,9 +97,11 @@ def inserir(conexao, dados: UnidadeInput) -> UUID:
 def atualizar(conexao, unidade_id: UUID, dados: UnidadeInput) -> None:
     conexao.execute("""
         UPDATE unidades SET nome = %s, logradouro = %s, numero = %s, bairro = %s, cidade = %s, estado = %s,
-            cep = %s, orientacoes_retirada = %s, prazo_analise_horas = %s, updated_at = now()
+            cep = %s, orientacoes_retirada = %s, prazo_analise_horas = %s, prazo_legado = false, updated_at = now(),
+            duplicidade_legada = duplicidade_legada
+                AND identidade = identidade_unidade(%s, %s, %s, %s, %s, %s, %s)
         WHERE unidade_id = %s
-    """, (*_valores(dados), unidade_id))
+    """, (*_valores(dados), *_valores(dados)[:7], unidade_id))
     _substituir_contatos(conexao, unidade_id, dados.contatos)
     _gravar_horarios(conexao, unidade_id, dados.horarios)
 
@@ -114,5 +116,5 @@ def definir_status(conexao, unidade_id: UUID, ativa: bool) -> None:
 
 
 def definir_prazo(conexao, unidade_id: UUID, horas: int) -> None:
-    conexao.execute("UPDATE unidades SET prazo_analise_horas = %s, updated_at = now() WHERE unidade_id = %s",
+    conexao.execute("UPDATE unidades SET prazo_analise_horas = %s, prazo_legado = false, updated_at = now() WHERE unidade_id = %s",
                     (horas, unidade_id))

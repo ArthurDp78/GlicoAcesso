@@ -3,19 +3,34 @@ from typing import Annotated
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException
+from psycopg.errors import UniqueViolation
 
 from servicos.banco import conectar
-from servicos.comandos import INTEIRO_MAXIMO, Chave, Correlacao, responder, resumir
+from servicos.comandos import INTEIRO_MAXIMO, Chave, Correlacao, cadastro_conflitante, responder, resumir
 from servicos.estoque.esquemas import AjusteFisico, EntradaFisica, ItemInput, Movimentacao, PermissaoInput
 from servicos.estoque.saldos import CAMPOS_SALDO, registrar_evento, travar_saldo, variar_saldo
 from servicos.idempotencia import gravar_resultado, resultado_anterior
-from servicos.identidade_demo import Ator, administracao_autenticada, exigir_unidade, profissional_autenticado
+from servicos.identidade_demo import Ator, ProfissionalDelegado, administracao_autenticada, exigir_unidade
 
 
 rotas = APIRouter()
 BANCO = "ESTOQUE_DATABASE_URL"
-Profissional = Annotated[Ator, Depends(profissional_autenticado)]
+Profissional = ProfissionalDelegado
 Administracao = Annotated[str, Depends(administracao_autenticada)]
+
+
+def salvar_item(conexao, dados: ItemInput, item_id: UUID | None):
+    if item_id is None:
+        return conexao.execute("""
+            INSERT INTO itens (nome, tipo, descricao, item_id) VALUES (%s, %s, %s, %s)
+            RETURNING item_id, nome, tipo, descricao
+        """, (dados.nome, dados.tipo, dados.descricao, uuid4())).fetchone()
+    # Uma duplicidade anterior à regra é mantida enquanto a identidade do item não mudar.
+    return conexao.execute("""
+        UPDATE itens SET nome = %s, tipo = %s, descricao = %s, updated_at = now(),
+            duplicidade_legada = duplicidade_legada AND identidade = identidade_item(%s, %s)
+        WHERE item_id = %s RETURNING item_id, nome, tipo, descricao
+    """, (dados.nome, dados.tipo, dados.descricao, dados.nome, dados.tipo, item_id)).fetchone()
 
 
 def gravar_item(principal: str, chave: str, dados: ItemInput, item_id: UUID | None = None):
@@ -25,17 +40,12 @@ def gravar_item(principal: str, chave: str, dados: ItemInput, item_id: UUID | No
     with conectar(BANCO) as conexao:
         if (anterior := resultado_anterior(conexao, operacao, principal, chave, resumo)) is not None:
             return anterior
-        valores = (dados.nome, dados.tipo, dados.descricao, item_id or uuid4())
-        if item_id is None:
-            linha = conexao.execute("""
-                INSERT INTO itens (nome, tipo, descricao, item_id) VALUES (%s, %s, %s, %s)
-                RETURNING item_id, nome, tipo, descricao
-            """, valores).fetchone()
-        else:
-            linha = conexao.execute("""
-                UPDATE itens SET nome = %s, tipo = %s, descricao = %s, updated_at = now() WHERE item_id = %s
-                RETURNING item_id, nome, tipo, descricao
-            """, valores).fetchone()
+        try:
+            with conexao.transaction():
+                linha = salvar_item(conexao, dados, item_id)
+        except UniqueViolation as erro:
+            resultado = cadastro_conflitante(erro, "item_identidade_unica", "Já existe item com este nome e tipo.")
+            return gravar_resultado(conexao, operacao, principal, chave, resumo, resultado)
         if linha is None:
             raise HTTPException(404, "Item não encontrado.")
         corpo = {"itemId": str(linha["item_id"]), "nome": linha["nome"], "tipo": linha["tipo"]}

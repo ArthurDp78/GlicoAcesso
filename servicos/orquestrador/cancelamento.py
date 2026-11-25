@@ -2,9 +2,10 @@
 from psycopg.errors import UniqueViolation
 
 from servicos.banco import conectar
+from servicos.identidade_demo import cabecalhos_do_ator
 from servicos.mensageria import EventoRetirada, registrar_inbox
 from servicos.orquestrador.registro import (
-    BANCO, cabecalhos_do_ator, criar_execucao, efeitos_conhecidos, mudar_estado, nova_etapa,
+    BANCO, criar_execucao, efeitos_conhecidos, mudar_estado, nova_etapa,
 )
 
 

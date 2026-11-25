@@ -15,7 +15,9 @@ from servicos.comandos import RASTREADO
 from servicos.erros import entrada_invalida_400
 from servicos.http import cliente_http
 from servicos.idempotencia import gravar_resultado, resultado_anterior
-from servicos.identidade_demo import orquestrador_autenticado
+from servicos.identidade_demo import (
+    TOKEN_BFF_UNIDADE, TOKEN_ORQUESTRADOR, TOKEN_RETIRADAS, exigir_credenciais, orquestrador_autenticado,
+)
 from servicos.retiradas import entregas
 
 
@@ -24,6 +26,7 @@ BANCO = "RETIRADAS_DATABASE_URL"
 
 @asynccontextmanager
 async def ciclo(app: FastAPI):
+    exigir_credenciais(TOKEN_RETIRADAS, TOKEN_ORQUESTRADOR, TOKEN_BFF_UNIDADE)
     parar = threading.Event()
     mensageria.iniciar({"publicador-outbox": mensageria.publicador(BANCO)}, parar)
     async with cliente_http(app):

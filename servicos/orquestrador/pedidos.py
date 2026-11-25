@@ -13,9 +13,9 @@ from servicos.banco import conectar
 from servicos.comandos import RASTREADO, Chave, Correlacao, Justificativa, NaoNulo, resumir
 from servicos.http import falha_de_configuracao
 from servicos.idempotencia import gravar_resultado, reobter_resultado, resultado_anterior
-from servicos.identidade_demo import Ator, AtorAutenticado
+from servicos.identidade_demo import Ator, AtorDelegado, cabecalhos_do_ator
 from servicos.orquestrador.cancelamento import iniciar_execucao
-from servicos.orquestrador.registro import BANCO, cabecalhos_do_ator
+from servicos.orquestrador.registro import BANCO
 
 
 rotas = APIRouter()
@@ -98,7 +98,7 @@ def registrar(reserva_id: UUID, ator: Ator, justificativa: str | None, chave: st
 
 
 @rotas.post("/internal/v1/reservas/{reservaId}/cancelamentos", status_code=202)
-def solicitar_cancelamento(reservaId: UUID, ator: AtorAutenticado, chave: Chave,
+def solicitar_cancelamento(reservaId: UUID, ator: AtorDelegado, chave: Chave,
                            pedido: PedidoCancelamento | None = None, correlacao: Correlacao = None):
     justificativa = pedido.justificativa if pedido else None
     if ator.papel == "PROFISSIONAL" and justificativa is None:
@@ -117,7 +117,7 @@ def solicitar_cancelamento(reservaId: UUID, ator: AtorAutenticado, chave: Chave,
 
 
 @rotas.get("/internal/v1/sagas/{sagaId}", dependencies=RASTREADO)
-def consultar_pedido(sagaId: UUID, ator: AtorAutenticado):
+def consultar_pedido(sagaId: UUID, ator: AtorDelegado):
     with conectar(BANCO) as conexao:
         # Um pedido ainda não ativado ou recusado não tem execução própria nem estado técnico.
         pedido = conexao.execute("""

@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from typing import Annotated
 from uuid import UUID, uuid4
 
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import JSONResponse
 from psycopg.errors import UniqueViolation
 from psycopg.types.json import Jsonb
@@ -11,7 +11,9 @@ from psycopg.types.json import Jsonb
 from servicos import mensageria
 from servicos.banco import BancoIndisponivel, conectar
 from servicos.erros import entrada_invalida_400
-from servicos.identidade_demo import Ator, profissional_autenticado
+from servicos.identidade_demo import (
+    TOKEN_BFF_CIDADAO, TOKEN_BFF_UNIDADE, TOKEN_ORQUESTRADOR, ProfissionalDelegado, exigir_credenciais,
+)
 from servicos.orquestrador import pedidos
 from servicos.orquestrador.cancelamento import processar_retirada
 from servicos.orquestrador.executor import laco
@@ -21,6 +23,7 @@ from servicos.orquestrador.registro import BANCO, nova_etapa
 
 @asynccontextmanager
 async def ciclo(_app: FastAPI):
+    exigir_credenciais(TOKEN_ORQUESTRADOR, TOKEN_BFF_CIDADAO, TOKEN_BFF_UNIDADE)
     parar = threading.Event()
     threading.Thread(target=laco, args=(parar,), name="executor-saga", daemon=True).start()
     mensageria.iniciar({
@@ -35,9 +38,7 @@ app.include_router(pedidos.rotas)
 entrada_invalida_400(app, "/internal/v1/reservas/{reservaId}/confirmacoes", "/internal/v1/reservas/{reservaId}/cancelamentos")
 OPERACAO = "solicitar-confirmacao"
 PRIMEIRA_ETAPA = "ACEITAR_RESERVA"
-# shortcut: o BFF repassa o Bearer do profissional e o Orquestrador o valida; trocar por token delegado assinado
-# (credencial do BFF + ator) quando houver provedor de identidade.
-Profissional = Annotated[Ator, Depends(profissional_autenticado)]
+Profissional = ProfissionalDelegado
 Chave = Annotated[str, Header(alias="Idempotency-Key", min_length=1, max_length=128)]
 
 

@@ -14,11 +14,15 @@ from servicos.estoque import administracao
 from servicos.estoque.eventos import iniciar
 from servicos.estoque.saldos import registrar_evento, variar_saldo
 from servicos.idempotencia import gravar_resultado, resultado_anterior
-from servicos.identidade_demo import Ator, orquestrador_autenticado, profissional_autenticado, servico_reservas_autenticado
+from servicos.identidade_demo import (
+    TOKEN_ADMIN, TOKEN_BFF_UNIDADE, TOKEN_ORQUESTRADOR, TOKEN_RESERVAS, ProfissionalDelegado, exigir_credenciais,
+    exigir_papel, exigir_unidade, orquestrador_autenticado, servico_reservas_autenticado,
+)
 
 
 @asynccontextmanager
 async def ciclo(_app: FastAPI):
+    exigir_credenciais(TOKEN_ORQUESTRADOR, TOKEN_RESERVAS, TOKEN_BFF_UNIDADE, TOKEN_ADMIN)
     parar = threading.Event()
     iniciar(parar)  # Publicador da Outbox, projeção e baixa de retiradas, em segundo plano.
     yield
@@ -57,7 +61,7 @@ def verificar_saude() -> dict[str, str]:
 
 @app.get(
     "/api/unidade/v1/estoque/itens", response_model=list[Item], response_model_exclude_none=True,
-    dependencies=[Depends(profissional_autenticado)],
+    dependencies=[Depends(exigir_papel("PROFISSIONAL"))],
 )
 @app.get("/api/cidadao/v1/estoque/itens", response_model=list[Item], response_model_exclude_none=True)
 def listar_itens():
@@ -229,10 +233,9 @@ class EstoqueUnidadeItem(BaseModel):
 
 
 @app.get("/api/unidade/v1/estoque/{unidadeId}/itens", response_model=list[EstoqueUnidadeItem])
-def listar_estoque_da_unidade(unidadeId: UUID, profissional: Annotated[Ator, Depends(profissional_autenticado)]):
-    # shortcut: confere só o vínculo do token; a checagem de unidade ativa fica em Reservas.
-    if unidadeId != profissional.unidadeId:
-        raise HTTPException(403, "Ator sem acesso à unidade.")
+def listar_estoque_da_unidade(unidadeId: UUID, profissional: ProfissionalDelegado):
+    # O vínculo vem da identidade delegada; Estoque não é dono do cadastro de unidades.
+    exigir_unidade(profissional, unidadeId)
     with conectar(BANCO) as conexao:
         return conexao.execute("""
             SELECT d.item_id AS "itemId", d.unidade_id AS "unidadeId", i.nome AS "itemNome",

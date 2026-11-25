@@ -1,4 +1,5 @@
 import os
+from contextlib import asynccontextmanager
 from typing import Annotated, Literal
 from uuid import UUID
 
@@ -7,12 +8,22 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, TypeAdapter, ValidationError
 
 from servicos.contratos_reserva import ReservaInterna
-from servicos.http import cliente_http, consultar, requisitar
-from servicos.identidade_demo import Ator, profissional_autenticado
+from servicos.http import cliente_http, consultar, falha_de_configuracao, requisitar
+from servicos.identidade_demo import (
+    TOKEN_BFF_UNIDADE, TOKEN_PROFISSIONAL, Ator, delegar, exigir_credenciais, profissional_autenticado,
+)
 
 
-app = FastAPI(title="GlicoAcesso — BFF Unidade", lifespan=cliente_http)
+@asynccontextmanager
+async def ciclo(app: FastAPI):
+    exigir_credenciais(TOKEN_PROFISSIONAL, TOKEN_BFF_UNIDADE)
+    async with cliente_http(app):
+        yield
+
+
+app = FastAPI(title="GlicoAcesso — BFF Unidade", lifespan=ciclo)
 API = "/api/unidade/v1"
+Profissional = Annotated[Ator, Depends(profissional_autenticado)]
 
 
 class Link(BaseModel):
@@ -37,11 +48,10 @@ def origem(variavel: str, padrao: str) -> str:
     return os.environ.get(variavel, padrao).rstrip("/")
 
 
-def credencial(request: Request) -> dict[str, str]:
-    return {"authorization": request.headers["authorization"]} if "authorization" in request.headers else {}
-
-
 def repassar_erro(resposta) -> Response:
+    if falha_de_configuracao(resposta):
+        # A credencial recusada é a do BFF, não a do usuário.
+        raise HTTPException(503, "Serviço temporariamente indisponível.")
     if resposta.status_code not in (401, 403, 404, 409, 422, 502, 503, 504):
         raise HTTPException(502, "Não foi possível concluir a operação.")
     headers = {"Cache-Control": "no-store"}
@@ -75,10 +85,10 @@ def verificar_saude() -> dict[str, str]:
 
 
 @app.get(API + "/painel/reservas", response_model=list[ReservaPainel], response_model_exclude_none=True)
-async def listar_pendentes(request: Request, response: Response):
+async def listar_pendentes(request: Request, response: Response, profissional: Profissional):
     resposta = await consultar(
         request.app.state.http, origem("RESERVAS_URL", "http://127.0.0.1:8004") + "/api/unidade/v1/reservas",
-        headers=credencial(request),
+        headers=delegar(TOKEN_BFF_UNIDADE, profissional),
     )
     if resposta.status_code != 200:
         return repassar_erro(resposta)
@@ -92,10 +102,10 @@ async def listar_pendentes(request: Request, response: Response):
 
 
 @app.get(API + "/painel/reservas/{reservaId}", response_model=ReservaPainel, response_model_exclude_none=True)
-async def consultar_reserva(request: Request, response: Response, reservaId: UUID):
+async def consultar_reserva(request: Request, response: Response, reservaId: UUID, profissional: Profissional):
     resposta = await consultar(
         request.app.state.http, origem("RESERVAS_URL", "http://127.0.0.1:8004") + f"/internal/v1/reservas/{reservaId}",
-        headers=credencial(request),
+        headers=delegar(TOKEN_BFF_UNIDADE, profissional),
     )
     if resposta.status_code != 200:
         return repassar_erro(resposta)
@@ -109,10 +119,10 @@ async def consultar_reserva(request: Request, response: Response, reservaId: UUI
 
 @app.post(API + "/reservas/{reservaId}/decisao")
 async def decidir(
-    request: Request, reservaId: UUID, corpo: DecisaoProfissional,
+    request: Request, reservaId: UUID, corpo: DecisaoProfissional, profissional: Profissional,
     chave: str = Header(alias="Idempotency-Key", min_length=1, max_length=128),
 ):
-    cabecalhos = {**credencial(request), "Idempotency-Key": chave}
+    cabecalhos = {**delegar(TOKEN_BFF_UNIDADE, profissional), "Idempotency-Key": chave}
     cliente = request.app.state.http
     resposta = await requisitar(
         cliente, "POST", origem("RESERVAS_URL", "http://127.0.0.1:8004") + f"/api/unidade/v1/reservas/{reservaId}/decisao",
@@ -154,13 +164,13 @@ ESTOQUE_PAINEL = TypeAdapter(list[EstoquePainelItem])
 
 @app.get(API + "/painel/estoque", response_model=list[EstoquePainelItem])
 async def painel_estoque(
-    request: Request, response: Response, profissional: Annotated[Ator, Depends(profissional_autenticado)],
+    request: Request, response: Response, profissional: Profissional,
 ):
     # O token é validado aqui para descobrir a unidade do profissional; Estoque confere o vínculo de novo.
     resposta = await consultar(
         request.app.state.http,
         origem("ESTOQUE_URL", "http://127.0.0.1:8003") + f"/api/unidade/v1/estoque/{profissional.unidadeId}/itens",
-        headers=credencial(request),
+        headers=delegar(TOKEN_BFF_UNIDADE, profissional),
     )
     if resposta.status_code != 200:
         return repassar_erro(resposta)

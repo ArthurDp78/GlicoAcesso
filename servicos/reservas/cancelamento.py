@@ -2,41 +2,21 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict
 
 from servicos.banco import conectar
 from servicos.comandos import RASTREADO, Chave, Justificativa, NaoNulo, responder, resumir
 from servicos.idempotencia import gravar_resultado, resultado_anterior
-from servicos.identidade_demo import (
-    Ator, ator_autenticado, ator_delegado, orquestrador_autenticado, profissional_autenticado,
-)
+from servicos.identidade_demo import Ator, CidadaoDelegado, ProfissionalDelegado, ator_do_orquestrador
 from servicos.reservas.transicoes import transicionar
 
 
 rotas = APIRouter()
 BANCO = "RESERVAS_DATABASE_URL"
-Orquestrador = Annotated[str, Depends(orquestrador_autenticado)]
-Profissional = Annotated[Ator, Depends(profissional_autenticado)]
-
-
-def ator_cidadao(ator: Annotated[Ator, Depends(ator_autenticado)]) -> Ator:
-    if ator.papel != "CIDADAO":
-        raise HTTPException(403, "Operação exclusiva do cidadão.")
-    return ator
-
-
-def delegado(
-    _orquestrador: Orquestrador,
-    papel: Annotated[str | None, Header(alias="X-Ator-Papel")] = None,
-    ator_id: Annotated[str | None, Header(alias="X-Ator-Id")] = None,
-    unidade: Annotated[str | None, Header(alias="X-Ator-Unidade-Id")] = None,
-) -> Ator:
-    return ator_delegado(papel, ator_id, unidade, aceita_cidadao=True)
-
-
-Cidadao = Annotated[Ator, Depends(ator_cidadao)]
-Delegado = Annotated[Ator, Depends(delegado)]
+Cidadao = CidadaoDelegado
+Profissional = ProfissionalDelegado
+Delegado = Annotated[Ator, Depends(ator_do_orquestrador)]
 
 
 class CancelamentoUnidade(BaseModel):

@@ -4,7 +4,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from servicos.comandos import INTEIRO_MAXIMO, Texto
+from servicos.comandos import PRAZO_MAXIMO_HORAS, Texto
 from servicos.unidades.regras_horarios import validar_periodo, validar_sobreposicoes
 
 
@@ -76,7 +76,11 @@ class HorariosUnidade(Entrada):
 
 
 class PrazoAnalise(Entrada):
-    prazoAnaliseHoras: Annotated[int, Field(strict=True, ge=1, le=INTEIRO_MAXIMO)]
+    prazoAnaliseHoras: Annotated[int, Field(strict=True, ge=1, le=PRAZO_MAXIMO_HORAS)]
+
+
+class PrazoVigente(BaseModel):
+    prazoAnaliseHoras: int
 
 
 class StatusUnidade(Entrada):

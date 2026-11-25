@@ -1,16 +1,36 @@
 import asyncio
 import os
-from typing import Literal
+from contextlib import asynccontextmanager
+from typing import Annotated, Literal
 from uuid import UUID
 
-from fastapi import FastAPI, Header, HTTPException, Request, Response
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from servicos.contratos_reserva import DadosReserva, LinkReserva, PedidoReserva, ReservaPublica
-from servicos.http import cliente_http, consultar, requisitar
+from servicos.http import cliente_http, consultar, falha_de_configuracao, requisitar
+from servicos.identidade_demo import (
+    TOKEN_BFF_CIDADAO, TOKEN_CIDADAO, Ator, ator_autenticado, delegar, exigir_credenciais,
+)
 
 
-app = FastAPI(title="GlicoAcesso — BFF Cidadão", lifespan=cliente_http)
+@asynccontextmanager
+async def ciclo(app: FastAPI):
+    exigir_credenciais(TOKEN_CIDADAO, TOKEN_BFF_CIDADAO)
+    async with cliente_http(app):
+        yield
+
+
+app = FastAPI(title="GlicoAcesso — BFF Cidadão", lifespan=ciclo)
+
+
+def cidadao(ator: Annotated[Ator, Depends(ator_autenticado)]) -> Ator:
+    if ator.papel != "CIDADAO":
+        raise HTTPException(403, "Operação exclusiva do cidadão.")
+    return ator
+
+
+Cidadao = Annotated[Ator, Depends(cidadao)]
 
 
 class Unidade(BaseModel):
@@ -116,16 +136,11 @@ def origem_reservas() -> str:
     return os.environ.get("RESERVAS_URL", "http://127.0.0.1:8004").rstrip("/")
 
 
-def cabecalhos_autenticados(request: Request) -> dict[str, str]:
-    return {
-        nome: request.headers[nome]
-        for nome in ("authorization", "idempotency-key")
-        if nome in request.headers
-    }
-
-
 def apresentar_reserva(resposta, status_esperado: int, saida: Response):
     if resposta.status_code != status_esperado:
+        if falha_de_configuracao(resposta):
+            # A credencial recusada é a do BFF, não a do usuário.
+            raise HTTPException(503, "Serviço temporariamente indisponível.")
         if resposta.status_code not in (401, 403, 404, 409, 422, 502, 503, 504):
             raise HTTPException(502, "Não foi possível concluir a consulta de Reservas.")
         headers = {"Cache-Control": "no-store"}
@@ -146,21 +161,21 @@ def apresentar_reserva(resposta, status_esperado: int, saida: Response):
 
 @app.post("/api/cidadao/v1/reservas", status_code=201, response_model=ReservaPublica)
 async def criar_reserva(
-    request: Request, response: Response, pedido: PedidoReserva,
+    request: Request, response: Response, pedido: PedidoReserva, cidadao: Cidadao,
     idempotency_key: str = Header(alias="Idempotency-Key", min_length=1, max_length=128),
 ):
     resposta = await requisitar(
         request.app.state.http, "POST", origem_reservas() + "/api/cidadao/v1/reservas",
-        headers={**cabecalhos_autenticados(request), "Idempotency-Key": idempotency_key},
+        headers={**delegar(TOKEN_BFF_CIDADAO, cidadao), "Idempotency-Key": idempotency_key},
         json=pedido.model_dump(mode="json"),
     )
     return apresentar_reserva(resposta, 201, response)
 
 
 @app.get("/api/cidadao/v1/reservas/{reservaId}", response_model=ReservaPublica)
-async def consultar_reserva(request: Request, response: Response, reservaId: UUID):
+async def consultar_reserva(request: Request, response: Response, reservaId: UUID, cidadao: Cidadao):
     resposta = await consultar(
         request.app.state.http, origem_reservas() + f"/internal/v1/reservas/{reservaId}",
-        headers=cabecalhos_autenticados(request),
+        headers=delegar(TOKEN_BFF_CIDADAO, cidadao),
     )
     return apresentar_reserva(resposta, 200, response)

@@ -1,9 +1,9 @@
 """Registro da entrega presencial: serializa com a revogação na linha da autorização."""
 import os
-from typing import Annotated, Literal
+from typing import Literal
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
 from pydantic import AwareDatetime, BaseModel, ConfigDict, ValidationError
 
@@ -12,14 +12,14 @@ from servicos.comandos import Chave, Correlacao, responder, resumir
 from servicos.contratos_reserva import EstadoReserva
 from servicos.http import consultar, falha_de_configuracao
 from servicos.idempotencia import gravar_resultado, reobter_resultado, resultado_anterior
-from servicos.identidade_demo import Ator, exigir_unidade, profissional_autenticado
+from servicos.identidade_demo import Ator, ProfissionalDelegado, exigir_unidade
 from servicos.mensageria import RETIRADA_CONCLUIDA, gravar_outbox
 
 
 rotas = APIRouter()
 BANCO = "RETIRADAS_DATABASE_URL"
 OPERACAO = "registrar-retirada"
-Profissional = Annotated[Ator, Depends(profissional_autenticado)]
+Profissional = ProfissionalDelegado
 
 
 class PedidoRetirada(BaseModel):

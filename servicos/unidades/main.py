@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 from typing import Annotated
 from uuid import UUID
 
@@ -6,13 +7,20 @@ from fastapi.responses import JSONResponse
 
 from servicos.banco import BancoIndisponivel, conectar
 from servicos.identidade_demo import (
-    Ator, exigir_unidade, reservas_ou_profissional, servico_reservas_autenticado,
+    TOKEN_ADMIN, TOKEN_BFF_CIDADAO, TOKEN_BFF_UNIDADE, TOKEN_RESERVAS, Ator, exigir_credenciais, exigir_unidade,
+    leitor_de_unidade, servico_reservas_autenticado,
 )
 from servicos.unidades import administracao, repositorio
-from servicos.unidades.esquemas import PrazoAnalise, UnidadeCadastro, UnidadeResumo
+from servicos.unidades.esquemas import PrazoVigente, UnidadeCadastro, UnidadeResumo
 
 
-app = FastAPI(title="GlicoAcesso — Unidades")
+@asynccontextmanager
+async def ciclo(_app: FastAPI):
+    exigir_credenciais(TOKEN_RESERVAS, TOKEN_BFF_CIDADAO, TOKEN_BFF_UNIDADE, TOKEN_ADMIN)
+    yield
+
+
+app = FastAPI(title="GlicoAcesso — Unidades", lifespan=ciclo)
 app.include_router(administracao.rotas)
 BANCO = "UNIDADES_DATABASE_URL"
 
@@ -33,20 +41,21 @@ def listar_unidades():
         return repositorio.listar_ativas(conexao)
 
 
-@app.get("/internal/v1/unidades/{unidadeId}", response_model=UnidadeCadastro)
-def consultar_unidade(unidadeId: UUID, profissional: Annotated[Ator | None, Depends(reservas_ou_profissional)]):
-    if profissional is not None:
-        exigir_unidade(profissional, unidadeId)
+@app.get("/internal/v1/unidades/{unidadeId}", response_model=UnidadeCadastro | UnidadeResumo)
+def consultar_unidade(unidadeId: UUID, leitor: Annotated[Ator | str, Depends(leitor_de_unidade)]):
+    if isinstance(leitor, Ator):
+        exigir_unidade(leitor, unidadeId)
     with conectar(BANCO) as conexao:
         dados = repositorio.buscar_cadastro(conexao, unidadeId)
     if dados is None:
         raise HTTPException(404, "Unidade não encontrada.")
-    return dados
+    # O BFF Cidadão recebe só os campos públicos, inclusive de unidades inativas.
+    return UnidadeResumo.model_validate(dados) if leitor == "BFF_CIDADAO" else UnidadeCadastro.model_validate(dados)
 
 
 @app.get(
     "/internal/v1/unidades/{unidadeId}/prazo-analise",
-    response_model=PrazoAnalise,
+    response_model=PrazoVigente,
     dependencies=[Depends(servico_reservas_autenticado)],
 )
 def consultar_prazo_analise_unidade(unidadeId: UUID):

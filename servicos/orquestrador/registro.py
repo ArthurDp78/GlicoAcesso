@@ -37,13 +37,6 @@ def criar_execucao(conexao, saga_id, reserva_id, correlacao, tipo, estado, ator_
           Jsonb(resultado) if resultado is not None else None))
 
 
-def cabecalhos_do_ator(papel, ator_id, unidade_id) -> dict:
-    cabecalhos = {"X-Ator-Papel": papel, "X-Ator-Id": ator_id}
-    if unidade_id is not None:
-        cabecalhos["X-Ator-Unidade-Id"] = str(unidade_id)
-    return cabecalhos
-
-
 def efeitos_conhecidos(conexao, reserva_id) -> dict | None:
     """Efeitos das confirmações, já reconciliados por resultados conclusivos; None sem registro."""
     linhas = conexao.execute("""
