@@ -8,21 +8,31 @@ from fastapi.responses import JSONResponse
 from psycopg.errors import UniqueViolation
 from psycopg.types.json import Jsonb
 
+from servicos import mensageria
 from servicos.banco import BancoIndisponivel, conectar
+from servicos.erros import entrada_invalida_400
 from servicos.identidade_demo import Ator, profissional_autenticado
-from servicos.orquestrador.executor import laco, nova_etapa
+from servicos.orquestrador import pedidos
+from servicos.orquestrador.cancelamento import processar_retirada
+from servicos.orquestrador.executor import laco
+from servicos.orquestrador.pedidos import aceito, erro
+from servicos.orquestrador.registro import BANCO, nova_etapa
 
 
 @asynccontextmanager
 async def ciclo(_app: FastAPI):
     parar = threading.Event()
     threading.Thread(target=laco, args=(parar,), name="executor-saga", daemon=True).start()
+    mensageria.iniciar({
+        "retirada-orquestrador": mensageria.consumidor(mensageria.FILA_RETIRADA_ORQUESTRADOR, processar_retirada),
+    }, parar)
     yield
     parar.set()
 
 
 app = FastAPI(title="GlicoAcesso — Orquestrador da SAGA", lifespan=ciclo)
-BANCO = "ORQUESTRADOR_DATABASE_URL"
+app.include_router(pedidos.rotas)
+entrada_invalida_400(app, "/internal/v1/reservas/{reservaId}/confirmacoes", "/internal/v1/reservas/{reservaId}/cancelamentos")
 OPERACAO = "solicitar-confirmacao"
 PRIMEIRA_ETAPA = "ACEITAR_RESERVA"
 # shortcut: o BFF repassa o Bearer do profissional e o Orquestrador o valida; trocar por token delegado assinado
@@ -41,23 +51,13 @@ def verificar_saude() -> dict[str, str]:
     return {"servico": "orquestrador", "status": "ok"}
 
 
-def erro(status: int, codigo: str, mensagem: str) -> JSONResponse:
-    return JSONResponse({"codigo": codigo, "mensagem": mensagem}, status_code=status, headers={"Cache-Control": "no-store"})
-
-
-def aceito(dados: dict) -> JSONResponse:
-    return JSONResponse(dados, status_code=202, headers={
-        "Location": f"/internal/v1/sagas/{dados['sagaId']}", "Cache-Control": "no-store",
-    })
-
-
 @app.post("/internal/v1/reservas/{reservaId}/confirmacoes", status_code=202)
 def solicitar_confirmacao(
     reservaId: UUID, profissional: Profissional, chave: Chave,
     correlacao: Annotated[UUID | None, Header(alias="X-Correlation-Id")] = None,
 ):
     if not chave.strip():
-        raise HTTPException(422, "Chave idempotente vazia.")
+        raise HTTPException(400, "Chave idempotente vazia.")
     with conectar(BANCO) as conexao:
         controle = f"{OPERACAO}:{profissional.id}:{chave}"
         conexao.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (controle,))
@@ -89,18 +89,3 @@ def solicitar_confirmacao(
             VALUES (%s, %s, %s, %s, 202, %s)
         """, (OPERACAO, profissional.id, chave, str(reservaId), Jsonb(dados)))
     return aceito(dados)
-
-
-@app.get("/internal/v1/sagas/{sagaId}")
-def consultar_pedido(sagaId: UUID, profissional: Profissional):
-    with conectar(BANCO) as conexao:
-        execucao = conexao.execute("""
-            SELECT saga_id AS "sagaId", reserva_id AS "reservaId", tipo, estado AS "estadoExecucao",
-                motivo_encerramento AS "motivoEncerramento", ator_id
-            FROM saga_execucoes WHERE saga_id = %s
-        """, (sagaId,)).fetchone()
-    if execucao is None:
-        raise HTTPException(404, "Pedido não encontrado.")
-    if execucao.pop("ator_id") != profissional.id:
-        raise HTTPException(403, "Pedido de outro ator.")
-    return {chave: valor for chave, valor in execucao.items() if valor is not None}
