@@ -38,6 +38,7 @@ Os contratos dos BFFs usam os prefixos `/api/cidadao/v1` e `/api/unidade/v1` em 
 | Unidade | `GET /api/unidade/v1/painel/reservas/{reservaId}` | BFF Unidade. |
 | Unidade | `GET /api/unidade/v1/painel/reservas` | BFF Unidade. Lista solicitações pendentes para decisão. |
 | Unidade | `GET /api/unidade/v1/painel/estoque` | BFF Unidade. |
+| Unidade | `GET /api/unidade/v1/painel/estoque/catalogo` | BFF Unidade. Identifica a unidade vinculada ao profissional e lista os itens para entrada. |
 | Unidade | `GET /api/unidade/v1/unidade` | BFF Unidade. Consulta cadastro da unidade vinculada ao profissional. |
 | Unidade | `PUT /api/unidade/v1/unidade` | BFF Unidade. Atualiza cadastro e informações de atendimento da unidade autenticada. |
 | Unidade | `PUT /api/unidade/v1/unidade/horarios` | BFF Unidade. Atualiza horários da unidade autenticada. |
@@ -60,6 +61,7 @@ Os endpoints sob `/internal/v1` pertencem à comunicação entre serviços e nã
 
 | Comunicação | Operação ou rota interna |
 |---|---|
+| CLI do gestor → Unidades | `POST /internal/v1/unidades` na rede administrativa, com Bearer exclusivo do gestor. |
 | BFF Unidade → Orquestrador | `POST /internal/v1/reservas/{reservaId}/confirmacoes` para iniciar a confirmação. |
 | BFFs → Orquestrador | `POST /internal/v1/reservas/{reservaId}/cancelamentos` para solicitar reversão de efeitos distribuídos. |
 | Orquestrador → Reservas | Comandos de aceite, finalização, falha e cancelamento sob `/internal/v1/reservas/{reservaId}`, no contrato de Reservas. |
@@ -72,7 +74,8 @@ Os endpoints sob `/internal/v1` pertencem à comunicação entre serviços e nã
 | BFFs → Unidades | `GET /api/cidadao/v1/unidades` para listagem pública e `GET /internal/v1/unidades/{unidadeId}` para compor detalhes autorizados. |
 | BFF Cidadão → Estoque | `GET /api/cidadao/v1/estoque/itens` para listar itens pesquisáveis. |
 | BFF Unidade → Retiradas | `GET /internal/v1/autorizacoes/{reservaId}` para agregar a situação operacional da autorização. O registro da entrega também segue diretamente a Retiradas. |
-| BFF Unidade → Estoque | `GET /api/unidade/v1/estoque/{unidadeId}/itens` para compor o painel e os dados do item da reserva. |
+| BFF Unidade → Estoque | `GET /api/cidadao/v1/estoque/itens` para a seleção no catálogo, `GET /api/unidade/v1/estoque/{unidadeId}/itens` para os saldos projetados e `POST /api/unidade/v1/estoque/{unidadeId}/itens/{itemId}/entradas` para registrar a entrada. |
+| Estoque → Unidades | `GET /api/cidadao/v1/unidades` para verificar se a unidade está ativa antes de uma nova entrada. |
 
 Os [contratos do Orquestrador](./api/orquestrador.yaml) e de [Reservas](./api/reserva.yaml) detalham esses comandos. Os caminhos públicos da seção 2 continuam sendo o ponto de entrada para os clientes. Os serviços publicam e consomem eventos pelo RabbitMQ.
 

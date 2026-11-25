@@ -35,6 +35,7 @@ flowchart LR
 
     BC -->|"Consultas e operações locais"| DOM
     BU -->|"Consultas e operações locais"| DOM
+    A["Gestor da rede<br/>CLI administrativa"] -->|"Cadastro por HTTP interno"| U
     BC -->|"Cancelamento distribuído"| O
     BU -->|"Confirmação e cancelamento distribuído"| O
     O --> R
@@ -72,6 +73,8 @@ As setas dos BFFs para o grupo de domínio resumem os destinos. A tabela abaixo 
 
 O API Gateway publica as rotas dos BFFs. Consultas, criação, rejeição e cancelamento de solicitação pendente sem efeitos distribuídos vão ao serviço responsável. O BFF Unidade registra a entrega no balcão diretamente em Retiradas. Na confirmação, Reservas valida e grava o aceite e a transição final para `CONFIRMADA`. O Orquestrador solicita essas transições, a alocação em Estoque e a preparação da autorização em Retiradas.
 
+O gestor usa a CLI na rede administrativa para cadastrar uma unidade diretamente em Unidades. O profissional seleciona um item do catálogo e registra a quantidade recebida pelo painel da unidade. O lançamento segue por Gateway → BFF Unidade → Estoque. Estoque grava a entrada e emite um evento para atualizar a disponibilidade.
+
 ### Validações internas
 
 Essas chamadas HTTP complementam as setas do diagrama macro:
@@ -80,6 +83,7 @@ Essas chamadas HTTP complementam as setas do diagrama macro:
 |---|---|---|
 | Reservas | Unidades | Unidade ativa e prazo de análise. |
 | Reservas | Estoque | Permissão canônica para reservar o item na unidade. |
+| Estoque | Unidades | Confirma que a unidade está ativa antes de registrar uma nova entrada. |
 | Retiradas | Reservas | Estado canônico `CONFIRMADA` antes do registro da entrega. |
 
 ## 3. RabbitMQ e filas
