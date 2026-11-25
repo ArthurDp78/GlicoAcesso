@@ -7,8 +7,8 @@ from servicos.identidade_demo import CHAMADOR_NAO_AUTORIZADO
 
 
 @asynccontextmanager
-async def cliente_http(app: FastAPI):
-    async with httpx.AsyncClient(timeout=4.0, trust_env=False) as cliente:
+async def cliente_http(app: FastAPI, timeout: float = 4.0):
+    async with httpx.AsyncClient(timeout=timeout, trust_env=False) as cliente:
         app.state.http = cliente
         yield
 

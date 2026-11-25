@@ -162,9 +162,10 @@ def cabecalhos_do_ator(papel: str, ator_id: str, unidade_id) -> dict[str, str]:
     return cabecalhos
 
 
-def delegar(variavel: str, ator: Ator) -> dict[str, str]:
-    """Cabeçalhos do BFF: credencial própria e identidade já autenticada. O token do usuário não é repassado."""
-    return {"Authorization": "Bearer " + os.environ.get(variavel, ""), **cabecalhos_do_ator(ator.papel, ator.id, ator.unidadeId)}
+def delegar(variavel: str, ator: Ator | None) -> dict[str, str]:
+    """Cabeçalhos do BFF: credencial própria e, se houver, o ator autenticado. O token do usuário não é repassado."""
+    cabecalhos = {"Authorization": "Bearer " + os.environ.get(variavel, "")}
+    return cabecalhos if ator is None else cabecalhos | cabecalhos_do_ator(ator.papel, ator.id, ator.unidadeId)
 
 
 def ator_do_bff(

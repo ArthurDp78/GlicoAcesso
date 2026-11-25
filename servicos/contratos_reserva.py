@@ -31,8 +31,16 @@ class ReservaInterna(DadosReserva):
 
 class LinkReserva(BaseModel):
     href: str
-    method: Literal["GET"]
+    method: Literal["GET", "POST"]
+    body: dict | None = None
 
 
 class ReservaPublica(DadosReserva):
+    itemNome: str | None = None
+    unidadeNome: str | None = None
+    enderecoLocal: str | None = None
+    orientacoesRetirada: str | None = None
     links: dict[str, LinkReserva] = Field(serialization_alias="_links")
+
+
+CANCELAVEIS = ("SOLICITADA", "EM_CONFIRMACAO", "CONFIRMADA")  # Estados em que a ação é oferecida (documento 07).
