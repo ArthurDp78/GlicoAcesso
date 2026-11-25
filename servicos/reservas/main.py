@@ -1,4 +1,6 @@
 import os
+import threading
+from contextlib import asynccontextmanager
 from hashlib import sha256
 from typing import Annotated, Literal
 from uuid import UUID, uuid4
@@ -10,14 +12,36 @@ from psycopg.types.json import Jsonb
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from servicos.banco import BancoIndisponivel, conectar
+from servicos.comandos import RASTREADO
 from servicos.contratos_reserva import PedidoReserva, ReservaInterna
+from servicos.erros import entrada_invalida_400
 from servicos.http import cliente_http, consultar
+from servicos.idempotencia import reobter_resultado
 from servicos.identidade_demo import (
     Ator, AtorAutenticado, ator_delegado, cidadao_autenticado, orquestrador_autenticado, profissional_autenticado,
+    retiradas_autenticado,
 )
+from servicos.reservas import cancelamento, segundo_plano
 
 
-app = FastAPI(title="GlicoAcesso — Reservas", lifespan=cliente_http)
+@asynccontextmanager
+async def ciclo(app: FastAPI):
+    parar = threading.Event()
+    segundo_plano.iniciar(parar)  # Expiração por prazo e consumo da retirada concluída.
+    async with cliente_http(app):
+        yield
+    parar.set()
+
+
+app = FastAPI(title="GlicoAcesso — Reservas", lifespan=ciclo)
+app.include_router(cancelamento.rotas)
+COMANDOS_INTERNOS = "/internal/v1/reservas/{reservaId}"
+entrada_invalida_400(
+    app, "/api/unidade/v1/reservas/{reservaId}/decisao", "/api/unidade/v1/reservas/{reservaId}/cancelar",
+    "/api/cidadao/v1/reservas/{reservaId}/cancelar",
+    *(f"{COMANDOS_INTERNOS}/{comando}" for comando in
+      ("aceite", "confirmar", "falhar-confirmacao", "iniciar-cancelamento", "finalizar-cancelamento")),
+)
 BANCO = "RESERVAS_DATABASE_URL"
 OPERACAO = "criar-reserva"
 Cidadao = Annotated[str, Depends(cidadao_autenticado)]
@@ -185,6 +209,14 @@ async def consultar_reserva(request: Request, reservaId: UUID, ator: AtorAutenti
     return registro
 
 
+@app.get("/internal/v1/reservas/{reservaId}/estado", dependencies=[Depends(retiradas_autenticado), *RASTREADO])
+def consultar_estado(reservaId: UUID):
+    registro = buscar_reserva(reservaId)
+    if registro is None:
+        raise HTTPException(404, "Reserva não encontrada.")
+    return responder((200, {"reservaId": str(reservaId), "status": registro["status"]}))
+
+
 def listar_pendentes_da_unidade(unidade_id: UUID):
     with conectar(BANCO) as conexao:
         return conexao.execute(f"""
@@ -262,10 +294,17 @@ def registrar_decisao(profissional: str, unidade: UUID, reserva_id: UUID, decisa
         return resultado
 
 
-@app.post("/api/unidade/v1/reservas/{reservaId}/decisao")
+@app.post("/api/unidade/v1/reservas/{reservaId}/decisao", dependencies=RASTREADO)
 async def decidir(request: Request, reservaId: UUID, corpo: Decisao, profissional: Profissional, chave: Chave):
     if not chave.strip():
-        raise HTTPException(422, "Chave idempotente vazia.")
+        raise HTTPException(400, "Chave idempotente vazia.")
+    # O replay vem antes da consulta remota: um retry recupera o destino original mesmo se a unidade mudou.
+    anterior = await run_in_threadpool(
+        reobter_resultado, BANCO, OPERACAO_DECISAO, profissional.id, chave,
+        sha256(f"{reservaId}:{corpo.decisao}".encode()).hexdigest(),
+    )
+    if anterior is not None:
+        return responder(anterior)
     unidade = await verificar_vinculo(request, profissional)
     status, dados = await run_in_threadpool(
         registrar_decisao, profissional.id, unidade, reservaId, corpo.decisao, chave
@@ -339,7 +378,7 @@ def responder(resultado: tuple[int, dict]) -> JSONResponse:
     return JSONResponse(resultado[1], status_code=resultado[0], headers={"Cache-Control": "no-store"})
 
 
-@app.post("/internal/v1/reservas/{reservaId}/aceite")
+@app.post("/internal/v1/reservas/{reservaId}/aceite", dependencies=RASTREADO)
 async def aceitar(
     request: Request, reservaId: UUID, comando: ComandoSaga, _orquestrador: Orquestrador, chave: Chave,
     papel: Annotated[str | None, Header(alias="X-Ator-Papel")] = None,
@@ -347,21 +386,36 @@ async def aceitar(
     unidade: Annotated[str | None, Header(alias="X-Ator-Unidade-Id")] = None,
 ):
     ator = ator_delegado(papel, ator_id, unidade)
+    # Um aceite já gravado é recuperado sem reavaliar a unidade; senão a SAGA o trataria como recusado.
+    anterior = await run_in_threadpool(
+        reobter_resultado, BANCO, "aceitar-reserva", "orquestrador", chave,
+        sha256(f"{reservaId}:{comando.sagaId}".encode()).hexdigest(),
+    )
+    if anterior is not None:
+        return responder(anterior)
     await verificar_vinculo(request, ator)
     return responder(await run_in_threadpool(
         registrar_transicao, "aceitar-reserva", reservaId, comando.sagaId, chave, "SOLICITADA", "EM_CONFIRMACAO", ator
     ))
 
 
-@app.post("/internal/v1/reservas/{reservaId}/confirmar")
+@app.post("/internal/v1/reservas/{reservaId}/confirmar", dependencies=RASTREADO)
 async def confirmar(reservaId: UUID, comando: ComandoSaga, _orquestrador: Orquestrador, chave: Chave):
     return responder(await run_in_threadpool(
         registrar_transicao, "confirmar-reserva", reservaId, comando.sagaId, chave, "EM_CONFIRMACAO", "CONFIRMADA"
     ))
 
 
-@app.post("/internal/v1/reservas/{reservaId}/falhar-confirmacao")
+@app.post("/internal/v1/reservas/{reservaId}/falhar-confirmacao", dependencies=RASTREADO)
 async def falhar_confirmacao(reservaId: UUID, comando: ComandoSaga, _orquestrador: Orquestrador, chave: Chave):
     return responder(await run_in_threadpool(
         registrar_transicao, "falhar-confirmacao", reservaId, comando.sagaId, chave, "EM_CONFIRMACAO", "FALHA_CONFIRMACAO"
+    ))
+
+
+@app.post("/internal/v1/reservas/{reservaId}/finalizar-cancelamento", dependencies=RASTREADO)
+async def finalizar_cancelamento(reservaId: UUID, comando: ComandoSaga, _orquestrador: Orquestrador, chave: Chave):
+    return responder(await run_in_threadpool(
+        registrar_transicao, "finalizar-cancelamento", reservaId, comando.sagaId, chave,
+        "CANCELAMENTO_EM_ANDAMENTO", "CANCELADA"
     ))
