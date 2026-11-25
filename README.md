@@ -149,6 +149,27 @@ cd GlicoAcesso
 
 ## Desenvolvimento local
 
+### Construir as imagens da aplicação
+
+Cada um dos oito serviços tem um Dockerfile em `servicos/<serviço>/Dockerfile`. Use a raiz do repositório como contexto para que o build tenha acesso ao `uv.lock` e aos módulos compartilhados. No PowerShell, com o Docker Desktop em modo de contêineres Linux:
+
+```powershell
+foreach ($servico in 'gateway', 'bff_cidadao', 'unidades', 'estoque', 'reservas', 'bff_unidade', 'orquestrador', 'retiradas') {
+  docker build --file "servicos/$servico/Dockerfile" --tag "glicoacesso/${servico}:local" .
+  if ($LASTEXITCODE -ne 0) { throw "Falha no build de $servico." }
+}
+```
+
+As imagens usam **build em múltiplos estágios**. O primeiro estágio instala as dependências do `uv.lock` em uma `.venv`. A imagem final usa a mesma base Python slim e leva o ambiente instalado, os módulos compartilhados e os arquivos do serviço. Com isso, o `uv` e o cache de instalação ficam fora da imagem final. Alterações no código do serviço reaproveitam a camada de dependências. Cada processo é executado com usuário sem privilégios de root.
+
+O Gateway leva os arquivos dos dois portais e a logo. As imagens dos serviços com banco levam suas migrações para que a inicialização possa executá-las com `python -m servicos.migracoes <serviço>`. A aplicação das migrações e a configuração de URLs, bancos, RabbitMQ e credenciais fazem parte da subida do sistema.
+
+Para uma checagem isolada da imagem de entrada, suba o Gateway e consulte `http://127.0.0.1:8000/health` em outro terminal:
+
+```powershell
+docker run --rm -p 127.0.0.1:8000:8000 glicoacesso/gateway:local
+```
+
 ### Rodar tudo com um comando (Windows)
 
 Pré-requisitos: Docker Desktop aberto e [uv](https://docs.astral.sh/uv/getting-started/installation/) instalado. Na raiz do repositório, em um PowerShell:
