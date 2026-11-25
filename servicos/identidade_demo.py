@@ -79,6 +79,11 @@ def servico_reservas_autenticado(credencial: Credencial) -> None:
     validar_token(credencial, "GLICO_RESERVAS_SERVICE_TOKEN")
 
 
+def gestor_rede_autenticado(credencial: Credencial) -> str:
+    validar_token(credencial, "GLICO_GESTOR_REDE_TOKEN")
+    return "gestor-rede-demo"
+
+
 def orquestrador_autenticado(credencial: Credencial) -> str:
     validar_token(credencial, "GLICO_ORQUESTRADOR_SERVICE_TOKEN")
     return "orquestrador"
