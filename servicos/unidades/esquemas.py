@@ -2,9 +2,10 @@ from datetime import time
 from typing import Annotated
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from servicos.comandos import INTEIRO_MAXIMO, Texto
+from servicos.unidades.regras_horarios import validar_periodo, validar_sobreposicoes
 
 
 class Entrada(BaseModel):
@@ -43,9 +44,14 @@ class Horario(Entrada):
             raise ValueError("horário de atendimento é local, sem fuso")
         return valor
 
+    @model_validator(mode="after")
+    def periodo_valido(self):
+        validar_periodo(self.horarioInicial, self.horarioFinal)
+        return self
+
 
 def sem_repetidos(itens: list) -> list:
-    # A chave primária dos detalhes não admite contatos ou intervalos exatamente duplicados.
+    # A chave primária dos detalhes não admite contatos exatamente duplicados.
     if len({item.model_dump_json() for item in itens}) < len(itens):
         raise ValueError("itens repetidos")
     return itens
@@ -56,8 +62,9 @@ class HorariosUnidade(Entrada):
 
     @field_validator("horarios")
     @classmethod
-    def horarios_unicos(cls, valor):
-        return sem_repetidos(valor)
+    def horarios_sem_sobreposicao(cls, valor):
+        validar_sobreposicoes(valor)
+        return valor
 
 
 class PrazoAnalise(Entrada):

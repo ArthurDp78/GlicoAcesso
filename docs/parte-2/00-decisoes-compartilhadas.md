@@ -89,6 +89,8 @@ Existem quatro microsserviços de domínio e um serviço independente de orquest
 
 | **Orquestrador da SAGA** | Execuções e etapas duráveis de confirmação e cancelamento distribuído, tentativas, resultados, compensações e Inbox de retirada. | Estado canônico da reserva, regras de transição de domínio, saldo ou autorização de retirada. |
 
+**Horários de atendimento.** Em Unidades, cada período DEVE ter início estritamente anterior ao fim no mesmo dia, sem duração nula e sem atravessar a meia-noite. Uma unidade PODE ter vários períodos por dia, desde que NÃO se sobreponham; períodos consecutivos (08:00–12:00 e 12:00–17:00) e horários iguais em dias diferentes são permitidos. Um período inválido rejeita a operação inteira.
+
 ### 5.1 Regras de fronteira
 
 1. Cada serviço mantém a verdade do seu domínio. Por exemplo, Reservas pode exibir `itemId`, mas o nome, o tipo e a descrição canônicos do item pertencem a Estoque.
@@ -518,6 +520,12 @@ Se a implementação ou a revisão do enunciado mostrar que uma decisão precisa
 4. avisar as quatro pessoas e integrar a mudança por branch/pull request.
 
 Enquanto essa revisão não acontecer, prevalece a decisão deste documento. Nenhum documento especializado deve introduzir silenciosamente um novo estado, evento, identificador, banco compartilhado, participante da SAGA ou endpoint que contradiga o contrato-base.
+
+### 17.1 Alterações registradas
+
+| Data | Decisão anterior | Nova decisão | Razão | Documentos afetados |
+|---|---|---|---|---|
+| 24/11/2026 | Sem regra para a validade e a sobreposição dos períodos de atendimento. | Períodos válidos no mesmo dia e sem sobreposição, conforme a seção 5. | Evitar agendas contraditórias na consulta pública. | 00, 01, 09 e `api/unidade.yaml`. |
 
 ## 18. Referência ao enunciado
 

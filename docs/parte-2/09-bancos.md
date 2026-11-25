@@ -42,7 +42,7 @@ Contrato relacionado: [unidade.yaml](./api/unidade.yaml).
 |---|---|---|
 | `unidades` | `unidadeId uuid`; `nome`, `logradouro`, `numero`, `bairro`, `cidade`, `estado`, `cep`, `orientacoesRetirada text`; `prazoAnaliseHoras integer`; `ativa boolean`; `createdAt`, `updatedAt timestamptz`. Todos obrigatórios. | PK `unidadeId`. |
 | `contatos_unidade` | `unidadeId uuid`; `tipo`, `valor text`. Todos obrigatórios. | PK composta `(unidadeId, tipo, valor)`; FK `unidadeId → unidades.unidadeId`. |
-| `horarios_unidade` | `unidadeId uuid`; `diaSemana smallint`; `horarioInicial`, `horarioFinal time`. Todos obrigatórios. Cada linha representa um intervalo de atendimento. | PK composta `(unidadeId, diaSemana, horarioInicial, horarioFinal)`; FK `unidadeId → unidades.unidadeId`. |
+| `horarios_unidade` | `unidadeId uuid`; `diaSemana smallint`; `horarioInicial`, `horarioFinal time`; `legado boolean`. Todos obrigatórios. Cada linha representa um intervalo de atendimento. | PK composta `(unidadeId, diaSemana, horarioInicial, horarioFinal)`; FK `unidadeId → unidades.unidadeId`. |
 
 O endereço fica diretamente em `unidades`, sem tabela própria e sem `complemento`. `numero` e `cep` são textos para preservar sua representação. Contatos e horários ficam em relações 1:N, permitindo vários contatos e intervalos para a mesma unidade.
 
@@ -51,6 +51,8 @@ O endereço fica diretamente em `unidades`, sem tabela própria e sem `complemen
 - `CHECK (prazoAnaliseHoras > 0)`: prazo obrigatório para toda a unidade. Ele corresponde ao campo de mesmo nome da consulta interna; `prazoAnalise` é a denominação conceitual do documento 00.
 - `ativa` tem `DEFAULT true`: a unidade cadastrada já entra operacional. A saída de participação usa `ativa = false`, preservando o cadastro e as referências históricas mantidas por outros serviços.
 - `diaSemana` usa 1 a 7, de segunda-feira a domingo, com `CHECK` desse intervalo. As PKs dos detalhes impedem contatos e intervalos exatamente duplicados.
+- Em `horarios_unidade`, `CHECK (horarioInicial < horarioFinal)` impede duração nula, inversão e passagem pela meia-noite (`24:00` também é recusado). `EXCLUDE` por unidade e dia impede sobreposição, com períodos semiabertos `[inicial, final)`, que permitem consecutivos. Usa a extensão `btree_gist`.
+- Períodos anteriores às regras que as violem são preservados e marcados com `legado boolean` (padrão `false`), fora das duas constraints. Deixam de existir quando os horários da unidade são substituídos por um conjunto válido.
 - `endereco` e `horarioAtendimento`, hoje expostos como textos no OpenAPI, são compostos pela aplicação a partir dos campos e intervalos locais. A organização interna não altera esses nomes ou tipos HTTP.
 
 Este banco não contém referências a outros domínios. Os índices das PKs atendem à consulta por unidade e à carga de seus contatos e horários; não se propõem índices adicionais sem consulta definida.

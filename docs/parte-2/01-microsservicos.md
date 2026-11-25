@@ -106,6 +106,8 @@ Unidades:
 - mantém o prazo de análise configurado para a unidade;
 - responde às consultas internas necessárias para a criação de uma reserva e para as telas da unidade ou do cidadão.
 
+Em todo cadastro ou alteração de horários, Unidades exige início anterior ao fim no mesmo dia e recusa duração nula, passagem pela meia-noite e sobreposição no mesmo dia. Períodos consecutivos e horários iguais em dias diferentes são aceitos. Um período inválido rejeita toda a operação, sem alteração parcial.
+
 O contrato [unidade.yaml](./api/unidade.yaml) cobre listagem pública, cadastro e atualização, contatos e horários, ativação da unidade e configuração/consulta do prazo de análise. As rotas internas são consumidas pelos BFFs ou por Reservas; o Gateway não as publica diretamente.
 
 ### 5.4 Limites explícitos
