@@ -1,0 +1,19 @@
+name: glicoacesso-admin
+
+services:
+  cadastro-unidades:
+    profiles: [admin]
+    build:
+      context: .
+      dockerfile: servicos/unidades/Dockerfile
+    entrypoint: ["python", "-m", "servicos.unidades.cli"]
+    command: ["--help"]
+    environment:
+      UNIDADES_URL: http://unidades:8002
+      GLICO_GESTOR_REDE_TOKEN: ${GLICO_GESTOR_REDE_TOKEN:-}
+    networks: [administracao]
+
+networks:
+  administracao:
+    external: true
+    name: ${GLICO_REDE_ADMINISTRATIVA:-glicoacesso_admin}
