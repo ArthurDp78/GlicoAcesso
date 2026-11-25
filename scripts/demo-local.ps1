@@ -77,7 +77,7 @@ if (Test-Path $arquivoTokens) {
   # Preserva os tokens já gerados e acrescenta os que faltarem.
   (Get-Content $arquivoTokens -Raw | ConvertFrom-Json).PSObject.Properties | ForEach-Object { $novos[$_.Name] = $_.Value }
 }
-foreach ($nome in 'servico', 'orquestrador', 'retiradas', 'admin', 'cidadao', 'profissional') {
+foreach ($nome in 'servico', 'orquestrador', 'retiradas', 'admin', 'bffCidadao', 'bffUnidade', 'cidadao', 'profissional') {
   if (-not $novos.ContainsKey($nome)) {
     $bytes = New-Object byte[] 32
     [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
@@ -92,6 +92,8 @@ $env:GLICO_RESERVAS_SERVICE_TOKEN = $tokens.servico
 $env:GLICO_ORQUESTRADOR_SERVICE_TOKEN = $tokens.orquestrador
 $env:GLICO_RETIRADAS_SERVICE_TOKEN = $tokens.retiradas
 $env:GLICO_ADMIN_SERVICE_TOKEN = $tokens.admin
+$env:GLICO_BFF_CIDADAO_TOKEN = $tokens.bffCidadao
+$env:GLICO_BFF_UNIDADE_TOKEN = $tokens.bffUnidade
 $env:GLICO_CIDADAO_TOKEN = $tokens.cidadao
 $env:GLICO_PROFISSIONAL_TOKEN = $tokens.profissional
 $env:GLICO_PROFISSIONAL_UNIDADE_ID = '10000000-0000-4000-8000-000000000001'
