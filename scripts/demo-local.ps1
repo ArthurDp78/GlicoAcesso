@@ -72,16 +72,18 @@ foreach ($nome in $bancos.Keys) {
 
 # --- Tokens de demonstração: gerados uma vez e guardados fora do Git ---
 $arquivoTokens = Join-Path $estado 'tokens.json'
-if (-not (Test-Path $arquivoTokens)) {
-  $novos = @{}
-  foreach ($nome in 'servico', 'orquestrador', 'cidadao', 'profissional') {
+$tokens = if (Test-Path $arquivoTokens) { Get-Content $arquivoTokens -Raw | ConvertFrom-Json } else { [pscustomobject]@{} }
+$tokensAlterados = $false
+foreach ($nome in 'servico', 'orquestrador', 'cidadao', 'profissional', 'bff_unidade') {
+  if (-not $tokens.$nome) {
     $bytes = New-Object byte[] 32
     [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
-    $novos[$nome] = [Convert]::ToBase64String($bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+    $valor = [Convert]::ToBase64String($bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+    $tokens | Add-Member -NotePropertyName $nome -NotePropertyValue $valor -Force
+    $tokensAlterados = $true
   }
-  $novos | ConvertTo-Json | Out-File -Encoding utf8 $arquivoTokens
 }
-$tokens = Get-Content $arquivoTokens -Raw | ConvertFrom-Json
+if ($tokensAlterados) { $tokens | ConvertTo-Json | Out-File -Encoding utf8 $arquivoTokens }
 
 # --- Ambiente compartilhado pelos processos filhos ---
 $env:GLICO_RESERVAS_SERVICE_TOKEN = $tokens.servico
@@ -95,6 +97,7 @@ foreach ($nome in $bancos.Keys) {
 $env:RABBITMQ_URL = 'amqp://guest:guest@127.0.0.1:5672/%2F'
 $env:GLICO_FALHA_PREPARAR_AUTORIZACAO = if ($FalharRetiradas) { '1' } else { '' }
 
+$chaveBffAnterior = $env:GLICO_BFF_UNIDADE_SIGNING_KEY
 Push-Location $raiz
 try {
   uv sync --locked
@@ -115,6 +118,7 @@ try {
     retiradas = @('servicos.retiradas.main:app', 8007)
   }
   foreach ($nome in $servicos.Keys) {
+    $env:GLICO_BFF_UNIDADE_SIGNING_KEY = if ($nome -in 'bff-unidade', 'orquestrador') { $tokens.bff_unidade } else { $null }
     $app, $porta = $servicos[$nome]
     $processo = Start-Process -PassThru -WindowStyle Hidden -FilePath uv `
       -ArgumentList 'run', '--locked', 'uvicorn', $app, '--host', '127.0.0.1', '--port', "$porta" `
@@ -128,7 +132,10 @@ try {
     }
     if ($i -eq 60) { Write-Warning "$nome não respondeu. Veja $logs\$nome.log" }
   }
-} finally { Pop-Location }
+} finally {
+  $env:GLICO_BFF_UNIDADE_SIGNING_KEY = $chaveBffAnterior
+  Pop-Location
+}
 
 Write-Host ''
 Write-Host 'GlicoAcesso em execução.' -ForegroundColor Green

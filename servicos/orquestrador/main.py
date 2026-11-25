@@ -9,7 +9,8 @@ from psycopg.errors import UniqueViolation
 from psycopg.types.json import Jsonb
 
 from servicos.banco import BancoIndisponivel, conectar
-from servicos.identidade_demo import Ator, profissional_autenticado
+from servicos.delegacao_unidade import profissional_delegado
+from servicos.identidade_demo import Ator
 from servicos.orquestrador.executor import laco, nova_etapa
 
 
@@ -25,9 +26,7 @@ app = FastAPI(title="GlicoAcesso — Orquestrador da SAGA", lifespan=ciclo)
 BANCO = "ORQUESTRADOR_DATABASE_URL"
 OPERACAO = "solicitar-confirmacao"
 PRIMEIRA_ETAPA = "ACEITAR_RESERVA"
-# shortcut: o BFF repassa o Bearer do profissional e o Orquestrador o valida; trocar por token delegado assinado
-# (credencial do BFF + ator) quando houver provedor de identidade.
-Profissional = Annotated[Ator, Depends(profissional_autenticado)]
+Profissional = Annotated[Ator, Depends(profissional_delegado)]
 Chave = Annotated[str, Header(alias="Idempotency-Key", min_length=1, max_length=128)]
 
 

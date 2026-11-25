@@ -78,7 +78,7 @@ paths:
       operationId: solicitarConfirmacao
       summary: Solicitar confirmação de reserva
       description: >-
-        Somente BFF Unidade em nome de profissional. O Orquestrador valida a identidade de serviço do BFF e o papel delegado de profissional. Reservas valida o vínculo com a unidade, a decisão e o prazo na transação de aceite. A resposta confirma a gravação do pedido e da primeira intenção. A conclusão de negócio é consultada em Reservas.
+        Somente BFF Unidade em nome de profissional. Na demonstração, o BFF autentica o profissional e emite uma credencial Bearer assinada de curta duração com o papel, o identificador e a unidade. O Orquestrador valida a assinatura, a validade e o papel. Reservas valida o vínculo com a unidade, a decisão e o prazo na transação de aceite. A resposta confirma a gravação do pedido e da primeira intenção. A conclusão de negócio é consultada em Reservas.
       security: [{ serviceAuth: [] }]
       parameters:
         - { $ref: '#/components/parameters/ReservaId' }

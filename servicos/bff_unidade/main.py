@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, TypeAdapter, ValidationError
 
 from servicos.contratos_reserva import ReservaInterna
+from servicos.delegacao_unidade import emitir_credencial
 from servicos.http import cliente_http, consultar, requisitar
 from servicos.identidade_demo import Ator, profissional_autenticado
 
@@ -110,6 +111,7 @@ async def consultar_reserva(request: Request, response: Response, reservaId: UUI
 @app.post(API + "/reservas/{reservaId}/decisao")
 async def decidir(
     request: Request, reservaId: UUID, corpo: DecisaoProfissional,
+    profissional: Annotated[Ator, Depends(profissional_autenticado)],
     chave: str = Header(alias="Idempotency-Key", min_length=1, max_length=128),
 ):
     cabecalhos = {**credencial(request), "Idempotency-Key": chave}
@@ -129,7 +131,7 @@ async def decidir(
     # Só o encaminhamento conclusivo de Reservas autoriza chamar o Orquestrador, com a mesma chave.
     pedido = await requisitar(
         cliente, "POST", origem("ORQUESTRADOR_URL", "http://127.0.0.1:8006") + f"/internal/v1/reservas/{reservaId}/confirmacoes",
-        headers=cabecalhos,
+        headers={"Authorization": "Bearer " + emitir_credencial(profissional), "Idempotency-Key": chave},
     )
     if pedido.status_code != 202:
         return repassar_erro(pedido)

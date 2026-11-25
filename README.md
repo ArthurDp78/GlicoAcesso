@@ -300,14 +300,12 @@ O aceite é recebido pelo Orquestrador da SAGA, que tem o próprio PostgreSQL (o
 docker run -d --name glico-orquestrador-db -e POSTGRES_USER=glico -e POSTGRES_PASSWORD=glico-demo -e POSTGRES_DB=orquestrador -p 127.0.0.1:54334:5432 -v glico-orquestrador-data:/var/lib/postgresql/data postgres:17
 ```
 
-Nas próximas execuções, use `docker start glico-orquestrador-db`. Inicie mais dois processos. O Orquestrador valida o token do profissional, então ele precisa das mesmas variáveis de identidade usadas em Reservas:
+Nas próximas execuções, use `docker start glico-orquestrador-db`. Gere uma chave exclusiva de assinatura, com pelo menos 32 caracteres aleatórios, pelo mesmo método usado para os tokens de demonstração. Configure o mesmo valor apenas no BFF Unidade e no Orquestrador. O BFF autentica o profissional e envia ao Orquestrador uma credencial Bearer assinada com o papel, a identidade e a unidade do profissional. A credencial expira em 60 segundos.
 
 **Orquestrador (porta 8006)**
 
 ```powershell
-$env:GLICO_CIDADAO_TOKEN = '<token do cidadão>'
-$env:GLICO_PROFISSIONAL_TOKEN = '<token do profissional>'
-$env:GLICO_PROFISSIONAL_UNIDADE_ID = '10000000-0000-4000-8000-000000000001'
+$env:GLICO_BFF_UNIDADE_SIGNING_KEY = '<chave exclusiva do BFF Unidade>'
 $env:ORQUESTRADOR_DATABASE_URL = 'postgresql://glico:glico-demo@127.0.0.1:54334/orquestrador'
 uv run --locked python -m servicos.migracoes orquestrador
 uv run --locked uvicorn servicos.orquestrador.main:app --host 127.0.0.1 --port 8006
@@ -316,8 +314,14 @@ uv run --locked uvicorn servicos.orquestrador.main:app --host 127.0.0.1 --port 8
 **BFF Unidade (porta 8005)**
 
 ```powershell
+$env:GLICO_CIDADAO_TOKEN = '<token do cidadão>'
+$env:GLICO_PROFISSIONAL_TOKEN = '<token do profissional>'
+$env:GLICO_PROFISSIONAL_UNIDADE_ID = '10000000-0000-4000-8000-000000000001'
+$env:GLICO_BFF_UNIDADE_SIGNING_KEY = '<chave exclusiva do BFF Unidade>'
 uv run --locked uvicorn servicos.bff_unidade.main:app --host 127.0.0.1 --port 8005
 ```
+
+Para atualizar um ambiente existente, aplique a migração do Orquestrador antes de reiniciar os processos. Ela reconstrói comandos de aceite pendentes gravados no formato inicial e conserva a chave idempotente de cada etapa. O script de demonstração aplica a migração e acrescenta a chave do BFF ao arquivo local de tokens, preservando os tokens já gerados.
 
 Abra [http://127.0.0.1:8000/unidade](http://127.0.0.1:8000/unidade), informe o token do profissional e clique em **Carregar solicitações**. Cada solicitação pendente mostra **Aceitar** e **Rejeitar**. Os botões vêm dos links `_links` que o BFF Unidade devolve.
 
