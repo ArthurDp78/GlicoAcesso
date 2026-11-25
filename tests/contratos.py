@@ -13,7 +13,8 @@ import yaml
 from jsonschema import Draft202012Validator, FormatChecker
 
 
-ARQUIVOS = {"unidades": "unidade", "estoque": "estoque", "reservas": "reserva", "retiradas": "retirada", "orquestrador": "orquestrador"}
+ARQUIVOS = {"unidades": "unidade", "estoque": "estoque", "reservas": "reserva", "retiradas": "retirada", "orquestrador": "orquestrador",
+            "bff-cidadao": "bff-cidadao", "bff-unidade": "bff-unidade"}
 
 FORMATOS = FormatChecker(["uuid"])
 
@@ -48,14 +49,23 @@ def main(caminho):
     operacoes, cobertas, problemas = [], set(), Counter()
     for servico, arquivo in ARQUIVOS.items():
         contrato = yaml.safe_load(open(f"docs/parte-2/api/{arquivo}.yaml", encoding="utf-8"))
+        # O Gateway responde pelos mesmos contratos dos BFFs.
+        donos = (servico, "gateway") if servico.startswith("bff-") else (servico,)
+        base = contrato["servers"][0]["url"].rstrip("/")
         for rota, metodos in contrato["paths"].items():
-            for metodo, operacao in metodos.items():
-                operacoes.append((servico, metodo.upper(), rota, re.compile(re.sub(r"\{\w+\}", "[^/]+", rota) + "$"), contrato, operacao))
+            rota = base + rota
+            for dono, (metodo, operacao) in ((d, item) for d in donos for item in metodos.items()):
+                if metodo == "parameters":
+                    continue
+                operacoes.append((dono, metodo.upper(), rota, re.compile(re.sub(r"\{\w+\}", "[^/]+", rota) + "$"), contrato, operacao))
     operacoes.sort(key=lambda o: o[2].count("{"))  # Caminhos literais antes dos parametrizados.
+    extras = set()
     for linha in open(caminho, encoding="utf-8"):
         t = json.loads(linha)
         achada = next((o for o in operacoes if o[0] == t["servico"] and o[1] == t["metodo"] and o[3].match(t["caminho"])), None)
         if achada is None:
+            if t["status"] < 400 and t["caminho"] != "/health":
+                extras.add(f'{t["servico"]} {t["metodo"]} {t["caminho"]}')
             continue
         servico, metodo, rota, _, contrato, operacao = achada
         nome, status = f"{servico} {metodo} {rota}", str(t["status"])
@@ -77,6 +87,8 @@ def main(caminho):
         obrigatoria = any(resolver(contrato, p)["name"] == "Idempotency-Key" for p in operacao.get("parameters", []))
         if obrigatoria and not t["chave"] and status[0] == "2":
             problemas[f"{nome} aceitou comando sem chave"] += 1
+    for extra in sorted(extras):
+        print(f"[fora do contrato] {extra}")
     for problema, vezes in sorted(problemas.items()):
         print(f"[{vezes}x] {problema}")
     faltam = [f"{o[0]} {o[1]} {o[2]}: {s}" for o in operacoes for s in o[5]["responses"] if (f"{o[0]} {o[1]} {o[2]}", s) not in cobertas]

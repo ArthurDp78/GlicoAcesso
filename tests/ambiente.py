@@ -30,6 +30,7 @@ UNIDADE = "10000000-0000-4000-8000-000000000001"
 ITEM = "20000000-0000-4000-8000-000000000001"
 TOKENS = {nome: f"token-de-teste-{nome}".ljust(40, "x") for nome in
           ("cidadao", "profissional", "reservas", "orquestrador", "retiradas", "admin", "bff-cidadao", "bff-unidade")}
+DOMINIO = ("unidades", "estoque", "reservas", "orquestrador", "retiradas")
 BORDA = ("gateway", "bff-cidadao", "bff-unidade")
 APPS = {"unidades": "unidades", "estoque": "estoque", "reservas": "reservas", "orquestrador": "orquestrador",
         "retiradas": "retiradas", "bff-cidadao": "bff_cidadao", "bff-unidade": "bff_unidade", "gateway": "gateway"}
@@ -75,6 +76,10 @@ def preparar() -> None:
     limpar_filas()
     for nome in ("reservas", "estoque", "retiradas"):
         proxies[nome] = Proxy(nome)
+    for nome in DOMINIO:
+        proxies[f"bff>{nome}"] = Proxy(nome)
+    for nome in ("bff-cidadao", "bff-unidade"):
+        proxies[f"gateway>{nome}"] = Proxy(nome)
     for nome in APPS:
         subir(nome)
     _preparado = True
@@ -110,13 +115,14 @@ class Proxy:
         self.perder: dict[str, int] = {}  # Executa no destino, mas perde a resposta.
         self.recusar: dict[str, int] = {}  # Responde 503 sem chegar ao destino.
         self.portoes: dict[str, threading.Event] = {}  # Segura a resposta já produzida até liberar.
-        self.vistos: list[tuple[str, str, str | None]] = []
+        self.vistos: list[tuple] = []  # (método, caminho, chave, cabeçalhos)
         proxy = self
 
         class Tratador(BaseHTTPRequestHandler):
             def atender(self):
                 corpo = self.rfile.read(int(self.headers.get("Content-Length", 0)))
-                proxy.vistos.append((self.command, self.path, self.headers.get("Idempotency-Key")))
+                proxy.vistos.append((self.command, self.path, self.headers.get("Idempotency-Key"),
+                                     {k.lower(): v for k, v in self.headers.items()}))
                 if proxy.consumir(proxy.recusar, self.path):
                     return self.enviar(503, b"{}", "application/json")
                 cabecalhos = {k: v for k, v in self.headers.items() if k.lower() not in ("host", "content-length")}
@@ -124,20 +130,24 @@ class Proxy:
                     r = httpx.request(self.command, url(proxy.alvo) + self.path, headers=cabecalhos, content=corpo,
                                       timeout=10, trust_env=False)
                 except httpx.HTTPError:
-                    return self.enviar(502, b"{}", "application/json")
+                    self.close_connection = True
+                    return self.connection.close()
                 registrar(proxy.alvo, r)
                 for trecho, portao in list(proxy.portoes.items()):
                     if trecho in self.path:
-                        portao.wait(15)
+                        portao.wait(30)
                 if proxy.consumir(proxy.perder, self.path):
                     self.close_connection = True
                     return self.connection.close()
-                self.enviar(r.status_code, r.content, r.headers.get("content-type", "application/json"))
+                self.enviar(r.status_code, r.content, r.headers.get("content-type", "application/json"), r.headers)
 
-            def enviar(self, status, conteudo, tipo):
+            def enviar(self, status, conteudo, tipo, origem={}):
                 try:
                     self.send_response(status)
                     self.send_header("Content-Type", tipo)
+                    for nome in ("location", "cache-control", "www-authenticate", "x-correlation-id"):
+                        if nome in origem:
+                            self.send_header(nome, origem[nome])
                     if status != 204:
                         self.send_header("Content-Length", str(len(conteudo)))
                     self.end_headers()
@@ -146,7 +156,7 @@ class Proxy:
                 except OSError:
                     pass
 
-            do_GET = do_POST = do_DELETE = atender
+            do_GET = do_POST = do_PUT = do_PATCH = do_DELETE = atender
 
             def log_message(self, *_):
                 pass
@@ -175,6 +185,11 @@ proxies: dict[str, Proxy] = {}
 
 def desvios(nome: str) -> dict[str, str]:
     alvos = {"orquestrador": ("reservas", "estoque", "retiradas"), "retiradas": ("reservas",)}.get(nome, ())
+    if nome.startswith("bff-"):
+        return {f"{alvo.upper()}_URL": f"http://127.0.0.1:{proxies[f'bff>{alvo}'].porta}" for alvo in DOMINIO}
+    if nome == "gateway":
+        return {f"{alvo.upper().replace('-', '_')}_URL": f"http://127.0.0.1:{proxies[f'gateway>{alvo}'].porta}"
+                for alvo in ("bff-cidadao", "bff-unidade")}
     return {f"{alvo.upper()}_URL": f"http://127.0.0.1:{proxies[alvo].porta}" for alvo in alvos}
 
 
