@@ -84,7 +84,7 @@ Os YAMLs utilizam o esquema HTTP Bearer `bearerAuth`. Ele é exigido nas operaç
 
 A autorização de negócio continua no serviço responsável, com os BFFs apresentando apenas os dados e ações adequados ao ator. Por exemplo, Reservas valida a propriedade da solicitação ou o vínculo do profissional com a unidade. Na confirmação ou no cancelamento distribuído, o BFF propaga o contexto autenticado do ator para que o Orquestrador solicite a validação de negócio em Reservas, conforme o documento 00.
 
-Os BFFs autenticam o token do usuário e chamam os serviços com credencial própria e a identidade delegada nos cabeçalhos `X-Ator-*`, conforme o documento 00, seção 5.1. O Gateway não encaminha cabeçalhos `X-Ator-*` recebidos do cliente. Os documentos não fixam um provedor de identidade.
+Os BFFs autenticam o token do usuário e chamam os serviços com credencial própria e a identidade delegada nos cabeçalhos `X-Ator-*`, conforme o documento 00, seção 5.1. O Gateway recusa com `401` a ausência de credencial Bearer nas operações autenticadas, e o BFF valida o token. O Gateway encaminha somente `Authorization`, `Idempotency-Key`, `Content-Type` e `X-Correlation-Id`; cabeçalhos `X-Ator-*` recebidos do cliente são descartados. Identificadores de caminho que não sejam UUID são recusados na borda. Os documentos não fixam um provedor de identidade.
 
 ## 5. Responsabilidades transversais
 
@@ -96,7 +96,9 @@ Os BFFs autenticam o token do usuário e chamam os serviços com credencial pró
 | Convenções HTTP | Preservar métodos, parâmetros, corpos, respostas e `Idempotency-Key` definidos nos contratos, incluindo JSON UTF-8 e o versionamento dos caminhos. |
 | Separação das APIs | Impedir a exposição pública dos endpoints internos dos serviços. |
 
-`X-Correlation-Id` é opcional nos comandos internos da SAGA e na consulta do estado canônico de Reservas. A tecnologia do Gateway, os endereços dos BFFs e a configuração física do roteamento também permanecem indefinidos.
+`X-Correlation-Id` é opcional. O Gateway preserva um UUID válido ou gera outro, propaga-o ao BFF, que o envia em todas as chamadas, e o devolve na resposta. Falha ou demora de um BFF ou serviço é devolvida como `503`.
+
+**Configuração futura do Docker Compose.** Cada serviço e BFF deve receber somente as credenciais de que precisa, todas distintas e fornecidas por segredos ou arquivo de ambiente fora do Git, nunca na imagem nem no arquivo do Compose. Apenas o Gateway deve publicar porta; BFFs, serviços, bancos e RabbitMQ ficam na rede interna, com senhas próprias por banco. A verificação de tokens repetidos na inicialização alcança somente as variáveis de cada processo, por isso a geração deve garantir valores distintos no conjunto.
 
 ## 6. O que não pertence ao Gateway
 

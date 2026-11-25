@@ -323,7 +323,7 @@ Abra [http://127.0.0.1:8000/unidade](http://127.0.0.1:8000/unidade), informe o t
 
 - **Rejeitar** é uma operação local de Reservas: retorna `200` e a reserva passa a `REJEITADA`.
 - **Aceitar** não muda a reserva em Reservas. Reservas devolve `409 ACEITE_ENCAMINHAR` ao BFF e grava esse destino com a chave idempotente. O BFF então encaminha o pedido ao Orquestrador com a mesma chave. O Orquestrador grava a execução (`EM_EXECUCAO`) e a primeira etapa (`ACEITAR_RESERVA`, `PENDENTE`). Só depois disso o BFF responde `202`, com `Location` apontando para `/api/unidade/v1/painel/reservas/{reservaId}`.
-- Repetir a mesma ação com a mesma chave devolve o resultado original. Um segundo aceite da mesma reserva com outra chave, enquanto a confirmação ainda roda, recebe `409 EXECUCAO_CONCORRENTE`. Se o Orquestrador estiver fora do ar, o BFF responde `502`, e a repetição com a mesma chave conclui o aceite.
+- Repetir a mesma ação com a mesma chave devolve o resultado original. Um segundo aceite da mesma reserva com outra chave, enquanto a confirmação ainda roda, recebe `409 EXECUCAO_CONCORRENTE`. Se o Orquestrador estiver fora do ar, o BFF responde `503`, e a repetição com a mesma chave conclui o aceite.
 
 | Processo | Variável de ambiente | Padrão |
 |---|---|---|
@@ -412,6 +412,8 @@ Cada token tem no mínimo 32 caracteres e deve ser diferente dos demais. Um proc
 | Retiradas | `GLICO_RETIRADAS_SERVICE_TOKEN`, `GLICO_ORQUESTRADOR_SERVICE_TOKEN`, `GLICO_BFF_UNIDADE_TOKEN` |
 | Orquestrador | `GLICO_ORQUESTRADOR_SERVICE_TOKEN`, `GLICO_BFF_CIDADAO_TOKEN`, `GLICO_BFF_UNIDADE_TOKEN` |
 
+Na futura configuração do Docker Compose, cada contêiner deve receber apenas as próprias credenciais, distintas e protegidas fora do Git. Veja o [documento 03](./docs/parte-2/03-api-gateway.md).
+
 ### Administração, cancelamento e retirada
 
 Além das variáveis das seções anteriores, configure:
@@ -441,7 +443,7 @@ Os testes de integração usam um PostgreSQL e um RabbitMQ **descartáveis**. El
 ```bash
 export GLICO_TESTE_PG='postgresql://postgres:teste@127.0.0.1:55432/postgres'
 export GLICO_TESTE_RABBIT='amqp://guest:guest@127.0.0.1:55672/%2F'
-uv run --locked python -m unittest tests.test_unidades tests.test_estoque tests.test_reservas tests.test_retiradas tests.test_saga tests.test_revisao tests.test_decisoes
+uv run --locked python -m unittest tests.test_unidades tests.test_estoque tests.test_reservas tests.test_retiradas tests.test_saga tests.test_revisao tests.test_decisoes tests.test_borda
 ```
 
 Para validar também status, corpos e cabeçalhos contra os OpenAPI, execute os testes com `GLICO_TESTE_TROCAS=/tmp/trocas.jsonl` e depois:

@@ -49,6 +49,8 @@ Cada BFF usa credencial própria e delega a identidade do usuário que autentico
 
 Para apresentar uma reserva de unidade inativa, o BFF Cidadão consulta primeiro a reserva em Reservas, que verifica a propriedade, e depois `GET /internal/v1/unidades/{unidadeId}` com sua credencial. Unidades devolve a esse chamador somente os campos públicos.
 
+Os BFFs repassam status e corpo das respostas conclusivas (`200`, `201`, `400`, `403`, `404`, `409` e `422`) e não reinterpretam o corpo dos comandos administrativos, de cancelamento e de entrega. `5xx`, demora e resposta incompatível tornam-se `503`. Nas consultas agregadas, a falha de um dado complementar omite o campo; a falha da reserva é propagada.
+
 ### 2.1 Encaminhamento de decisões e cancelamentos
 
 1. Os BFFs chamam a operação condicional de Reservas com a identidade delegada, o corpo da ação e a chave idempotente. Reservas executa a rejeição ou o cancelamento pendente localmente quando permitido.
