@@ -236,7 +236,25 @@ def conflito(codigo: str, mensagem: str) -> tuple[int, dict]:
     return 409, {"codigo": codigo, "mensagem": mensagem}
 
 
-def registrar_decisao(profissional: str, unidade: UUID, reserva_id: UUID, decisao: str, chave: str):
+async def comando_profissional(request, ator, funcao, *args, **kwargs):
+    async def consultar_gravado():
+        return await run_in_threadpool(funcao, *args, **kwargs, somente_consulta=True)
+
+    anterior = await consultar_gravado()
+    if anterior is not None:
+        return anterior
+    try:
+        await verificar_vinculo(request, ator)
+    except HTTPException:
+        # O primeiro comando pode ter confirmado durante a consulta remota.
+        anterior = await consultar_gravado()
+        if anterior is not None:
+            return anterior
+        raise
+    return await run_in_threadpool(funcao, *args, **kwargs)
+
+
+def registrar_decisao(profissional: str, unidade: UUID, reserva_id: UUID, decisao: str, chave: str, *, somente_consulta=False):
     resumo = sha256(f"{reserva_id}:{decisao}".encode()).hexdigest()
     with conectar(BANCO) as conexao:
         controle = f"{OPERACAO_DECISAO}:{profissional}:{chave}"
@@ -249,6 +267,8 @@ def registrar_decisao(profissional: str, unidade: UUID, reserva_id: UUID, decisa
             if anterior["request_hash"] != resumo:
                 return conflito("CHAVE_IDEMPOTENTE_CONFLITANTE", "Chave reutilizada com outra reserva ou decisão.")
             return anterior["http_status"], anterior["resposta"]
+        if somente_consulta:
+            return None
         reserva = conexao.execute("""
             SELECT unidade_id, status, decisao_ate
             FROM reservas WHERE reserva_id = %s FOR UPDATE
@@ -288,9 +308,8 @@ def registrar_decisao(profissional: str, unidade: UUID, reserva_id: UUID, decisa
 async def decidir(request: Request, reservaId: UUID, corpo: Decisao, profissional: Profissional, chave: Chave):
     if not chave.strip():
         raise HTTPException(422, "Chave idempotente vazia.")
-    unidade = await verificar_vinculo(request, profissional)
-    status, dados = await run_in_threadpool(
-        registrar_decisao, profissional.id, unidade, reservaId, corpo.decisao, chave
+    status, dados = await comando_profissional(
+        request, profissional, registrar_decisao, profissional.id, profissional.unidadeId, reservaId, corpo.decisao, chave
     )
     return JSONResponse(dados, status_code=status, headers={"Cache-Control": "no-store"})
 
@@ -305,7 +324,7 @@ Orquestrador = Annotated[str, Depends(orquestrador_autenticado)]
 
 
 def registrar_transicao(operacao: str, reserva_id: UUID, saga_id: UUID, chave: str,
-                        origem: str, destino: str, ator: Ator | None = None):
+                        origem: str, destino: str, ator: Ator | None = None, *, somente_consulta=False):
     """Transição pedida pelo Orquestrador: efeito, histórico e resultado idempotente na mesma transação."""
     principal = "orquestrador"
     resumo = sha256(f"{reserva_id}:{saga_id}".encode()).hexdigest()
@@ -313,13 +332,30 @@ def registrar_transicao(operacao: str, reserva_id: UUID, saga_id: UUID, chave: s
         controle = f"{operacao}:{principal}:{chave}"
         conexao.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (controle,))
         anterior = conexao.execute("""
-            SELECT request_hash, http_status, resposta FROM idempotencia_comandos
+            SELECT request_hash, http_status, resposta, ator_id, unidade_id FROM idempotencia_comandos
             WHERE operacao = %s AND principal_id = %s AND chave = %s
         """, (operacao, principal, chave)).fetchone()
         if anterior is not None:
             if anterior["request_hash"] != resumo:
                 return conflito("CHAVE_IDEMPOTENTE_CONFLITANTE", "Chave reutilizada com outro comando.")
+            if ator is not None:
+                if anterior["ator_id"] is not None:
+                    autorizado = (anterior["ator_id"], anterior["unidade_id"]) == (ator.id, ator.unidadeId)
+                else:
+                    # Registros antigos guardam o autor do aceite efetivado no histórico.
+                    vinculo = conexao.execute("""
+                        SELECT r.unidade_id, h.ator_id FROM reservas r
+                        LEFT JOIN historico_reserva h ON h.reserva_id = r.reserva_id
+                            AND h.saga_id = %s AND h.status_posterior = 'EM_CONFIRMACAO'
+                        WHERE r.reserva_id = %s
+                    """, (saga_id, reserva_id)).fetchone()
+                    autorizado = vinculo and vinculo["unidade_id"] == ator.unidadeId and (
+                        vinculo["ator_id"] == ator.id or anterior["http_status"] == 409)
+                if not autorizado:
+                    raise HTTPException(403, "Ator incompatível com o comando registrado.")
             return anterior["http_status"], anterior["resposta"]
+        if somente_consulta:
+            return None
         reserva = conexao.execute(f"""
             SELECT {CAMPOS}, decisao_ate
             FROM reservas WHERE reserva_id = %s FOR UPDATE
@@ -351,9 +387,9 @@ def registrar_transicao(operacao: str, reserva_id: UUID, saga_id: UUID, chave: s
             resultado = 200, corpo
         conexao.execute("""
             INSERT INTO idempotencia_comandos
-                (operacao, principal_id, chave, request_hash, http_status, resposta)
-            VALUES (%s, %s, %s, %s, %s, %s)
-        """, (operacao, principal, chave, resumo, resultado[0], Jsonb(resultado[1])))
+                (operacao, principal_id, chave, request_hash, http_status, resposta, ator_id, unidade_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        """, (operacao, principal, chave, resumo, resultado[0], Jsonb(resultado[1]), ator and ator.id, ator and ator.unidadeId))
         return resultado
 
 
@@ -369,9 +405,8 @@ async def aceitar(
     unidade: Annotated[str | None, Header(alias="X-Ator-Unidade-Id")] = None,
 ):
     ator = ator_delegado(papel, ator_id, unidade)
-    await verificar_vinculo(request, ator)
-    return responder(await run_in_threadpool(
-        registrar_transicao, "aceitar-reserva", reservaId, comando.sagaId, chave, "SOLICITADA", "EM_CONFIRMACAO", ator
+    return responder(await comando_profissional(
+        request, ator, registrar_transicao, "aceitar-reserva", reservaId, comando.sagaId, chave, "SOLICITADA", "EM_CONFIRMACAO", ator
     ))
 
 
@@ -466,7 +501,7 @@ def mudar_cancelamento(conexao, reserva_id, anterior, destino, ator_id, justific
     return 200, {"reservaId": str(reserva_id), "status": destino}
 
 
-def cancelar_reserva(reserva_id, ator, chave, justificativa=None, *, saga_id=None, finalizar=False):
+def cancelar_reserva(reserva_id, ator, chave, justificativa=None, *, saga_id=None, finalizar=False, somente_consulta=False):
     if not chave.strip() or "\x00" in chave:
         raise HTTPException(422, "Chave idempotente inválida.")
     operacao = "finalizar-cancelamento" if finalizar else "iniciar-cancelamento" if saga_id else "cancelamento-local"
@@ -476,6 +511,8 @@ def cancelar_reserva(reserva_id, ator, chave, justificativa=None, *, saga_id=Non
         anterior = resultado_anterior(conexao, operacao, principal, chave, resumo)
         if anterior is not None:
             return anterior
+        if somente_consulta:
+            return None
         reserva = conexao.execute("""
             SELECT cidadao_id, unidade_id, status, cancelamento_saga_id, decisao_ate
             FROM reservas WHERE reserva_id = %s FOR UPDATE
@@ -511,9 +548,8 @@ def cancelar_cidadao(reservaId: UUID, cidadao: Cidadao, chave: Chave):
 @app.post("/api/unidade/v1/reservas/{reservaId}/cancelar")
 async def cancelar_unidade(request: Request, reservaId: UUID, corpo: JustificativaCancelamento,
                           profissional: Profissional, chave: Chave):
-    await verificar_vinculo(request, profissional)
-    return responder(await run_in_threadpool(
-        cancelar_reserva, reservaId, profissional, chave, corpo.justificativa,
+    return responder(await comando_profissional(
+        request, profissional, cancelar_reserva, reservaId, profissional, chave, corpo.justificativa,
     ))
 
 
@@ -543,9 +579,11 @@ async def permissao_cancelamento(request: Request, reservaId: UUID, ator: Delega
 @app.post("/internal/v1/reservas/{reservaId}/iniciar-cancelamento")
 async def iniciar_cancelamento(request: Request, reservaId: UUID, comando: IniciarCancelamento,
                               ator: DelegadoCancelamento, chave: Chave):
-    if ator.papel == "PROFISSIONAL":
-        await verificar_vinculo(request, ator)
     justificativa = conferir_justificativa(ator, comando.justificativa)
+    if ator.papel == "PROFISSIONAL":
+        return responder(await comando_profissional(
+            request, ator, cancelar_reserva, reservaId, ator, chave, justificativa, saga_id=comando.sagaId,
+        ))
     return responder(await run_in_threadpool(
         cancelar_reserva, reservaId, ator, chave, justificativa, saga_id=comando.sagaId,
     ))
