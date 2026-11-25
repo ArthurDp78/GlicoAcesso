@@ -16,7 +16,7 @@ components:
       in: header
       required: true
       description: Reutilize a mesma chave ao repetir a mesma ação.
-      schema: { type: string, minLength: 1 }
+      schema: { type: string, minLength: 1, maxLength: 128 }
   schemas:
     ErroComando:
       type: object

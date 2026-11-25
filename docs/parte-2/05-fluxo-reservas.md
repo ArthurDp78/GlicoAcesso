@@ -125,6 +125,8 @@ Antes de aceitar ou rejeitar, o sistema verifica que:
 
 O estado deve ser atualizado condicionalmente no banco de Reservas para impedir que duas decisões concorrentes sejam confirmadas. A autorização do BFF, sozinha, não substitui a validação do serviço.
 
+Uma unidade inativa não aceita solicitações. O profissional vinculado ainda pode consultar, rejeitar, cancelar e entregar as existentes.
+
 ### 6.2 Rejeição
 
 1. O profissional escolhe rejeitar uma solicitação `SOLICITADA`.
@@ -160,7 +162,7 @@ O cancelamento é permitido antes da retirada física enquanto a reserva estiver
 
 | Estado no pedido de cancelamento | Comportamento |
 |---|---|
-| `SOLICITADA` | Reservas cancela localmente, sem chamar Estoque ou Retiradas, e grava `CANCELADA`. O BFF devolve `200`. |
+| `SOLICITADA` (mesmo com `decisaoAte` vencido, se ainda não `EXPIRADA`) | Reservas cancela localmente, sem chamar Estoque ou Retiradas, e grava `CANCELADA`. O BFF devolve `200`. |
 | `EM_CONFIRMACAO` | O Orquestrador reconcilia comandos de confirmação já emitidos. Reservas valida o pedido e grava `CANCELAMENTO_EM_ANDAMENTO` quando aplicável. O Orquestrador coordena a reversão e pede a Reservas que finalize após confirmar os efeitos. |
 | `CONFIRMADA` | O Orquestrador pede a Reservas que inicie o cancelamento. Confirma a revogação em Retiradas antes de solicitar a liberação em Estoque. Reservas só grava `CANCELADA` após as operações aplicáveis. Se a retirada vencer, segue-se o fluxo da seção 9. |
 | `CANCELAMENTO_EM_ANDAMENTO` | Não inicia um segundo cancelamento concorrente. Retorna o estado atual e permite consultar o andamento. |

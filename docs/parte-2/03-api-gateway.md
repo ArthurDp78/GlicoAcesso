@@ -84,7 +84,7 @@ Os YAMLs utilizam o esquema HTTP Bearer `bearerAuth`. Ele é exigido nas operaç
 
 A autorização de negócio continua no serviço responsável, com os BFFs apresentando apenas os dados e ações adequados ao ator. Por exemplo, Reservas valida a propriedade da solicitação ou o vínculo do profissional com a unidade. Na confirmação ou no cancelamento distribuído, o BFF propaga o contexto autenticado do ator para que o Orquestrador solicite a validação de negócio em Reservas, conforme o documento 00.
 
-Os documentos não fixam um provedor de identidade, a configuração de validação dos tokens nem o formato de propagação da identidade entre componentes. Esses detalhes permanecem para alinhamento de implementação, preservando os requisitos já declarados nos contratos.
+Os BFFs autenticam o token do usuário e chamam os serviços com credencial própria e a identidade delegada nos cabeçalhos `X-Ator-*`, conforme o documento 00, seção 5.1. O Gateway não encaminha cabeçalhos `X-Ator-*` recebidos do cliente. Os documentos não fixam um provedor de identidade.
 
 ## 5. Responsabilidades transversais
 

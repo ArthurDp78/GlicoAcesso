@@ -259,7 +259,7 @@ Nas próximas execuções, use `docker start glico-reservas-db`. Gere dois token
 uv run --locked python -c "import secrets; print(secrets.token_urlsafe(32))"
 ```
 
-Antes de iniciar **Unidades**, **Estoque** e **Reservas**, defina `$env:GLICO_RESERVAS_SERVICE_TOKEN` com o mesmo token interno nos três terminais. O navegador usa o outro token, definido como `GLICO_CIDADAO_TOKEN` somente no processo de Reservas. O Gateway e o BFF encaminham a credencial do cidadão para Reservas, que verifica a identidade e a propriedade da solicitação. As consultas públicas continuam acessíveis sem token. Use essas credenciais apenas na demonstração local.
+O navegador usa o token do cidadão (`GLICO_CIDADAO_TOKEN`), validado pelo BFF Cidadão. O BFF chama os serviços com a própria credencial e delega a identidade do usuário. Antes de iniciar cada processo, defina as credenciais da tabela em [Credenciais por processo](#credenciais-por-processo). As consultas públicas continuam acessíveis sem token. Use essas credenciais apenas na demonstração local.
 
 Em um quinto terminal, após o banco de Reservas aceitar conexões:
 
@@ -277,20 +277,20 @@ No portal, consulte **Tiras reagentes para glicemia**, clique em **Solicitar res
 
 ### Profissional da unidade
 
-O profissional de demonstração usa um terceiro token, diferente dos outros dois, e fica vinculado a uma unidade. O vínculo é um atributo da identidade, como o papel. Por isso não fica gravado nos bancos de domínio. Antes de iniciar Reservas, acrescente:
+O profissional de demonstração usa um token próprio e fica vinculado a uma unidade. O vínculo é um atributo da identidade, como o papel, e não fica gravado nos bancos de domínio. Antes de iniciar o BFF Unidade, defina:
 
 ```powershell
 $env:GLICO_PROFISSIONAL_TOKEN = '<token do profissional>'
 $env:GLICO_PROFISSIONAL_UNIDADE_ID = '10000000-0000-4000-8000-000000000001'
 ```
 
-A cada requisição, Reservas confere em Unidades se a unidade vinculada existe e está ativa. Se não estiver, responde `403`. Se o token do profissional for igual ao do cidadão, as operações autenticadas respondem `503`. Para listar as solicitações pendentes da unidade:
+No aceite, Reservas confere em Unidades se a unidade vinculada está ativa; se não estiver, responde `403`. Consultar, rejeitar, cancelar e entregar continuam possíveis. Tokens repetidos entre identidades impedem a inicialização. Para listar as solicitações pendentes da unidade:
 
 ```powershell
-Invoke-RestMethod 'http://127.0.0.1:8004/api/unidade/v1/reservas' -Headers @{ Authorization = 'Bearer <token do profissional>' }
+Invoke-RestMethod 'http://127.0.0.1:8000/api/unidade/v1/painel/reservas' -Headers @{ Authorization = 'Bearer <token do profissional>' }
 ```
 
-A consulta `GET /internal/v1/reservas/{reservaId}` aceita o cidadão dono da reserva ou um profissional da mesma unidade. Um profissional de outra unidade recebe `403`. Um cidadão que não é o dono recebe `404`. O token do profissional não cria reservas (`403`), e o token do cidadão não acessa as rotas da unidade (`403`).
+A consulta `GET /internal/v1/reservas/{reservaId}` aceita o cidadão dono da reserva ou um profissional da mesma unidade. Um profissional de outra unidade recebe `403`. Um cidadão que não é o dono recebe `404`. Os serviços aceitam somente a identidade delegada pelos BFFs.
 
 ### Painel da unidade e aceite
 
@@ -300,7 +300,7 @@ O aceite é recebido pelo Orquestrador da SAGA, que tem o próprio PostgreSQL (o
 docker run -d --name glico-orquestrador-db -e POSTGRES_USER=glico -e POSTGRES_PASSWORD=glico-demo -e POSTGRES_DB=orquestrador -p 127.0.0.1:54334:5432 -v glico-orquestrador-data:/var/lib/postgresql/data postgres:17
 ```
 
-Nas próximas execuções, use `docker start glico-orquestrador-db`. Inicie mais dois processos. O Orquestrador valida o token do profissional, então ele precisa das mesmas variáveis de identidade usadas em Reservas:
+Nas próximas execuções, use `docker start glico-orquestrador-db`. Inicie mais dois processos, com as credenciais da tabela em [Credenciais por processo](#credenciais-por-processo):
 
 **Orquestrador (porta 8006)**
 
@@ -396,7 +396,21 @@ Para subir o RabbitMQ manualmente:
 docker run -d --name glico-rabbitmq -p 127.0.0.1:5672:5672 -p 127.0.0.1:15672:15672 -v glico-rabbitmq-data:/var/lib/rabbitmq rabbitmq:4-management
 ```
 
-Estoque usa `RABBITMQ_URL` (padrão `amqp://guest:guest@127.0.0.1:5672/%2F`). Para o painel de estoque da unidade, Estoque e BFF Unidade também precisam de `GLICO_PROFISSIONAL_TOKEN` e `GLICO_PROFISSIONAL_UNIDADE_ID`. O painel, em `/api/unidade/v1/painel/estoque`, mostra o estoque físico, o alocado, o disponível e o instante da projeção (`atualizadoEm`). O painel `/unidade` exibe esses dados abaixo das solicitações.
+Estoque usa `RABBITMQ_URL` (padrão `amqp://guest:guest@127.0.0.1:5672/%2F`). Para o painel de estoque da unidade, o BFF Unidade também precisa de `GLICO_PROFISSIONAL_TOKEN` e `GLICO_PROFISSIONAL_UNIDADE_ID`. O painel, em `/api/unidade/v1/painel/estoque`, mostra o estoque físico, o alocado, o disponível e o instante da projeção (`atualizadoEm`). O painel `/unidade` exibe esses dados abaixo das solicitações.
+
+### Credenciais por processo
+
+Cada token tem no mínimo 32 caracteres e deve ser diferente dos demais. Um processo não inicia se faltar uma credencial sua ou se houver tokens repetidos entre os que ele conhece. A verificação alcança só as variáveis presentes no próprio processo.
+
+| Processo | Credenciais |
+|---|---|
+| BFF Cidadão | `GLICO_CIDADAO_TOKEN`, `GLICO_BFF_CIDADAO_TOKEN` |
+| BFF Unidade | `GLICO_PROFISSIONAL_TOKEN`, `GLICO_PROFISSIONAL_UNIDADE_ID`, `GLICO_BFF_UNIDADE_TOKEN` |
+| Unidades | `GLICO_RESERVAS_SERVICE_TOKEN`, `GLICO_BFF_CIDADAO_TOKEN`, `GLICO_BFF_UNIDADE_TOKEN`, `GLICO_ADMIN_SERVICE_TOKEN` |
+| Estoque | `GLICO_RESERVAS_SERVICE_TOKEN`, `GLICO_ORQUESTRADOR_SERVICE_TOKEN`, `GLICO_BFF_UNIDADE_TOKEN`, `GLICO_ADMIN_SERVICE_TOKEN` |
+| Reservas | `GLICO_RESERVAS_SERVICE_TOKEN`, `GLICO_ORQUESTRADOR_SERVICE_TOKEN`, `GLICO_RETIRADAS_SERVICE_TOKEN`, `GLICO_BFF_CIDADAO_TOKEN`, `GLICO_BFF_UNIDADE_TOKEN` |
+| Retiradas | `GLICO_RETIRADAS_SERVICE_TOKEN`, `GLICO_ORQUESTRADOR_SERVICE_TOKEN`, `GLICO_BFF_UNIDADE_TOKEN` |
+| Orquestrador | `GLICO_ORQUESTRADOR_SERVICE_TOKEN`, `GLICO_BFF_CIDADAO_TOKEN`, `GLICO_BFF_UNIDADE_TOKEN` |
 
 ### Administração, cancelamento e retirada
 
@@ -406,7 +420,6 @@ Além das variáveis das seções anteriores, configure:
 |---|---|---|
 | Reservas e Retiradas | `GLICO_RETIRADAS_SERVICE_TOKEN` | Retiradas consulta o estado canônico em Reservas antes da entrega. |
 | Unidades e Estoque | `GLICO_ADMIN_SERVICE_TOKEN` | Cadastro de unidades e do catálogo, operações internas sem vínculo com uma unidade. |
-| Unidades e Retiradas | `GLICO_CIDADAO_TOKEN`, `GLICO_PROFISSIONAL_TOKEN`, `GLICO_PROFISSIONAL_UNIDADE_ID` | Autorizar as operações do profissional. |
 | Reservas, Retiradas e Orquestrador | `RABBITMQ_URL` | Publicar e consumir `retirada.concluida.v1`. |
 | Retiradas | `RESERVAS_URL` | Padrão `http://127.0.0.1:8004`. |
 | Reservas | `GLICO_EXPIRACAO_INTERVALO` | Intervalo da expiração em segundos, padrão `5`. |
@@ -417,12 +430,18 @@ Reaplique as migrações dos cinco serviços. Uma retirada que não corresponda 
 uv run --locked python -m servicos.reprocessar estoque.baixa-retirada
 ```
 
+Para reconstruir a projeção de disponibilidade a partir dos saldos, com Estoque em execução ou não:
+
+```bash
+uv run --locked python -m servicos.estoque.projecao
+```
+
 Os testes de integração usam um PostgreSQL e um RabbitMQ **descartáveis**. Eles apagam os bancos `teste_*` e esvaziam as filas do broker indicado, então não aponte para o ambiente de demonstração.
 
 ```bash
 export GLICO_TESTE_PG='postgresql://postgres:teste@127.0.0.1:55432/postgres'
 export GLICO_TESTE_RABBIT='amqp://guest:guest@127.0.0.1:55672/%2F'
-uv run --locked python -m unittest tests.test_unidades tests.test_estoque tests.test_reservas tests.test_retiradas tests.test_saga tests.test_revisao
+uv run --locked python -m unittest tests.test_unidades tests.test_estoque tests.test_reservas tests.test_retiradas tests.test_saga tests.test_revisao tests.test_decisoes
 ```
 
 Para validar também status, corpos e cabeçalhos contra os OpenAPI, execute os testes com `GLICO_TESTE_TROCAS=/tmp/trocas.jsonl` e depois:

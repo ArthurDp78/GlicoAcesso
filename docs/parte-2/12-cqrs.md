@@ -70,6 +70,8 @@ Os eventos propagam alterações; não são a única fonte de verdade. Se a proj
 
 Durante a recarga, pausa-se o consumidor da projeção após concluir os processamentos em andamento. Depois da recarga, ele retoma os eventos pendentes, preservando a Inbox. Eventos anteriores ao estado carregado não são reaplicados, pela comparação de versão; alterações ocorridas durante a recarga chegam pelo fluxo normal de Outbox/RabbitMQ. Assim, a reconstrução não depende de reproduzir eventos que a Inbox já marcou como processados.
 
+O comando `python -m servicos.estoque.projecao` faz essa recarga em uma transação. A trava da tabela `disponibilidade` espera os eventos em aplicação e pausa o consumidor até o commit, enquanto as consultas leem o estado anterior. O saldo é lido depois da trava; por isso nunca é anterior ao já projetado.
+
 Essa escolha mantém a recuperação baseada no estado canônico e dispensa retenção eterna ou replay de todo o histórico de eventos. O histórico de movimentações continua tendo sua finalidade de domínio; CQRS não transforma o projeto em Event Sourcing.
 
 ## 8. Verificação de `atualizadoEm` nos contratos

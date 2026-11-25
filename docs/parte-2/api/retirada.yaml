@@ -11,12 +11,26 @@ components:
       type: http
       scheme: bearer
       description: >-
-        Credencial de serviço verificada pelo destinatário. Comandos vinculados
-        a um ator exigem contexto delegado e verificável na credencial. O
-        destinatário identifica e autoriza tanto o chamador quanto o ator.
-    bearerAuth:
-      type: http
-      scheme: bearer
+        Credencial própria do serviço ou BFF chamador, verificada pelo destinatário.
+        A identidade do ator só é aceita nos cabeçalhos X-Ator-* acompanhados da
+        credencial de um chamador autorizado a delegá-la: o BFF Cidadão delega
+        somente CIDADAO, o BFF Unidade somente PROFISSIONAL e o Orquestrador os
+        atores dos pedidos que persistiu. O token do usuário não é aceito aqui.
+    atorPapel:
+      type: apiKey
+      in: header
+      name: X-Ator-Papel
+      description: CIDADAO ou PROFISSIONAL. Nunca aceito diretamente do cliente.
+    atorId:
+      type: apiKey
+      in: header
+      name: X-Ator-Id
+      description: Identificador estável do ator autenticado pelo BFF.
+    atorUnidade:
+      type: apiKey
+      in: header
+      name: X-Ator-Unidade-Id
+      description: Unidade vinculada ao profissional. Obrigatório para PROFISSIONAL.
   parameters:
     CorrelationId:
       name: X-Correlation-Id
@@ -34,7 +48,7 @@ components:
       in: header
       required: true
       description: Chave estável para repetir o mesmo comando com o mesmo resultado.
-      schema: { type: string, minLength: 1 }
+      schema: { type: string, minLength: 1, maxLength: 128 }
   schemas:
     ErroComando:
       type: object
@@ -69,8 +83,7 @@ paths:
     get:
       summary: Consultar autorização vinculada à reserva
       description: Consulta interna usada pelo BFF Unidade para montar a visão operacional. Não substitui o replay idempotente do comando de preparação ou cancelamento.
-      security:
-        - bearerAuth: []
+      security: [{ serviceAuth: [], atorPapel: [], atorId: [], atorUnidade: [] }]
       parameters:
         - name: reservaId
           in: path
@@ -84,6 +97,9 @@ paths:
               schema: { $ref: '#/components/schemas/Autorizacao' }
         '404': { description: Não existe autorização para a reserva. }
         '503': { description: Estado da autorização indisponível. }
+        '401': { description: Credencial ausente ou inválida. }
+        '403': { description: Chamador ou ator sem permissão. }
+        '422': { description: "Parâmetro, cabeçalho ou corpo inválido." }
   /api/unidade/v1/retiradas:
     post:
       summary: Registar entrega presencial
@@ -97,8 +113,7 @@ paths:
         contra revogação ou uso concorrente e grava entrega e Outbox juntas.
         Repetir a mesma ação com a mesma chave reproduz a resposta original;
         uma nova ação com outra chave encontra a autorização já utilizada e recebe 409.
-      security:
-        - bearerAuth: []
+      security: [{ serviceAuth: [], atorPapel: [], atorId: [], atorUnidade: [] }]
       parameters:
         - { $ref: '#/components/parameters/IdempotencyKey' }
       requestBody:
@@ -107,6 +122,7 @@ paths:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               required: [autorizacaoId]
               properties:
                 autorizacaoId: { type: string, format: uuid }
@@ -126,6 +142,9 @@ paths:
           description: Autorização cancelada, já usada ou inexistente; Reserva não encontrada ou estado consultado diferente de CONFIRMADA; ou `Idempotency-Key` reutilizada com conteúdo diferente. Nenhuma nova entrega é registrada.
         '503':
           description: Não foi possível obter o estado canônico de Reservas, inclusive por timeout ou falha técnica na consulta. Nenhuma nova entrega é registrada; uma nova tentativa exige nova consulta.
+        '401': { description: Credencial ausente ou inválida. }
+        '403': { description: Chamador ou ator sem permissão. }
+        '422': { description: "Parâmetro, cabeçalho ou corpo inválido." }
   /internal/v1/autorizacoes:
     post:
       summary: Preparar Autorização (SAGA)
@@ -142,6 +161,7 @@ paths:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               required: [sagaId, reservaId, unidadeId, itemId, quantidade]
               properties:
                 sagaId: { type: string, format: uuid }

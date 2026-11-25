@@ -16,7 +16,7 @@ components:
       in: header
       required: true
       description: Reutilize a mesma chave ao repetir a mesma ação.
-      schema: { type: string, minLength: 1 }
+      schema: { type: string, minLength: 1, maxLength: 128 }
   schemas:
     ErroComando:
       type: object
@@ -174,7 +174,7 @@ paths:
                       diaSemana: { type: integer, minimum: 1, maximum: 7 }
                       horarioInicial: { type: string, format: time }
                       horarioFinal: { type: string, format: time }
-                prazoAnaliseHoras: { type: integer, minimum: 1 }
+                prazoAnaliseHoras: { type: integer, minimum: 1, maximum: 720 }
       responses:
         '200': { description: Cadastro atualizado. }
         '403': { description: Ator não pertence à unidade correspondente. }
@@ -239,7 +239,7 @@ paths:
               type: object
               required: [prazoAnaliseHoras]
               properties:
-                prazoAnaliseHoras: { type: integer, minimum: 1 }
+                prazoAnaliseHoras: { type: integer, minimum: 1, maximum: 720 }
       responses:
         '200': { description: Prazo atualizado; reservas existentes mantêm o prazo aplicado. }
         '403': { description: Ator não pertence à unidade correspondente. }
