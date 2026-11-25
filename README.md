@@ -136,14 +136,16 @@ A proposta é atuar como uma **ponte entre a informação existente na rede part
 - [Decisões compartilhadas](./docs/parte-2/00-decisoes-compartilhadas.md) e [diagrama de arquitetura](./docs/parte-2/02-diagrama-arquitetura.md)
 - [Contratos OpenAPI](./docs/parte-2/api/) e [diagramas de sequência](./docs/parte-2/diagramas/)
 
-## Estado do projeto e consulta local
+## Versão de entrega e execução local
 
-O repositório contém a concepção do projeto e a especificação da arquitetura da Parte 2. A arquitetura documenta quatro serviços de domínio e um Orquestrador da SAGA independente, com PostgreSQL próprio para cada serviço. O portal do cidadão consulta unidades e itens através do Gateway e do BFF Cidadão. Unidades e Estoque usam bancos independentes com dados de demonstração.
+A versão executável da Parte 3 está na [branch `feat/fase-3`](https://github.com/ArthurDp78/GlicoAcesso/tree/feat/fase-3). O Compose reúne oito aplicações (Gateway, dois BFFs, Orquestrador, Unidades, Estoque, Reservas e Retiradas), cinco instâncias PostgreSQL e RabbitMQ.
 
-Para consultar a documentação localmente, clone o repositório e abra os arquivos Markdown:
+O cidadão consulta a disponibilidade, solicita e acompanha reservas. O profissional registra entradas de estoque, configura a permissão de reserva e aceita ou rejeita solicitações. A API profissional também oferece manutenção do cadastro da unidade e ajustes de saldo. A SAGA de confirmação prepara a autorização de retirada e o CQRS atualiza a disponibilidade. O cadastro de unidades é feito pela CLI administrativa. O profissional consulta uma reserva pelo código e registra a entrega no balcão. A entrega e seu evento são gravados juntos em Retiradas. O RabbitMQ distribui o evento para Reservas, Estoque e Orquestrador. A reserva passa a `RETIRADA`, o estoque baixa o físico e encerra a alocação, e o Orquestrador guarda a evidência para reconciliação. O cidadão cancela a própria reserva. O profissional pode cancelar com justificativa. Solicitações vencidas saem da fila de decisão e ficam como `EXPIRADA`. Se a confirmação já estiver ativa, o cancelamento é registrado e aguarda sua conclusão ou compensação.
+
+Clone a branch de entrega e entre na pasta antes de executar os comandos de desenvolvimento local.
 
 ```bash
-git clone https://github.com/ArthurDp78/GlicoAcesso.git
+git clone --branch feat/fase-3 --single-branch https://github.com/ArthurDp78/GlicoAcesso.git
 cd GlicoAcesso
 ```
 
@@ -181,7 +183,11 @@ A mesma subida pode ser feita em primeiro plano com `docker compose up --build`.
 - **Painel da unidade** em [http://127.0.0.1:8000/unidade](http://127.0.0.1:8000/unidade), com `GLICO_PROFISSIONAL_TOKEN`.
 - **Diagnóstico** com `docker compose ps` e `docker compose logs <serviço>`. Se a porta 8000 estiver ocupada, ajuste `GLICO_GATEWAY_PORTA` no `.env`.
 
-Somente o Gateway publica uma porta em `127.0.0.1`. Cada PostgreSQL tem uma rede privada com seu serviço e um volume próprio. Estoque acessa o RabbitMQ pela rede de mensageria. Unidades também participa da rede administrativa usada pela CLI.
+Para registrar uma entrega, informe o código da reserva no painel profissional, em **Retirada no balcão**. A ação aparece quando a reserva está confirmada e a autorização está ativa. Em instalações existentes, preencha `GLICO_RETIRADAS_SERVICE_TOKEN` no `.env` com um valor aleatório exclusivo de pelo menos 32 caracteres. Na execução manual, configure o mesmo valor em Reservas e Retiradas e disponibilize as credenciais de demonstração do profissional para Retiradas.
+
+O cancelamento distribuído pelo cidadão usa `GLICO_BFF_CIDADAO_SIGNING_KEY`. Em um `.env` existente, acrescente um valor aleatório exclusivo de pelo menos 32 caracteres. Na execução manual, configure a mesma chave no BFF Cidadão e no Orquestrador e defina o token do cidadão também no BFF Cidadão.
+
+Somente o Gateway publica uma porta em `127.0.0.1`. Cada PostgreSQL tem uma rede privada com seu serviço e um volume próprio. Estoque, Retiradas, Reservas e Orquestrador acessam o RabbitMQ pela rede de mensageria. Unidades também participa da rede administrativa usada pela CLI.
 
 `docker compose down` encerra os contêineres e preserva os volumes nomeados. Mantenha o mesmo `.env` entre execuções para reutilizar as credenciais dos bancos e do RabbitMQ.
 
@@ -193,7 +199,7 @@ Em um clone da versão a ser entregue, abra o Docker Desktop e execute na raiz d
 .\scripts\validar-compose.ps1
 ```
 
-O script cria um projeto Compose temporário, com credenciais e volumes próprios. Ele verifica a saúde dos 14 serviços, a abertura dos portais e o funcionamento das APIs via Gateway. Cadastra uma unidade pela CLI, registra uma entrada de estoque, confirma uma reserva pela SAGA e espera a atualização da projeção CQRS. Depois recria os contêineres com os mesmos volumes e confirma que os dados e as respostas idempotentes foram preservados.
+O script cria um projeto Compose temporário, com credenciais e volumes próprios. Ele verifica a saúde dos 14 serviços, a abertura dos portais e o funcionamento das APIs via Gateway. Cadastra uma unidade pela CLI. Na unidade de demonstração, registra a entrada de quatro unidades de um medicamento, habilita a reserva, confirma uma solicitação de duas unidades do mesmo medicamento pela SAGA e verifica a projeção CQRS. Também registra a entrega no balcão e aguarda `RETIRADA` e a projeção de duas unidades físicas, zero alocadas e duas disponíveis. Depois recria os contêineres com os mesmos volumes e confirma que os dados e as respostas idempotentes foram preservados.
 
 O resultado esperado é a mensagem **Validação concluída**. Em caso de erro, o script informa a etapa e mostra o estado e os últimos logs dos serviços. Use `-Porta 18081` se a porta local 18080 já estiver em uso. Ao final, o script limpa os contêineres e volumes do projeto temporário.
 
@@ -362,7 +368,7 @@ Nas próximas execuções, use `docker start glico-reservas-db`. Gere dois token
 uv run --locked python -c "import secrets; print(secrets.token_urlsafe(32))"
 ```
 
-Antes de iniciar **Unidades**, **Estoque** e **Reservas**, defina `$env:GLICO_RESERVAS_SERVICE_TOKEN` com o mesmo token interno nos três terminais. O navegador usa o outro token, definido como `GLICO_CIDADAO_TOKEN` somente no processo de Reservas. O Gateway e o BFF encaminham a credencial do cidadão para Reservas, que verifica a identidade e a propriedade da solicitação. As consultas públicas continuam acessíveis sem token. Use essas credenciais apenas na demonstração local.
+Antes de iniciar **Unidades**, **Estoque** e **Reservas**, defina `$env:GLICO_RESERVAS_SERVICE_TOKEN` com o mesmo token interno nos três terminais. O navegador usa o outro token, definido como `GLICO_CIDADAO_TOKEN` no Gateway e em Reservas. O Gateway valida a credencial, e Reservas verifica a identidade e a propriedade da solicitação. As consultas públicas continuam acessíveis sem token. Use essas credenciais apenas na demonstração local.
 
 Em um quinto terminal, após o banco de Reservas aceitar conexões:
 
@@ -380,7 +386,7 @@ No portal, consulte **Tiras reagentes para glicemia**, clique em **Solicitar res
 
 ### Profissional da unidade
 
-O profissional de demonstração usa um terceiro token, diferente dos outros dois, e fica vinculado a uma unidade. O vínculo é um atributo da identidade, como o papel. Por isso não fica gravado nos bancos de domínio. Antes de iniciar Reservas, acrescente:
+O profissional de demonstração usa um terceiro token, diferente dos outros dois, e fica vinculado a uma unidade. Na execução manual, configure o mesmo token e identificador de unidade no Gateway, BFF Unidade, Unidades, Estoque e Reservas para habilitar as rotas protegidas. O vínculo é um atributo da identidade, como o papel. Por isso não fica gravado nos bancos de domínio. Antes de iniciar Reservas, acrescente:
 
 ```powershell
 $env:GLICO_PROFISSIONAL_TOKEN = '<token do profissional>'
@@ -511,7 +517,7 @@ Estoque usa `RABBITMQ_URL` (padrão `amqp://guest:guest@127.0.0.1:5672/%2F`). Pa
 2. Em **Estoque da unidade**, selecione um medicamento ou insumo do catálogo, informe a quantidade inteira recebida e clique em **Registrar entrada**.
 3. Após a atualização da projeção, confira o estoque físico e o disponível no painel. O cidadão também pode consultar a disponibilidade pelo item no portal.
 
-A primeira entrada de um item cria seu saldo com reservas desativadas. As próximas somam ao saldo físico e preservam a permissão vigente. Se houver perda de resposta, reenvie a mesma quantidade para o mesmo item na mesma aba. O painel reutiliza a chave daquela tentativa, mesmo após recarregar a página.
+A primeira entrada de um item cria seu saldo com reservas desativadas quando a unidade ainda não configurou a permissão do item. As próximas somam ao saldo físico e preservam a permissão vigente. No cartão do medicamento, clique em **Habilitar reservas**. Quando a projeção refletir a alteração, o cidadão poderá reservar o mesmo medicamento pelo portal. Se houver perda de resposta, reenvie a mesma quantidade para o mesmo item na mesma aba. O painel reutiliza a chave daquela tentativa, mesmo após recarregar a página.
 
 ## Referências
 
@@ -520,4 +526,4 @@ A primeira entrada de um item cria seu saldo com reservas desativadas. As próxi
 3. [Nascimento et al. - Disponibilidade de medicamentos essenciais](https://doi.org/10.11606/S1518-8787.2017051007062).
 4. [Ministério da Saúde - Insulinas humanas e agulhas para caneta](https://www.gov.br/saude/pt-br/composicao/sectics/daf/cbaf/insulinas-humanas).
 5. [Brasil - Lei nº 14.654/2023](https://www.planalto.gov.br/ccivil_03/_ato2023-2026/2023/lei/l14654.htm).
-6. [PNAUM - Acesso e adesão a medicamentos entre pessoas com diabetes no Brasil](https://doi.org/10.1590/1980-549720180003).
+6. [Meiners et al. — Acesso e adesão a medicamentos entre pessoas com diabetes no Brasil: evidências da PNAUM](https://doi.org/10.1590/1980-5497201700030008). *Revista Brasileira de Epidemiologia*, 2017.

@@ -67,11 +67,7 @@ Reservas valida e grava o cancelamento local condicionalmente. Se o aceite vence
 
 ### 5.2 Reserva em `EM_CONFIRMACAO`
 
-1. O Orquestrador persiste o pedido, valida-o com Reservas antes de interromper o avanço e reconcilia os comandos de confirmação já emitidos.
-2. Se já houver `CONFIRMADA`, conclui a confirmação e segue a seção 5.3. Se a execução estiver compensando uma falha definitiva, conclui a recuperação e reavalia o pedido pelo estado canônico.
-3. Se a confirmação puder ser interrompida, o Orquestrador registra o novo `sagaId` e os efeitos conhecidos. Persiste a intenção de solicitar `CANCELAMENTO_EM_ANDAMENTO`, vinculada à execução ativa. Reservas valida a transição e o ator. Para profissional, exige e registra justificativa.
-4. Após o aceite de Reservas, o Orquestrador marca a confirmação como `INTERROMPIDA` e ativa o cancelamento na mesma transação local. Se Reservas recusar conclusivamente, encerra o pedido e retoma a confirmação quando aplicável.
-5. O cancelamento reverte os efeitos confirmados, na ordem da seção 5.3. Reservas grava `CANCELADA` quando o Orquestrador confirma todas as operações aplicáveis.
+O Orquestrador valida o solicitante em Reservas, persiste o pedido com novo `sagaId` e devolve `202`. A execução de cancelamento aguarda a confirmação concluir ou compensar seus comandos. A confirmação e o cancelamento executam comandos em série para a mesma reserva. Ao assumir a vez, o cancelamento revalida o estado com Reservas e segue a seção 5.3. Se a confirmação chegou a um estado terminal sem confirmar a reserva, o cancelamento é encerrado com `INTERROMPIDA`.
 
 ### 5.3 Reserva em `CONFIRMADA` e disputa com a entrega
 
@@ -92,8 +88,9 @@ Os estados técnicos ficam no Orquestrador e seguem a seção 9.4 do contrato ce
 |---|---|
 | `EM_EXECUCAO` | Confirmação iniciada, com etapa a executar ou resultado pendente. |
 | `COMPENSANDO` / `COMPENSACAO_PENDENTE` | Reversão após falha definitiva em andamento ou aguardando recuperação. |
+| `AGUARDANDO_CONFIRMACAO` | Cancelamento admitido e aguardando a confirmação ativa terminar. |
 | `CANCELANDO` / `CANCELAMENTO_PENDENTE` | Cancelamento distribuído em andamento ou aguardando recuperação. |
-| `INTERROMPIDA` | Aceite inicial rejeitado, confirmação substituída por cancelamento ou cancelamento inviabilizado, conforme o desfecho registrado. |
+| `INTERROMPIDA` | Aceite inicial rejeitado ou cancelamento inviabilizado, conforme o desfecho registrado. |
 | `CONCLUIDA` | Reservas gravou `CONFIRMADA` e o Orquestrador confirmou a finalização. |
 | `COMPENSADA` | Efeitos aplicáveis revertidos e falha de confirmação gravada. |
 | `CANCELADA` | Operações aplicáveis confirmadas e cancelamento gravado em Reservas. |

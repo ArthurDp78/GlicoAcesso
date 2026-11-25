@@ -179,7 +179,13 @@ O diagrama é lógico: cada microsserviço de domínio e o Orquestrador têm sua
 | CQRS | Serviço de Estoque. | Escritas precisam validar a quantidade canônica; consultas de disponibilidade podem ser otimizadas e aceitam pequena defasagem. |
 | Outbox | Obrigatória para publicar eventos derivados de alterações persistidas. O fluxo de estoque é a implementação/projeto mínimo exigido. | A gravação do dado e do evento ocorre na mesma transação local, evitando dual write entre banco e broker. |
 
-A tecnologia específica do Gateway, a linguagem dos serviços e bibliotecas/frameworks podem ser especificados nos documentos de implementação de cada frente, desde que preservem estes contratos. Se o grupo escolher um broker ou banco diferente, a mudança precisa ser justificada e revisada nos documentos de persistência, eventos, Compose e apresentação; não pode ser alterada silenciosamente em apenas um arquivo.
+A versão da Parte 3 usa Python e FastAPI no Gateway, nos BFFs e nas APIs de serviço. O Compose define os destinos de roteamento descritos no [documento 03](./03-api-gateway.md). Se o grupo escolher um broker ou banco diferente, a mudança precisa ser justificada e revisada nos documentos de persistência, eventos, Compose e apresentação; não pode ser alterada silenciosamente em apenas um arquivo.
+
+### 6.4 Estratégia de versionamento da API
+
+A versão principal no caminho identifica o contrato que cada cliente consome. O Gateway pode encaminhar as rotas de cada versão separadamente, permitindo que o portal do cidadão e o painel da unidade migrem em ritmos distintos. O mesmo padrão é adotado nas rotas internas versionadas.
+
+Mudanças aditivas compatíveis, como um campo opcional que os consumidores existentes podem ignorar, permanecem na `v1`. Uma mudança incompatível, como remover um campo ou exigir um novo parâmetro, entra na `v2`. O grupo documenta a mudança no OpenAPI, mantém as versões em paralelo durante a migração e retira a `v1` após confirmar a migração dos consumidores.
 
 ## 7. Identificadores e formatos canônicos
 
@@ -284,8 +290,8 @@ Antes do ponto de compromisso, uma falha definitiva leva à compensação dos ef
 O cancelamento de `SOLICITADA` é local a Reservas e usa uma transição condicional. O BFF encaminha ao Orquestrador quando Reservas devolve `CANCELAMENTO_DISTRIBUIDO` com base no estado canônico. Reservas persiste o encaminhamento por chave e conteúdo para que a repetição siga o mesmo caminho. A rejeição e a expiração também são locais.
 
 1. O BFF encaminha ao Orquestrador o pedido de cancelamento de uma reserva `EM_CONFIRMACAO` ou `CONFIRMADA`. O Orquestrador registra o pedido duravelmente e serializa o trabalho por `reservaId`.
-2. Se a confirmação estiver ativa, o Orquestrador valida o pedido com Reservas antes de interromper seu avanço, pausa novos passos e reconcilia todos os comandos já emitidos. Se a finalização já tiver gravado `CONFIRMADA`, conclui a confirmação e trata o cancelamento como uma execução posterior. Se a confirmação já estiver compensando por falha definitiva, conclui a recuperação e reavalia o pedido pelo estado canônico.
-3. O Orquestrador atribui um novo `sagaId` ao cancelamento e registra os efeitos conhecidos da confirmação. Persiste a intenção de pedir a Reservas a transição para `CANCELAMENTO_EM_ANDAMENTO`. Reservas valida o ator e o estado na própria transação e, para profissional, exige e registra justificativa. Os contratos exigem pelo menos cinco caracteres após remover espaços externos. Se houver confirmação ainda ativa, o pedido e a intenção ficam vinculados a ela até o resultado conclusivo. Se Reservas aceitar, o Orquestrador grava `INTERROMPIDA` e ativa a execução sucessora na mesma transação local. Se Reservas rejeitar, encerra o pedido e retoma a confirmação quando aplicável. Sem confirmação ativa, a própria execução de cancelamento mantém a intenção e seu resultado.
+2. O Orquestrador valida o solicitante em Reservas e grava o pedido de cancelamento com `sagaId` próprio. Enquanto existir confirmação ativa, o pedido permanece em `AGUARDANDO_CONFIRMACAO`. A confirmação conclui ou compensa seus comandos antes de dar vez ao cancelamento.
+3. Com a execução anterior encerrada, o Orquestrador solicita a transição para `CANCELAMENTO_EM_ANDAMENTO`. Reservas revalida ator e estado e registra a justificativa do profissional, com pelo menos cinco caracteres após remover espaços externos. Se a confirmação falhou e a reserva já está em estado terminal, o Orquestrador encerra o cancelamento com `INTERROMPIDA`.
 4. O Orquestrador solicita `CancelarAutorizacao` a Retiradas se houver autorização. Retiradas serializa revogação e entrega na mesma fronteira transacional. Só após confirmação durável da revogação, ou evidência conclusiva de que nunca houve autorização, o Orquestrador pode pedir a liberação da alocação aplicável.
 5. Após confirmar as operações aplicáveis, o Orquestrador pede a Reservas que grave `CANCELADA` e então conclui a execução. Resultado incerto mantém o cancelamento em andamento e exige repetição com a mesma chave e conteúdo.
 
@@ -300,12 +306,13 @@ O registro interno da SAGA usa os estados:
 - `COMPENSACAO_PENDENTE`: uma compensação não foi confirmada; o sistema continuará tentando e alertará a operação;
 - `CANCELANDO`: um pedido explícito de cancelamento está revertendo efeitos distribuídos;
 - `CANCELAMENTO_PENDENTE`: não foi possível confirmar uma operação de cancelamento; o sistema continuará tentando;
-- `INTERROMPIDA`: execução encerrada sem prosseguir em suas etapas, seja uma confirmação interrompida por solicitação de cancelamento após reconciliar chamadas em voo ou com resultado desconhecido, seja um cancelamento inviabilizado pela entrega comprovada em Retiradas, seja uma execução cujo comando inicial foi rejeitado sem efeitos;
+- `AGUARDANDO_CONFIRMACAO`: pedido de cancelamento admitido e aguardando a vez da sua reserva;
+- `INTERROMPIDA`: execução encerrada após recusa do comando inicial ou após Retiradas confirmar que a entrega venceu a revogação;
 - `CONCLUIDA`: reserva confirmada;
 - `COMPENSADA`: efeitos distribuídos revertidos após falha de confirmação; reserva marcada `FALHA_CONFIRMACAO`;
 - `CANCELADA`: efeitos distribuídos revertidos por solicitação de cancelamento; reserva marcada `CANCELADA`.
 
-`INTERROMPIDA` encerra uma execução técnica. Quando uma confirmação dá lugar ao cancelamento, a nova execução recebe os efeitos a reverter. Quando uma entrega inviabiliza o cancelamento, o Orquestrador registra a evidência e encerra a execução.
+`INTERROMPIDA` encerra uma execução técnica. Depois que a confirmação encerra, o cancelamento revalida o estado e coordena os efeitos a reverter. Quando uma entrega inviabiliza o cancelamento, o Orquestrador registra a evidência e encerra a execução.
 
 `COMPENSACAO_PENDENTE` e `CANCELAMENTO_PENDENTE` representam operações em recuperação. A equipe pode localizar a execução por `sagaId` ou `reservaId` e consultar a etapa, as tentativas e o erro técnico. O cidadão acompanha o estado da reserva.
 

@@ -48,7 +48,7 @@ A semântica esperada de repetição segue o contrato central. Com a mesma chave
 
 - **Reinício do Orquestrador.** Recupera as execuções não terminais e lê a última intenção e o último resultado persistidos. Repete somente o comando pendente com a chave original. A retomada independe da conexão do cliente.
 - **Réplicas e pedidos concorrentes.** O banco do Orquestrador controla uma execução ativa por reserva e o avanço por versão. Reservas protege suas transições com atualização condicional. Estoque protege o saldo no modelo de escrita e garante a unicidade da alocação ativa.
-- **Cancelamento durante a confirmação.** O Orquestrador resolve as chamadas em voo antes de assumir quais efeitos precisa reverter. Se o ponto de compromisso já ocorreu, conclui a confirmação e abre um cancelamento distinto. Se a confirmação ainda puder ser interrompida, o aceite da transição em Reservas precede a troca atômica da execução ativa no Orquestrador.
+- **Cancelamento durante a confirmação.** O Orquestrador grava o pedido de cancelamento e aguarda a confirmação concluir ou compensar. A execução de cancelamento revalida a reserva antes de revogar a autorização e liberar o estoque.
 - **Entrega concorrente.** Retiradas serializa a revogação e a entrega. O resultado durável em Retiradas governa a liberação. A Inbox do Orquestrador ajuda a reconciliar o cancelamento e pode refletir a entrega em momento diferente das Inboxes de Reservas e Estoque.
 - **Pendência persistente.** Compensação ou cancelamento permanece recuperável. A equipe acompanha tentativas, próximo retry, efeito confirmado, erro sanitizado e correlação, conforme a seção 10 do documento 06.
 

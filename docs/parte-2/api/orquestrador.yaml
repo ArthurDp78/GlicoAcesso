@@ -70,7 +70,7 @@ components:
         tipo: { type: string, enum: [CONFIRMACAO, CANCELAMENTO] }
         estadoExecucao:
           type: string
-          enum: [EM_EXECUCAO, COMPENSANDO, COMPENSACAO_PENDENTE, CANCELANDO, CANCELAMENTO_PENDENTE, INTERROMPIDA, CONCLUIDA, COMPENSADA, CANCELADA]
+          enum: [AGUARDANDO_CONFIRMACAO, EM_EXECUCAO, COMPENSANDO, COMPENSACAO_PENDENTE, CANCELANDO, CANCELAMENTO_PENDENTE, INTERROMPIDA, CONCLUIDA, COMPENSADA, CANCELADA]
         motivoEncerramento: { type: string }
 paths:
   /internal/v1/reservas/{reservaId}/confirmacoes:
@@ -127,7 +127,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/PedidoRecebido' }
-        '400':
+        '422':
           description: "Entrada inválida ou cabeçalho obrigatório ausente."
         '401':
           description: "Credencial ausente ou inválida."

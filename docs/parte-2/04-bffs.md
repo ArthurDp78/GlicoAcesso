@@ -35,7 +35,7 @@ Todos os comandos `POST`/`PUT`/`PATCH` dos BFFs exigem `Idempotency-Key`. O clie
 | Unidade: `GET /unidade` | Unidades: `GET /internal/v1/unidades/{unidadeId}` para o cadastro da unidade vinculada ao profissional. |
 | Unidade: operações em `/painel/estoque/{unidadeId}/itens/{itemId}` | Estoque: configurar permissão, registrar entradas e ajustes nas rotas de `/api/unidade/v1/estoque...`. |
 | Unidade: `GET /painel/estoque` | Estoque: `GET /api/unidade/v1/estoque/{unidadeId}/itens` fornece os saldos projetados e `atualizadoEm`. |
-| Unidade: `GET /painel/estoque/catalogo` | Estoque: `GET /api/cidadao/v1/estoque/itens` fornece o catálogo, inclusive os itens sem saldo. O BFF acrescenta o identificador da unidade vinculada ao profissional. |
+| Unidade: `GET /painel/estoque/catalogo` | Estoque: `GET /api/unidade/v1/estoque/itens` fornece o catálogo, inclusive os itens sem saldo. O BFF acrescenta o identificador da unidade vinculada ao profissional. |
 | Unidade: `POST /reservas/{id}/decisao` | Reservas para rejeição. Orquestrador para aceite e início da confirmação. |
 | Unidade: `POST /reservas/{id}/cancelar` | Reservas para cancelamento pendente. Orquestrador para cancelamento distribuído. Ambos recebem a justificativa do profissional. |
 | Unidade: `GET /painel/reservas` | Reservas: `GET /api/unidade/v1/reservas` lista as solicitações `SOLICITADA` da unidade autenticada, sem dados de outros estabelecimentos. |

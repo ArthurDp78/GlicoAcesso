@@ -82,6 +82,8 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Autorizacao' }
+        '401': { description: Credencial do profissional ausente ou inválida. }
+        '403': { description: Autorização de outra unidade ou papel sem acesso. }
         '404': { description: Não existe autorização para a reserva. }
         '503': { description: Estado da autorização indisponível. }
   /api/unidade/v1/retiradas:
@@ -112,7 +114,7 @@ paths:
                 autorizacaoId: { type: string, format: uuid }
       responses:
         '201':
-          description: Entrega física registada. Dispara evento retirada.concluida.v1. Repetições idênticas reproduzem esta resposta.
+          description: Entrega física e evento retirada.concluida.v1 gravados na mesma transação. Repetições idênticas reproduzem esta resposta.
           content:
             application/json:
               schema:
@@ -122,6 +124,9 @@ paths:
                   retiradaId: { type: string, format: uuid }
                   autorizacaoId: { type: string, format: uuid }
                   realizadaEm: { type: string, format: date-time }
+        '401': { description: Credencial do profissional ausente ou inválida. }
+        '403': { description: Autorização de outra unidade ou papel sem acesso. }
+        '422': { description: Corpo inválido ou chave idempotente ausente ou inválida. }
         '409':
           description: Autorização cancelada, já usada ou inexistente; Reserva não encontrada ou estado consultado diferente de CONFIRMADA; ou `Idempotency-Key` reutilizada com conteúdo diferente. Nenhuma nova entrega é registrada.
         '503':

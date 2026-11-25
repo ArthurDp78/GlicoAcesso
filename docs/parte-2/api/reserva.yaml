@@ -215,8 +215,8 @@ paths:
       operationId: cancelarSolicitacaoCidadao
       summary: Cancelar solicitação pendente do cidadão
       description: >-
-        Somente o BFF correspondente, com identidade delegada do ator. Após verificar a autorização, Reservas aplica a transição condicional apenas em SOLICITADA. Para EM_CONFIRMACAO ou CONFIRMADA, registra e devolve 409 com codigo CANCELAMENTO_DISTRIBUIDO, sem alterar a reserva. A decisão de encaminhamento ou resultado local é persistida para replay da mesma chave e conteúdo, antes de reavaliar o estado em retries.
-      security: [{ serviceAuth: [] }]
+        O BFF correspondente encaminha a credencial Bearer do ator. Após verificar a autorização, Reservas aplica a transição condicional apenas em SOLICITADA. Para EM_CONFIRMACAO ou CONFIRMADA, registra e devolve 409 com codigo CANCELAMENTO_DISTRIBUIDO, sem alterar a reserva. A decisão de encaminhamento ou resultado local é persistida para replay da mesma chave e conteúdo, antes de reavaliar o estado em retries.
+      security: [{ bearerAuth: [] }]
       parameters:
         - { $ref: '#/components/parameters/ReservaId' }
         - { $ref: '#/components/parameters/IdempotencyKey' }
@@ -227,7 +227,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/EstadoReserva' }
-        '400':
+        '422':
           description: "Entrada inválida ou cabeçalho obrigatório ausente."
         '401':
           description: "Credencial ausente ou inválida."
@@ -278,7 +278,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/EstadoReserva' }
-        '400':
+        '422':
           description: "Entrada inválida ou cabeçalho obrigatório ausente."
         '401':
           description: "Credencial ausente ou inválida."
@@ -298,8 +298,8 @@ paths:
       operationId: cancelarSolicitacaoUnidade
       summary: Cancelar solicitação pendente pela unidade
       description: >-
-        Somente o BFF correspondente, com identidade delegada do ator. Após verificar a autorização, Reservas aplica a transição condicional apenas em SOLICITADA. Para EM_CONFIRMACAO ou CONFIRMADA, registra e devolve 409 com codigo CANCELAMENTO_DISTRIBUIDO, sem alterar a reserva. A decisão de encaminhamento ou resultado local é persistida para replay da mesma chave e conteúdo, antes de reavaliar o estado em retries. A justificativa é obrigatória e deve ter ao menos cinco caracteres após remover espaços externos.
-      security: [{ serviceAuth: [] }]
+        O BFF correspondente encaminha a credencial Bearer do ator. Após verificar a autorização, Reservas aplica a transição condicional apenas em SOLICITADA. Para EM_CONFIRMACAO ou CONFIRMADA, registra e devolve 409 com codigo CANCELAMENTO_DISTRIBUIDO, sem alterar a reserva. A decisão de encaminhamento ou resultado local é persistida para replay da mesma chave e conteúdo, antes de reavaliar o estado em retries. A justificativa é obrigatória e deve ter ao menos cinco caracteres após remover espaços externos.
+      security: [{ bearerAuth: [] }]
       parameters:
         - { $ref: '#/components/parameters/ReservaId' }
         - { $ref: '#/components/parameters/IdempotencyKey' }
@@ -315,7 +315,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/EstadoReserva' }
-        '400':
+        '422':
           description: "Entrada inválida ou cabeçalho obrigatório ausente."
         '401':
           description: "Credencial ausente ou inválida."
@@ -463,7 +463,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/EstadoReserva' }
-        '400':
+        '422':
           description: "Entrada inválida ou cabeçalho obrigatório ausente."
         '401':
           description: "Credencial ausente ou inválida."
@@ -500,7 +500,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/EstadoReserva' }
-        '400':
+        '422':
           description: "Entrada inválida ou cabeçalho obrigatório ausente."
         '401':
           description: "Credencial ausente ou inválida."

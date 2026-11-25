@@ -411,7 +411,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/PedidoEmProcessamento' }
-        '400':
+        '422':
           description: "Entrada inválida ou cabeçalho obrigatório ausente."
         '401':
           description: "Credencial ausente ou inválida."
@@ -465,7 +465,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/PedidoEmProcessamento' }
-        '400':
+        '422':
           description: "Entrada inválida ou cabeçalho obrigatório ausente."
         '401':
           description: "Credencial ausente ou inválida."
@@ -502,6 +502,9 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/RetiradaRegistrada' }
+        '401': { description: Credencial do profissional ausente ou inválida. }
+        '403': { description: Autorização de outra unidade ou papel sem acesso. }
+        '422': { description: Corpo inválido ou chave idempotente ausente ou inválida. }
         '409': { description: "Autorização inexistente, cancelada ou já utilizada, reserva sem estado CONFIRMADA ou `Idempotency-Key` reutilizada com conteúdo diferente." }
         '503': { description: Não foi possível consultar o estado canônico; nenhuma nova entrega foi registrada. }
   /painel/reservas:
