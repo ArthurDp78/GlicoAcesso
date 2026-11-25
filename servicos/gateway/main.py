@@ -1,17 +1,19 @@
 import os
-from uuid import UUID
 from pathlib import Path
+from uuid import UUID
 
-from fastapi import FastAPI, Request, Response
+from fastapi import Depends, FastAPI, Request, Response
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from servicos.http import cliente_http, consultar, requisitar
+from servicos.http import cliente_http, consultar, correlacionar, requisitar
+from servicos.identidade_demo import cidadao_autenticado, profissional_autenticado
 
 
 PASTA_PORTAL = Path(__file__).resolve().parent / "portal"
 LOGO = Path(__file__).resolve().parents[2] / "identidade-visual" / "logo-sem-fundo.png"
 app = FastAPI(title="GlicoAcesso — API Gateway", lifespan=cliente_http)
+app.middleware("http")(correlacionar)
 app.mount("/cidadao/assets", StaticFiles(directory=PASTA_PORTAL), name="portal-cidadao")
 app.mount("/unidade/assets", StaticFiles(directory=PASTA_PORTAL), name="portal-unidade")
 
@@ -51,18 +53,31 @@ async def encaminhar_consulta(request: Request) -> Response:
         media_type=resposta.headers.get("content-type", "application/json"),
     )
 
-@app.post("/api/cidadao/v1/reservas", status_code=201)
-@app.get("/api/cidadao/v1/reservas/{reservaId}")
+@app.post("/api/cidadao/v1/reservas", status_code=201, dependencies=[Depends(cidadao_autenticado)])
+@app.get("/api/cidadao/v1/reservas/{reservaId}", dependencies=[Depends(cidadao_autenticado)])
+@app.post("/api/cidadao/v1/reservas/{reservaId}/cancelar", dependencies=[Depends(cidadao_autenticado)])
 async def encaminhar_reserva(request: Request, reservaId: UUID | None = None) -> Response:
     return await repassar(request, os.environ.get("BFF_CIDADAO_URL", "http://127.0.0.1:8001"))
 
 
-@app.get("/api/unidade/v1/painel/estoque")
-@app.get("/api/unidade/v1/painel/estoque/catalogo")
-@app.post("/api/unidade/v1/painel/estoque/{unidadeId}/itens/{itemId}/entradas", status_code=201)
-@app.get("/api/unidade/v1/painel/reservas")
-@app.get("/api/unidade/v1/painel/reservas/{reservaId}")
-@app.post("/api/unidade/v1/reservas/{reservaId}/decisao")
+PROFISSIONAL = [Depends(profissional_autenticado)]
+
+
+@app.post("/api/unidade/v1/retiradas", status_code=201, dependencies=PROFISSIONAL)
+@app.get("/api/unidade/v1/unidade", dependencies=PROFISSIONAL)
+@app.put("/api/unidade/v1/unidade", dependencies=PROFISSIONAL)
+@app.put("/api/unidade/v1/unidade/horarios", dependencies=PROFISSIONAL)
+@app.patch("/api/unidade/v1/unidade/status", dependencies=PROFISSIONAL)
+@app.put("/api/unidade/v1/unidade/prazo-analise", dependencies=PROFISSIONAL)
+@app.put("/api/unidade/v1/painel/estoque/{unidadeId}/itens/{itemId}/permissao", dependencies=PROFISSIONAL)
+@app.post("/api/unidade/v1/painel/estoque/{unidadeId}/itens/{itemId}/ajustes", status_code=201, dependencies=PROFISSIONAL)
+@app.get("/api/unidade/v1/painel/estoque", dependencies=PROFISSIONAL)
+@app.get("/api/unidade/v1/painel/estoque/catalogo", dependencies=PROFISSIONAL)
+@app.post("/api/unidade/v1/painel/estoque/{unidadeId}/itens/{itemId}/entradas", status_code=201, dependencies=PROFISSIONAL)
+@app.get("/api/unidade/v1/painel/reservas", dependencies=PROFISSIONAL)
+@app.get("/api/unidade/v1/painel/reservas/{reservaId}", dependencies=PROFISSIONAL)
+@app.post("/api/unidade/v1/reservas/{reservaId}/decisao", dependencies=PROFISSIONAL)
+@app.post("/api/unidade/v1/reservas/{reservaId}/cancelar", dependencies=PROFISSIONAL)
 async def encaminhar_unidade(request: Request, reservaId: UUID | None = None) -> Response:
     return await repassar(request, os.environ.get("BFF_UNIDADE_URL", "http://127.0.0.1:8005"))
 
@@ -76,7 +91,7 @@ async def repassar(request: Request, destino: str) -> Response:
     }
     resposta = await requisitar(
         request.app.state.http, request.method, destino + request.url.path,
-        headers=cabecalhos, content=await request.body() if request.method == "POST" else None,
+        headers=cabecalhos, content=await request.body(), params=request.query_params.multi_items(),
     )
     return Response(
         content=resposta.content,

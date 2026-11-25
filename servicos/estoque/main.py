@@ -11,9 +11,11 @@ from fastapi.responses import JSONResponse, Response
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
 from servicos.banco import BancoIndisponivel, conectar
-from servicos.contratos_estoque import EntradaEstoque, Item, LIMITE_ESTOQUE, MovimentacaoEstoque
+from servicos.contratos_estoque import AjusteEstoque, ConfigurarReserva, EntradaEstoque, Item, LIMITE_ESTOQUE, MovimentacaoEstoque
 from servicos.estoque.eventos import iniciar, registrar_evento
-from servicos.http import cliente_http, consultar
+from servicos.estoque.retiradas import FILA, aplicar_retirada
+from servicos.mensageria import declarar_retiradas, iniciar_consumidor
+from servicos.http import cliente_http, consultar, correlacionar, correlacao
 from servicos.idempotencia import gravar_resultado, resultado_anterior
 from servicos.identidade_demo import Ator, orquestrador_autenticado, profissional_autenticado, servico_reservas_autenticado
 
@@ -23,6 +25,7 @@ async def ciclo(_app: FastAPI):
     parar = threading.Event()
     async with cliente_http(_app):
         iniciar(parar)
+        iniciar_consumidor(FILA, declarar_retiradas, aplicar_retirada, parar)
         try:
             yield
         finally:
@@ -30,6 +33,7 @@ async def ciclo(_app: FastAPI):
 
 
 app = FastAPI(title="GlicoAcesso — Estoque", lifespan=ciclo)
+app.middleware("http")(correlacionar)
 
 
 class DisponibilidadeItem(BaseModel):
@@ -262,9 +266,9 @@ async def verificar_unidade_ativa(request: Request, unidade_id: UUID):
         raise HTTPException(404, "Unidade ativa não encontrada.")
 
 
-def reobter_entrada(ator: str, chave: str, resumo: str):
+def reobter_comando(operacao: str, ator: str, chave: str, resumo: str):
     with conectar(BANCO) as conexao:
-        return resultado_anterior(conexao, OPERACAO_ENTRADA, ator, chave, resumo)
+        return resultado_anterior(conexao, operacao, ator, chave, resumo)
 
 
 def persistir_entrada(unidade_id: UUID, item_id: UUID, entrada: EntradaEstoque, ator: str, chave: str, resumo: str):
@@ -296,7 +300,7 @@ def persistir_entrada(unidade_id: UUID, item_id: UUID, entrada: EntradaEstoque, 
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 """, (movimento_id, unidade_id, item_id, entrada.quantidade, saldo["estoque_version"],
                       saldo["updated_at"], ator, entrada.motivo))
-                registrar_evento(conexao, "estoque.entrada-registrada.v1", "MovimentacaoEstoque", movimento_id, None,
+                registrar_evento(conexao, "estoque.entrada-registrada.v1", "MovimentacaoEstoque", movimento_id, correlacao.get(),
                                  saldo, {"movimentacaoId": str(movimento_id), "variacaoFisica": entrada.quantidade})
                 corpo = MovimentacaoEstoque(
                     movimentacaoId=movimento_id, unidadeId=unidade_id, itemId=item_id,
@@ -318,9 +322,104 @@ async def registrar_entrada(
     if not chave.strip() or "\x00" in chave:
         raise HTTPException(422, "Chave idempotente inválida.")
     resumo = sha256(f"{unidadeId}:{itemId}:{entrada.model_dump_json()}".encode()).hexdigest()
-    anterior = await run_in_threadpool(reobter_entrada, profissional.id, chave, resumo)
+    anterior = await run_in_threadpool(reobter_comando, OPERACAO_ENTRADA, profissional.id, chave, resumo)
     if anterior is not None:
         return responder_comando(anterior)
     await verificar_unidade_ativa(request, unidadeId)
     resultado = await run_in_threadpool(persistir_entrada, unidadeId, itemId, entrada, profissional.id, chave, resumo)
     return responder_comando(resultado)
+
+
+Profissional = Annotated[Ator, Depends(profissional_autenticado)]
+RETORNO_SALDO = """
+    RETURNING unidade_id, item_id, estoque_fisico_atual, quantidade_alocada,
+              permite_reserva, estoque_version, updated_at
+"""
+
+
+@app.get("/api/unidade/v1/estoque/itens", response_model=list[Item], response_model_exclude_none=True)
+def catalogo_profissional(_profissional: Profissional):
+    return listar_itens()
+
+
+def alterar_saldo(conexao, unidade_id: UUID, item_id: UUID, pedido, ator: str):
+    if isinstance(pedido, ConfigurarReserva):
+        saldo = conexao.execute("""
+            INSERT INTO saldos (unidade_id, item_id, estoque_fisico_atual, permite_reserva, estoque_version)
+            SELECT %s, item_id, 0, %s, 1 FROM itens WHERE item_id = %s
+            ON CONFLICT (unidade_id, item_id) DO UPDATE SET
+                permite_reserva = EXCLUDED.permite_reserva,
+                estoque_version = saldos.estoque_version + 1, updated_at = clock_timestamp()
+        """ + RETORNO_SALDO, (unidade_id, pedido.permiteReserva, item_id)).fetchone()
+        if saldo is None:
+            return 404, {"codigo": "ITEM_NAO_ENCONTRADO", "mensagem": "Item não encontrado no catálogo."}
+        registrar_evento(conexao, "estoque.permissao-alterada.v1", "Saldo", f"{unidade_id}:{item_id}",
+                         correlacao.get(), saldo, {})
+        return 200, pedido.model_dump()
+
+    saldo = conexao.execute("""
+        SELECT estoque_fisico_atual, quantidade_alocada FROM saldos
+        WHERE unidade_id = %s AND item_id = %s FOR UPDATE
+    """, (unidade_id, item_id)).fetchone()
+    if saldo is None:
+        return 404, {"codigo": "SALDO_NAO_ENCONTRADO", "mensagem": "Registre a entrada inicial do item."}
+    fisico = saldo["estoque_fisico_atual"] + pedido.variacaoFisica
+    if not saldo["quantidade_alocada"] <= fisico <= LIMITE_ESTOQUE:
+        return 409, {"codigo": "AJUSTE_INCOMPATIVEL", "mensagem": "Ajuste fora dos limites do saldo alocado e físico."}
+    atualizado = conexao.execute("""
+        UPDATE saldos SET estoque_fisico_atual = %s, estoque_version = estoque_version + 1,
+                          updated_at = clock_timestamp()
+        WHERE unidade_id = %s AND item_id = %s
+    """ + RETORNO_SALDO, (fisico, unidade_id, item_id)).fetchone()
+    movimento = MovimentacaoEstoque(
+        movimentacaoId=uuid4(), unidadeId=unidade_id, itemId=item_id, variacaoFisica=pedido.variacaoFisica,
+        ocorridaEm=atualizado["updated_at"], estoqueVersion=atualizado["estoque_version"],
+    )
+    conexao.execute("""
+        INSERT INTO movimentacoes (movimentacao_id, unidade_id, item_id, variacao_fisica,
+                                    estoque_version, ocorrida_em, ator_id, motivo)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+    """, (movimento.movimentacaoId, unidade_id, item_id, movimento.variacaoFisica,
+          movimento.estoqueVersion, movimento.ocorridaEm, ator, pedido.motivo))
+    registrar_evento(conexao, "estoque.ajuste-registrado.v1", "MovimentacaoEstoque", movimento.movimentacaoId,
+                     correlacao.get(), atualizado, {"movimentacaoId": str(movimento.movimentacaoId),
+                                                     "variacaoFisica": movimento.variacaoFisica})
+    return 201, movimento.model_dump(mode="json")
+
+
+def persistir_alteracao(operacao, unidade_id, item_id, pedido, ator, chave, resumo):
+    with conectar(BANCO) as conexao:
+        anterior = resultado_anterior(conexao, operacao, ator, chave, resumo)
+        if anterior is not None:
+            return anterior
+        resultado = alterar_saldo(conexao, unidade_id, item_id, pedido, ator)
+        return gravar_resultado(conexao, operacao, ator, chave, resumo, resultado)
+
+
+async def executar_alteracao(request, unidade_id, item_id, pedido, profissional, chave, operacao):
+    if profissional.unidadeId != unidade_id:
+        raise HTTPException(403, "Ator sem acesso à unidade.")
+    if not chave.strip() or "\x00" in chave:
+        raise HTTPException(422, "Chave idempotente inválida.")
+    resumo = sha256(f"{unidade_id}:{item_id}:{pedido.model_dump_json()}".encode()).hexdigest()
+    anterior = await run_in_threadpool(reobter_comando, operacao, profissional.id, chave, resumo)
+    if anterior is not None:
+        return responder_comando(anterior)
+    await verificar_unidade_ativa(request, unidade_id)
+    resultado = await run_in_threadpool(
+        persistir_alteracao, operacao, unidade_id, item_id, pedido, profissional.id, chave, resumo,
+    )
+    return responder_comando(resultado)
+
+
+@app.put("/api/unidade/v1/estoque/{unidadeId}/itens/{itemId}/permissao", response_model=ConfigurarReserva)
+async def configurar_reserva(request: Request, unidadeId: UUID, itemId: UUID, pedido: ConfigurarReserva,
+                             profissional: Profissional, chave: Chave):
+    return await executar_alteracao(request, unidadeId, itemId, pedido, profissional, chave, "configurar-reserva")
+
+
+@app.post("/api/unidade/v1/estoque/{unidadeId}/itens/{itemId}/ajustes", status_code=201,
+          response_model=MovimentacaoEstoque)
+async def ajustar_estoque(request: Request, unidadeId: UUID, itemId: UUID, pedido: AjusteEstoque,
+                          profissional: Profissional, chave: Chave):
+    return await executar_alteracao(request, unidadeId, itemId, pedido, profissional, chave, "ajustar-estoque")

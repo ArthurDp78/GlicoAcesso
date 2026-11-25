@@ -6,14 +6,18 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, TypeAdapter, ValidationError
 
-from servicos.contratos_reserva import ReservaInterna
-from servicos.contratos_estoque import EntradaEstoque, Item, MovimentacaoEstoque
+from servicos.cancelamento_bff import cancelar_pelo_bff
+from servicos.contratos_reserva import ESTADOS_CANCELAVEIS, JustificativaCancelamento, ReservaInterna
+from servicos.contratos_retirada import Autorizacao, AutorizacaoPainel, PedidoRetirada, RetiradaRegistrada
+from servicos.contratos_unidade import HorariosUnidade, PrazoUnidade, SituacaoUnidade, UnidadeInput
+from servicos.contratos_estoque import AjusteEstoque, ConfigurarReserva, EntradaEstoque, Item, MovimentacaoEstoque
 from servicos.delegacao_unidade import emitir_credencial
-from servicos.http import cliente_http, consultar, requisitar
+from servicos.http import cliente_http, consultar, correlacionar, requisitar
 from servicos.identidade_demo import Ator, profissional_autenticado
 
 
 app = FastAPI(title="GlicoAcesso — BFF Unidade", lifespan=cliente_http)
+app.middleware("http")(correlacionar)
 API = "/api/unidade/v1"
 Profissional = Annotated[Ator, Depends(profissional_autenticado)]
 
@@ -26,6 +30,7 @@ class Link(BaseModel):
 
 class ReservaPainel(ReservaInterna):
     itemNome: str | None = None
+    dadosAutorizacao: AutorizacaoPainel | None = None
     links: dict[str, Link] = Field(serialization_alias="_links")
 
 
@@ -62,14 +67,23 @@ async def nomes_dos_itens(request: Request) -> dict[UUID, str]:
         return {}
 
 
-def para_painel(reserva: ReservaInterna, nomes: dict[UUID, str]) -> ReservaPainel:
+def para_painel(reserva: ReservaInterna, nomes: dict[UUID, str], autorizacao: Autorizacao | None = None) -> ReservaPainel:
     href = f"{API}/painel/reservas/{reserva.reservaId}"
     links = {"self": Link(href=href, method="GET")}
     if reserva.status == "SOLICITADA":
         decisao = f"{API}/reservas/{reserva.reservaId}/decisao"
         links["aceitar"] = Link(href=decisao, method="POST", body={"decisao": "ACEITAR"})
         links["rejeitar"] = Link(href=decisao, method="POST", body={"decisao": "REJEITAR"})
-    return ReservaPainel(**reserva.model_dump(), itemNome=nomes.get(reserva.itemId), links=links)
+    if reserva.status in ESTADOS_CANCELAVEIS and (autorizacao is None or autorizacao.status != "UTILIZADA"):
+        links["cancelar"] = Link(href=f"{API}/reservas/{reserva.reservaId}/cancelar", method="POST",
+                                 body={"justificativa": ""})
+    if reserva.status == "CONFIRMADA" and autorizacao and autorizacao.status == "ATIVA":
+        links["autorizacao-retirada"] = Link(
+            href=f"{API}/retiradas", method="POST", body={"autorizacaoId": str(autorizacao.autorizacaoId)},
+        )
+    return ReservaPainel(
+        **reserva.model_dump(), itemNome=nomes.get(reserva.itemId), dadosAutorizacao=autorizacao, links=links,
+    )
 
 
 @app.get("/health")
@@ -107,7 +121,24 @@ async def consultar_reserva(request: Request, response: Response, reservaId: UUI
     except ValidationError as erro:
         raise HTTPException(502, "Reservas retornou dados incompatíveis.") from erro
     response.headers["Cache-Control"] = "no-store"
-    return para_painel(reserva, await nomes_dos_itens(request))
+    autorizacao = None
+    if reserva.status in ("CONFIRMADA", "CANCELAMENTO_EM_ANDAMENTO", "RETIRADA", "CANCELADA"):
+        leitura = await consultar(
+            request.app.state.http, f"{origem_retiradas()}/internal/v1/autorizacoes/{reservaId}",
+            headers=credencial(request),
+        )
+        if leitura.status_code == 200:
+            try:
+                autorizacao = Autorizacao.model_validate_json(leitura.content)
+            except ValidationError as erro:
+                raise HTTPException(502, "Retiradas retornou dados incompatíveis.") from erro
+            if (autorizacao.reservaId, autorizacao.unidadeId, autorizacao.itemId, autorizacao.quantidade) != (
+                reserva.reservaId, reserva.unidadeId, reserva.itemId, reserva.quantidade,
+            ):
+                raise HTTPException(502, "A autorização diverge da reserva.")
+        elif leitura.status_code != 404:
+            return repassar_erro(leitura)
+    return para_painel(reserva, await nomes_dos_itens(request), autorizacao)
 
 
 @app.post(API + "/reservas/{reservaId}/decisao")
@@ -166,7 +197,8 @@ class CatalogoPainel(BaseModel):
 async def catalogo_estoque(request: Request, response: Response, profissional: Profissional):
     resposta = await consultar(
         request.app.state.http,
-        origem("ESTOQUE_URL", "http://127.0.0.1:8003") + "/api/cidadao/v1/estoque/itens",
+        origem("ESTOQUE_URL", "http://127.0.0.1:8003") + "/api/unidade/v1/estoque/itens",
+        headers=credencial(request),
     )
     if resposta.status_code != 200:
         return repassar_erro(resposta)
@@ -217,3 +249,102 @@ async def painel_estoque(
         raise HTTPException(502, "Estoque retornou dados incompatíveis.") from erro
     response.headers["Cache-Control"] = "no-store"
     return itens
+
+
+Chave = Annotated[str, Header(alias="Idempotency-Key", min_length=1, max_length=128)]
+
+
+async def encaminhar_comando(request, profissional, unidade_id, caminho, pedido, chave, destino, status):
+    if profissional.unidadeId != unidade_id:
+        raise HTTPException(403, "Ator sem acesso à unidade.")
+    resposta = await requisitar(
+        request.app.state.http, request.method, destino + caminho,
+        headers={**credencial(request), "Idempotency-Key": chave}, json=pedido.model_dump(mode="json"),
+    )
+    if resposta.status_code != status:
+        return repassar_erro(resposta)
+    return JSONResponse(resposta.json(), status_code=status, headers={"Cache-Control": "no-store"})
+
+
+@app.put(API + "/painel/estoque/{unidadeId}/itens/{itemId}/permissao", response_model=ConfigurarReserva)
+async def configurar_reserva(request: Request, unidadeId: UUID, itemId: UUID, pedido: ConfigurarReserva,
+                             profissional: Profissional, chave: Chave):
+    return await encaminhar_comando(
+        request, profissional, unidadeId, f"/api/unidade/v1/estoque/{unidadeId}/itens/{itemId}/permissao",
+        pedido, chave, origem("ESTOQUE_URL", "http://127.0.0.1:8003"), 200,
+    )
+
+
+@app.post(API + "/painel/estoque/{unidadeId}/itens/{itemId}/ajustes", status_code=201,
+          response_model=MovimentacaoEstoque)
+async def ajustar_estoque(request: Request, unidadeId: UUID, itemId: UUID, pedido: AjusteEstoque,
+                          profissional: Profissional, chave: Chave):
+    return await encaminhar_comando(
+        request, profissional, unidadeId, f"/api/unidade/v1/estoque/{unidadeId}/itens/{itemId}/ajustes",
+        pedido, chave, origem("ESTOQUE_URL", "http://127.0.0.1:8003"), 201,
+    )
+
+
+def origem_unidades() -> str:
+    return origem("UNIDADES_URL", "http://127.0.0.1:8002")
+
+
+@app.get(API + "/unidade")
+async def consultar_unidade(request: Request, profissional: Profissional):
+    resposta = await consultar(
+        request.app.state.http, f"{origem_unidades()}/internal/v1/unidades/{profissional.unidadeId}",
+        headers=credencial(request),
+    )
+    if resposta.status_code != 200:
+        return repassar_erro(resposta)
+    return JSONResponse(resposta.json(), headers={"Cache-Control": "no-store"})
+
+
+async def enviar_manutencao(request, profissional, pedido, chave, sufixo=""):
+    unidade_id = profissional.unidadeId
+    return await encaminhar_comando(
+        request, profissional, unidade_id, f"/internal/v1/unidades/{unidade_id}{sufixo}",
+        pedido, chave, origem_unidades(), 200,
+    )
+
+
+@app.put(API + "/unidade")
+async def atualizar_unidade(request: Request, profissional: Profissional, pedido: UnidadeInput, chave: Chave):
+    return await enviar_manutencao(request, profissional, pedido, chave)
+
+
+@app.put(API + "/unidade/horarios")
+async def atualizar_horarios(request: Request, profissional: Profissional, pedido: HorariosUnidade, chave: Chave):
+    return await enviar_manutencao(request, profissional, pedido, chave, "/horarios")
+
+
+@app.patch(API + "/unidade/status")
+async def atualizar_situacao(request: Request, profissional: Profissional, pedido: SituacaoUnidade, chave: Chave):
+    return await enviar_manutencao(request, profissional, pedido, chave, "/status")
+
+
+@app.put(API + "/unidade/prazo-analise")
+async def atualizar_prazo(request: Request, profissional: Profissional, pedido: PrazoUnidade, chave: Chave):
+    return await enviar_manutencao(request, profissional, pedido, chave, "/prazo-analise")
+
+
+def origem_retiradas() -> str:
+    return origem("RETIRADAS_URL", "http://127.0.0.1:8007")
+
+
+@app.post(API + "/retiradas", status_code=201, response_model=RetiradaRegistrada)
+async def registrar_retirada(request: Request, profissional: Profissional, pedido: PedidoRetirada, chave: Chave):
+    return await encaminhar_comando(
+        request, profissional, profissional.unidadeId, f"{API}/retiradas", pedido, chave, origem_retiradas(), 201,
+    )
+
+
+@app.post(API + "/reservas/{reservaId}/cancelar")
+async def cancelar_reserva(request: Request, reservaId: UUID, profissional: Profissional,
+                          corpo: JustificativaCancelamento, chave: Chave):
+    return await cancelar_pelo_bff(
+        request, origem("RESERVAS_URL", "http://127.0.0.1:8004"),
+        origem("ORQUESTRADOR_URL", "http://127.0.0.1:8006"),
+        f"{API}/reservas/{reservaId}/cancelar", f"{API}/painel/reservas/{reservaId}",
+        reservaId, chave, lambda: emitir_credencial(profissional), corpo.model_dump(),
+    )

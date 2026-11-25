@@ -1,78 +1,28 @@
-from datetime import time
+import os
 from hashlib import sha256
+from hmac import compare_digest
 from typing import Annotated
 from uuid import UUID, uuid4
 
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.responses import JSONResponse
 from psycopg.errors import UniqueViolation
-from pydantic import BaseModel, Field, StringConstraints, field_validator, model_validator
+from pydantic import BaseModel
+
+from servicos.contratos_unidade import HorariosUnidade, PrazoUnidade, SituacaoUnidade, UnidadeInput
 
 from servicos.banco import BancoIndisponivel, conectar
 from servicos.idempotencia import gravar_resultado, resultado_anterior
-from servicos.identidade_demo import gestor_rede_autenticado, servico_reservas_autenticado
+from servicos.identidade_demo import (
+    Ator, Credencial, ator_autenticado, gestor_rede_autenticado, profissional_autenticado, servico_reservas_autenticado,
+)
 
 
 app = FastAPI(title="GlicoAcesso — Unidades")
 BANCO = "UNIDADES_DATABASE_URL"
 CADASTRAR_UNIDADE = "cadastrar-unidade"
-Texto = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, pattern=r"^[^\x00]+$")]
-TextoEndereco = Annotated[Texto, Field(max_length=120)]
-TextoEnderecoCurto = Annotated[Texto, Field(max_length=40)]
-
-
-class ContatoInput(BaseModel):
-    tipo: TextoEnderecoCurto
-    valor: Annotated[Texto, Field(max_length=400)]
-
-
-class HorarioInput(BaseModel):
-    diaSemana: Annotated[int, Field(strict=True, ge=1, le=7)]
-    horarioInicial: time
-    horarioFinal: time
-
-    @field_validator("horarioInicial", "horarioFinal", mode="before")
-    @classmethod
-    def exigir_texto(cls, valor):
-        if not isinstance(valor, str):
-            raise ValueError("Informe o horário como texto.")
-        return valor
-
-    @model_validator(mode="after")
-    def validar_intervalo(self):
-        if self.horarioInicial.tzinfo or self.horarioFinal.tzinfo or self.horarioInicial >= self.horarioFinal:
-            raise ValueError("O horário deve terminar depois de começar no mesmo dia, sem fuso.")
-        return self
-
-
-class UnidadeInput(BaseModel):
-    nome: TextoEndereco
-    logradouro: TextoEndereco
-    numero: TextoEnderecoCurto
-    bairro: TextoEndereco
-    cidade: TextoEndereco
-    estado: TextoEnderecoCurto
-    cep: Annotated[str, StringConstraints(pattern=r"^[0-9]{5}-?[0-9]{3}$")]
-    orientacoesRetirada: Texto
-    contatos: list[ContatoInput]
-    horarios: list[HorarioInput]
-    prazoAnaliseHoras: Annotated[int, Field(strict=True, ge=1, le=2_147_483_647)]
-
-    @field_validator("cep")
-    @classmethod
-    def formatar_cep(cls, valor: str) -> str:
-        digitos = valor.replace("-", "")
-        return f"{digitos[:5]}-{digitos[5:]}"
-
-    @model_validator(mode="after")
-    def ordenar_e_validar_listas(self):
-        contatos = {(contato.tipo, contato.valor): contato for contato in self.contatos}
-        horarios = {(h.diaSemana, h.horarioInicial, h.horarioFinal): h for h in self.horarios}
-        if len(contatos) != len(self.contatos) or len(horarios) != len(self.horarios):
-            raise ValueError("Contatos e horários não podem se repetir no cadastro.")
-        self.contatos = [contatos[chave] for chave in sorted(contatos)]
-        self.horarios = [horarios[chave] for chave in sorted(horarios)]
-        return self
+Chave = Annotated[str, Header(alias="Idempotency-Key", min_length=1, max_length=128)]
+Profissional = Annotated[Ator, Depends(profissional_autenticado)]
 
 
 class UnidadeResumo(BaseModel):
@@ -127,9 +77,20 @@ def listar_unidades():
         return conexao.execute(CONSULTA_UNIDADES + " WHERE u.ativa ORDER BY u.nome, u.unidade_id").fetchall()
 
 
+def autorizar_consulta(unidadeId: UUID, credencial: Credencial):
+    token_servico = os.getenv("GLICO_RESERVAS_SERVICE_TOKEN", "")
+    if credencial and len(token_servico) >= 32 and compare_digest(
+        token_servico.encode(), credencial.credentials.encode(),
+    ):
+        servico_reservas_autenticado(credencial)
+        return
+    if profissional_autenticado(ator_autenticado(credencial)).unidadeId != unidadeId:
+        raise HTTPException(403, "Ator sem acesso à unidade.")
+
+
 @app.get(
     "/internal/v1/unidades/{unidadeId}", response_model=UnidadeCadastro,
-    dependencies=[Depends(servico_reservas_autenticado)],
+    dependencies=[Depends(autorizar_consulta)],
 )
 def consultar_unidade(unidadeId: UUID):
     with conectar(BANCO) as conexao:
@@ -179,10 +140,7 @@ def persistir_cadastro(pedido: UnidadeInput, gestor: str, chave: str):
                 cursor.executemany("""
                     INSERT INTO contatos_unidade (unidade_id, tipo, valor) VALUES (%s, %s, %s)
                 """, [(unidade_id, c.tipo, c.valor) for c in pedido.contatos])
-                cursor.executemany("""
-                    INSERT INTO horarios_unidade (unidade_id, dia_semana, horario_inicial, horario_final)
-                    VALUES (%s, %s, %s, %s)
-                """, [(unidade_id, h.diaSemana, h.horarioInicial, h.horarioFinal) for h in pedido.horarios])
+            substituir_horarios(conexao, unidade_id, pedido.horarios)
             cadastro = UnidadeCadastro.model_validate(carregar_cadastro(conexao, unidade_id))
             resultado = 201, cadastro.model_dump(mode="json")
         return gravar_resultado(conexao, CADASTRAR_UNIDADE, gestor, chave, resumo, resultado)
@@ -198,3 +156,99 @@ def cadastrar_unidade(
         raise HTTPException(422, "Chave idempotente inválida.")
     status, corpo = persistir_cadastro(pedido, gestor, chave)
     return JSONResponse(status_code=status, content=corpo, headers={"Cache-Control": "no-store"})
+
+
+def substituir_horarios(conexao, unidade_id, horarios):
+    conexao.execute("DELETE FROM horarios_unidade WHERE unidade_id = %s", (unidade_id,))
+    with conexao.cursor() as cursor:
+        cursor.executemany("""
+            INSERT INTO horarios_unidade (unidade_id, dia_semana, horario_inicial, horario_final)
+            VALUES (%s, %s, %s, %s)
+        """, [(unidade_id, h.diaSemana, h.horarioInicial, h.horarioFinal) for h in horarios])
+
+
+def aplicar_manutencao(conexao, unidade_id, pedido):
+    if isinstance(pedido, UnidadeInput):
+        conexao.execute("""
+            UPDATE unidades SET nome = %s, logradouro = %s, numero = %s, bairro = %s, cidade = %s,
+                                estado = %s, cep = %s, orientacoes_retirada = %s, prazo_analise_horas = %s,
+                                updated_at = clock_timestamp()
+            WHERE unidade_id = %s
+        """, (pedido.nome, pedido.logradouro, pedido.numero, pedido.bairro, pedido.cidade, pedido.estado,
+              pedido.cep, pedido.orientacoesRetirada, pedido.prazoAnaliseHoras, unidade_id))
+        conexao.execute("DELETE FROM contatos_unidade WHERE unidade_id = %s", (unidade_id,))
+        with conexao.cursor() as cursor:
+            cursor.executemany("""
+                INSERT INTO contatos_unidade (unidade_id, tipo, valor) VALUES (%s, %s, %s)
+            """, [(unidade_id, c.tipo, c.valor) for c in pedido.contatos])
+        substituir_horarios(conexao, unidade_id, pedido.horarios)
+    elif isinstance(pedido, HorariosUnidade):
+        substituir_horarios(conexao, unidade_id, pedido.horarios)
+        conexao.execute("UPDATE unidades SET updated_at = clock_timestamp() WHERE unidade_id = %s", (unidade_id,))
+    elif isinstance(pedido, SituacaoUnidade):
+        conexao.execute("UPDATE unidades SET ativa = %s, updated_at = clock_timestamp() WHERE unidade_id = %s",
+                        (pedido.ativa, unidade_id))
+    else:
+        conexao.execute("""
+            UPDATE unidades SET prazo_analise_horas = %s, updated_at = clock_timestamp() WHERE unidade_id = %s
+        """, (pedido.prazoAnaliseHoras, unidade_id))
+
+
+def manter_unidade(unidade_id, pedido, profissional, chave, operacao):
+    if profissional.unidadeId != unidade_id:
+        raise HTTPException(403, "Ator sem acesso à unidade.")
+    if not chave.strip() or "\x00" in chave:
+        raise HTTPException(422, "Chave idempotente inválida.")
+    resumo = sha256(f"{unidade_id}:{pedido.model_dump_json()}".encode()).hexdigest()
+    with conectar(BANCO) as conexao:
+        resultado = resultado_anterior(conexao, operacao, profissional.id, chave, resumo)
+        if resultado is None:
+            existente = conexao.execute(
+                "SELECT 1 FROM unidades WHERE unidade_id = %s FOR UPDATE", (unidade_id,),
+            ).fetchone()
+            if existente is None:
+                raise HTTPException(404, "Unidade não encontrada.")
+            try:
+                with conexao.transaction():
+                    aplicar_manutencao(conexao, unidade_id, pedido)
+            except UniqueViolation as erro:
+                if erro.diag.constraint_name != "unidades_cadastro_unico":
+                    raise
+                resultado = 409, {"codigo": "CADASTRO_DUPLICADO", "mensagem": "Já existe uma unidade com esse nome e endereço."}
+            else:
+                cadastro = UnidadeCadastro.model_validate(carregar_cadastro(conexao, unidade_id))
+                resultado = 200, cadastro.model_dump(mode="json")
+            gravar_resultado(conexao, operacao, profissional.id, chave, resumo, resultado)
+    return JSONResponse(resultado[1], status_code=resultado[0], headers={"Cache-Control": "no-store"})
+
+
+@app.put("/internal/v1/unidades/{unidadeId}", response_model=UnidadeCadastro)
+def atualizar_unidade(unidadeId: UUID, pedido: UnidadeInput, profissional: Profissional, chave: Chave):
+    return manter_unidade(unidadeId, pedido, profissional, chave, "atualizar-cadastro")
+
+
+@app.put("/internal/v1/unidades/{unidadeId}/horarios", response_model=UnidadeCadastro)
+def atualizar_horarios(unidadeId: UUID, pedido: HorariosUnidade, profissional: Profissional, chave: Chave):
+    return manter_unidade(unidadeId, pedido, profissional, chave, "atualizar-horarios")
+
+
+@app.patch("/internal/v1/unidades/{unidadeId}/status", response_model=UnidadeCadastro)
+def atualizar_situacao(unidadeId: UUID, pedido: SituacaoUnidade, profissional: Profissional, chave: Chave):
+    return manter_unidade(unidadeId, pedido, profissional, chave, "atualizar-situacao")
+
+
+@app.get("/internal/v1/unidades/{unidadeId}/prazo-analise", response_model=PrazoUnidade,
+         dependencies=[Depends(servico_reservas_autenticado)])
+def consultar_prazo(unidadeId: UUID):
+    with conectar(BANCO) as conexao:
+        prazo = conexao.execute("""
+            SELECT prazo_analise_horas AS "prazoAnaliseHoras" FROM unidades WHERE unidade_id = %s AND ativa
+        """, (unidadeId,)).fetchone()
+    if prazo is None:
+        raise HTTPException(404, "Unidade ativa não encontrada.")
+    return prazo
+
+
+@app.put("/internal/v1/unidades/{unidadeId}/prazo-analise", response_model=UnidadeCadastro)
+def atualizar_prazo(unidadeId: UUID, pedido: PrazoUnidade, profissional: Profissional, chave: Chave):
+    return manter_unidade(unidadeId, pedido, profissional, chave, "atualizar-prazo")

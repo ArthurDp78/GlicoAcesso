@@ -38,6 +38,10 @@ async function chamar(href, opcoes = {}) {
       ESTADO_INCOMPATIVEL: "A reserva não aguarda mais decisão ou o prazo terminou.",
       EXECUCAO_CONCORRENTE: "Já existe uma confirmação em andamento para esta reserva.",
       CHAVE_IDEMPOTENTE_CONFLITANTE: "Esta ação já foi enviada com outros dados.",
+      ENTREGA_JA_REGISTRADA: "A entrega já foi registrada.",
+      CANCELAMENTO_EM_ANDAMENTO: "Já existe um cancelamento em andamento.",
+      AUTORIZACAO_CANCELADA: "A autorização foi revogada.",
+      RESERVA_NAO_CONFIRMADA: "A reserva precisa estar confirmada.",
       LIMITE_ESTOQUE_EXCEDIDO: "A quantidade recebida excede o limite do saldo.",
     };
     throw Object.assign(new Error(motivos[corpo.codigo] ?? "A operação conflita com o estado atual."), {conflito: true});
@@ -77,6 +81,7 @@ function cartao(reserva) {
     acoes.append(botao);
   }
   if (acoes.childElementCount) artigo.append(acoes);
+  adicionarCancelamento(reserva, artigo, informar);
   return artigo;
 }
 
@@ -197,8 +202,37 @@ function cartaoEstoque(item) {
     campo.append(texto("dt", rotulo), texto("dd", valor));
     dados.append(campo);
   }
-  artigo.append(cabecalho, dados);
+  const acao = texto("button", item.permiteReserva ? "Desabilitar reservas" : "Habilitar reservas");
+  acao.type = "button";
+  acao.addEventListener("click", () => configurarPermissao(item, acao));
+  artigo.append(cabecalho, dados, acao);
   return artigo;
+}
+
+async function configurarPermissao(item, botao) {
+  const {unidadeId, itemId} = item;
+  const permiteReserva = !item.permiteReserva;
+  const operacao = `glicoacesso:permissao:${unidadeId}:${itemId}:${permiteReserva}`;
+  botao.disabled = true;
+  try {
+    const chave = sessionStorage.getItem(operacao) ?? crypto.randomUUID();
+    sessionStorage.setItem(operacao, chave);
+    await chamar(`/api/unidade/v1/painel/estoque/${unidadeId}/itens/${itemId}/permissao`, {
+      method: "PUT",
+      body: JSON.stringify({permiteReserva}),
+      headers: {"Content-Type": "application/json", "Idempotency-Key": chave},
+    });
+    sessionStorage.removeItem(operacao);
+    mensagemEstoque.classList.remove("erro");
+    mensagemEstoque.textContent = "Permissão atualizada. A consulta de disponibilidade será atualizada em instantes.";
+    botao.textContent = "Atualizando estoque…";
+    setTimeout(carregarEstoque, 2500);
+  } catch (erro) {
+    if (erro.conflito) sessionStorage.removeItem(operacao);
+    mensagemEstoque.classList.add("erro");
+    mensagemEstoque.textContent = erro instanceof TypeError ? "Falha de conexão. Repita a mesma ação." : erro.message;
+    botao.disabled = false;
+  }
 }
 
 async function carregarEstoque() {
@@ -234,3 +268,134 @@ formulario.addEventListener("submit", async (evento) => {
     botao.disabled = false;
   }
 });
+
+
+const consultaRetirada = document.querySelector("#consultar-retirada");
+const codigoRetirada = document.querySelector("#codigo-retirada");
+const statusRetirada = document.querySelector("#status-retirada");
+const resultadoRetirada = document.querySelector("#reserva-retirada");
+
+function informarRetirada(mensagem, erro = false) {
+  statusRetirada.textContent = mensagem;
+  statusRetirada.classList.toggle("erro", erro);
+}
+
+async function entregar(link, botao, artigo) {
+  const operacao = "glicoacesso:retirada:" + link.body.autorizacaoId;
+  botao.disabled = true;
+  informarRetirada("Registrando entrega…");
+  try {
+    const chave = sessionStorage.getItem(operacao) ?? crypto.randomUUID();
+    sessionStorage.setItem(operacao, chave);
+    const {corpo} = await chamar(link.href, {
+      method: link.method,
+      body: JSON.stringify(link.body),
+      headers: {"Content-Type": "application/json", "Idempotency-Key": chave},
+    });
+    sessionStorage.removeItem(operacao);
+    botao.remove();
+    artigo.append(texto("p", "Entrega registrada em " + data(corpo.realizadaEm) + "."));
+    informarRetirada("Código da retirada: " + corpo.retiradaId);
+  } catch (erro) {
+    if (erro.conflito) sessionStorage.removeItem(operacao);
+    informarRetirada(erro instanceof TypeError ? "Falha de conexão. Repita a mesma ação." : erro.message, true);
+    botao.disabled = false;
+  }
+}
+
+consultaRetirada.addEventListener("submit", async evento => {
+  evento.preventDefault();
+  const codigo = codigoRetirada.value.trim();
+  if (!/^[\da-f]{8}(?:-[\da-f]{4}){3}-[\da-f]{12}$/i.test(codigo)) {
+    informarRetirada("Informe um código de reserva válido.", true);
+    return;
+  }
+  const token = credencial.value.trim();
+  const consultar = evento.submitter;
+  consultar.disabled = true;
+  resultadoRetirada.replaceChildren();
+  informarRetirada("Consultando reserva…");
+  try {
+    const {corpo} = await chamar(`/api/unidade/v1/painel/reservas/${codigo}`);
+    if (credencial.value.trim() !== token) return;
+    const artigo = texto("article", "");
+    artigo.className = "cartao";
+    artigo.append(texto("h3", corpo.itemNome ?? corpo.itemId), texto("p", "Quantidade: " + corpo.quantidade));
+    resultadoRetirada.append(artigo);
+    const link = corpo._links?.["autorizacao-retirada"];
+    adicionarCancelamento(corpo, artigo, informarRetirada);
+    if (link) {
+      const botao = texto("button", "Registrar entrega");
+      botao.type = "button";
+      botao.addEventListener("click", () => entregar(link, botao, artigo));
+      artigo.append(botao);
+      informarRetirada("Reserva confirmada e autorização ativa.");
+    } else {
+      informarRetirada(corpo.dadosAutorizacao?.status === "UTILIZADA"
+        ? "A entrega já foi registrada." : "Reserva sem autorização disponível. Estado: " + corpo.status + ".");
+    }
+  } catch (erro) {
+    if (credencial.value.trim() === token) informarRetirada(
+      erro instanceof TypeError ? "Falha de conexão. Tente novamente." : erro.message, true,
+    );
+  } finally {
+    consultar.disabled = false;
+  }
+});
+
+credencial.addEventListener("input", () => {
+  resultadoRetirada.replaceChildren();
+  informarRetirada("");
+});
+
+
+function adicionarCancelamento(reserva, artigo, feedback) {
+  const link = reserva._links?.cancelar;
+  if (!link) return;
+  const formulario = document.createElement("form");
+  const campo = texto("label", "Justificativa do cancelamento");
+  const justificativa = document.createElement("textarea");
+  justificativa.required = true;
+  justificativa.minLength = 5;
+  campo.append(justificativa);
+  const botao = texto("button", "Cancelar reserva");
+  botao.type = "submit";
+  botao.className = "perigo";
+  formulario.append(campo, botao);
+  artigo.append(formulario);
+  formulario.addEventListener("submit", async evento => {
+    evento.preventDefault();
+    const motivo = justificativa.value.trim();
+    if (motivo.length < 5) {
+      feedback("Informe pelo menos cinco caracteres na justificativa.", true);
+      return;
+    }
+    const operacao = "glicoacesso:cancelar-unidade:" + reserva.reservaId;
+    const tentativa = JSON.parse(sessionStorage.getItem(operacao) ?? "null");
+    if (tentativa && tentativa.motivo !== motivo) {
+      feedback("Repita com a mesma justificativa para verificar o resultado da tentativa anterior.", true);
+      return;
+    }
+    const chave = tentativa?.chave ?? crypto.randomUUID();
+    sessionStorage.setItem(operacao, JSON.stringify({chave, motivo}));
+    botao.disabled = justificativa.disabled = true;
+    try {
+      const {status} = await chamar(link.href, {
+        method: link.method,
+        body: JSON.stringify({justificativa: motivo}),
+        headers: {"Content-Type": "application/json", "Idempotency-Key": chave},
+      });
+      if (status === 200) sessionStorage.removeItem(operacao);
+      artigo.querySelectorAll("button").forEach(outro => { outro.disabled = true; });
+      formulario.remove();
+      feedback(status === 202 ? "Cancelamento em processamento. Consulte novamente pelo código." : "Reserva cancelada.");
+    } catch (erro) {
+      if (erro.conflito) {
+        sessionStorage.removeItem(operacao);
+        formulario.remove();
+      }
+      feedback(erro instanceof TypeError ? "Falha de conexão. Repita o cancelamento." : erro.message, true);
+      botao.disabled = justificativa.disabled = false;
+    }
+  });
+}

@@ -97,3 +97,20 @@ def ator_delegado(papel: str | None, ator_id: str | None, unidade: str | None) -
         return Ator("PROFISSIONAL", ator_id, UUID(unidade or ""))
     except ValueError:
         raise HTTPException(403, "Unidade do ator delegado inválida.") from None
+
+
+def retiradas_autenticado(credencial: Credencial) -> None:
+    validar_token(credencial, "GLICO_RETIRADAS_SERVICE_TOKEN")
+
+
+def ator_cancelamento(papel: str | None, ator_id: str | None, unidade: str | None) -> Ator:
+    if papel == "CIDADAO" and ator_id and unidade is None:
+        return Ator("CIDADAO", ator_id)
+    return ator_delegado(papel, ator_id, unidade)
+
+
+def cabecalhos_ator(ator: Ator) -> dict[str, str]:
+    cabecalhos = {"X-Ator-Papel": ator.papel, "X-Ator-Id": ator.id}
+    if ator.unidadeId is not None:
+        cabecalhos["X-Ator-Unidade-Id"] = str(ator.unidadeId)
+    return cabecalhos

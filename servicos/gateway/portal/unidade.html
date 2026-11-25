@@ -42,6 +42,19 @@
       <div id="lista" class="lista"></div>
     </section>
 
+    <section class="resultados" aria-labelledby="titulo-retiradas">
+      <h2 id="titulo-retiradas">Consultar reserva e registrar retirada</h2>
+      <form id="consultar-retirada">
+        <div class="campo">
+          <label for="codigo-retirada">Código da reserva</label>
+          <input id="codigo-retirada" type="text" required autocomplete="off" spellcheck="false">
+        </div>
+        <button type="submit">Consultar reserva</button>
+      </form>
+      <p id="status-retirada" class="status" role="status" aria-live="polite"></p>
+      <div id="reserva-retirada" class="lista"></div>
+    </section>
+
     <section class="resultados" aria-labelledby="titulo-estoque">
       <h2 id="titulo-estoque">Estoque da unidade</h2>
       <form id="entrada-estoque" hidden>

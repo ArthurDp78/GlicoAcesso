@@ -1,7 +1,28 @@
 from contextlib import asynccontextmanager
 
 import httpx
-from fastapi import FastAPI, HTTPException
+from contextvars import ContextVar
+from uuid import UUID, uuid4
+
+from fastapi import FastAPI, HTTPException, Request
+
+
+correlacao = ContextVar[UUID | None]("correlacao", default=None)
+CABECALHO_CORRELACAO = "X-Correlation-Id"
+
+
+async def correlacionar(request: Request, continuar):
+    try:
+        identificador = UUID(request.headers.get(CABECALHO_CORRELACAO, ""))
+    except ValueError:
+        identificador = uuid4()
+    token = correlacao.set(identificador)
+    try:
+        resposta = await continuar(request)
+        resposta.headers[CABECALHO_CORRELACAO] = str(identificador)
+        return resposta
+    finally:
+        correlacao.reset(token)
 
 
 @asynccontextmanager
@@ -13,7 +34,10 @@ async def cliente_http(app: FastAPI):
 
 async def requisitar(cliente: httpx.AsyncClient, metodo: str, url: str, **opcoes) -> httpx.Response:
     try:
-        return await cliente.request(metodo, url, **opcoes)
+        headers = httpx.Headers(opcoes.pop("headers", None))
+        if (identificador := correlacao.get()) is not None:
+            headers[CABECALHO_CORRELACAO] = str(identificador)
+        return await cliente.request(metodo, url, headers=headers, **opcoes)
     except httpx.TimeoutException as erro:
         raise HTTPException(504, "O serviço de consulta demorou a responder.") from erro
     except httpx.RequestError as erro:

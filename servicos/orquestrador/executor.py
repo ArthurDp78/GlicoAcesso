@@ -9,6 +9,7 @@ import os
 import threading
 
 import httpx
+from psycopg.errors import UniqueViolation
 from psycopg.types.json import Jsonb
 
 from servicos.banco import conectar
@@ -66,6 +67,23 @@ def avancar(conexao, etapa, status: int, corpo: dict) -> bool:
                                                    f"/internal/v1/autorizacoes/{reserva}/cancelar", None, cabecalho_saga),
     }
     match etapa["etapa_id"], status, codigo:
+        case "INICIAR_CANCELAMENTO", 200, _:
+            nova_etapa(conexao, saga, "REVOGAR_PARA_CANCELAR", "retiradas", "POST",
+                       f"/internal/v1/autorizacoes/{reserva}/cancelar", cabecalhos=cabecalho_saga)
+        case ("INICIAR_CANCELAMENTO", 403 | 404, _) | ("INICIAR_CANCELAMENTO", 409, "ESTADO_INCOMPATIVEL"):
+            mudar_estado(conexao, saga, "INTERROMPIDA", codigo or f"HTTP_{status}", encerrar=True)
+        case ("REVOGAR_PARA_CANCELAR", 200, _) | ("REVOGAR_PARA_CANCELAR", 404, "AUTORIZACAO_NAO_ENCONTRADA"):
+            nova_etapa(conexao, saga, "LIBERAR_PARA_CANCELAR", "estoque", "DELETE",
+                       f"/internal/v1/alocacoes/{reserva}", cabecalhos=cabecalho_saga)
+        case "REVOGAR_PARA_CANCELAR", 409, "ENTREGA_JA_REGISTRADA" if corpo.get("retiradaId"):
+            mudar_estado(conexao, saga, "INTERROMPIDA", codigo, encerrar=True)
+        case "LIBERAR_PARA_CANCELAR", 204, _:
+            nova_etapa(conexao, saga, "FINALIZAR_CANCELAMENTO", "reservas", "POST",
+                       f"/internal/v1/reservas/{reserva}/finalizar-cancelamento", comando_saga)
+        case "FINALIZAR_CANCELAMENTO", 200, _:
+            mudar_estado(conexao, saga, "CANCELADA", encerrar=True)
+        case "FINALIZAR_CANCELAMENTO", 409, "ESTADO_INCOMPATIVEL" if corpo.get("status") == "RETIRADA":
+            mudar_estado(conexao, saga, "INTERROMPIDA", "ENTREGA_JA_REGISTRADA", encerrar=True)
         case "ACEITAR_RESERVA", 200, _:
             dados = {"sagaId": str(saga), "reservaId": str(reserva), "unidadeId": corpo["unidadeId"],
                      "itemId": corpo["itemId"], "quantidade": corpo["quantidade"]}
@@ -87,6 +105,8 @@ def avancar(conexao, etapa, status: int, corpo: dict) -> bool:
             compensar("CANCELAR_AUTORIZACAO")  # A autorização pode existir: revogar antes de liberar.
         case "CONFIRMAR_RESERVA", 200, _:
             mudar_estado(conexao, saga, "CONCLUIDA", encerrar=True)
+        case "CANCELAR_AUTORIZACAO", 409, "ENTREGA_JA_REGISTRADA" if corpo.get("retiradaId"):
+            mudar_estado(conexao, saga, "INTERROMPIDA", codigo, encerrar=True)
         case ("CANCELAR_AUTORIZACAO", 200, _) | ("CANCELAR_AUTORIZACAO", 404, "AUTORIZACAO_NAO_ENCONTRADA"):
             etapas["LIBERAR_ALOCACAO"]()
         case "LIBERAR_ALOCACAO", 204, _:
@@ -128,12 +148,28 @@ def executar_uma(cliente: httpx.Client) -> bool:
                    s.reserva_id, s.correlation_id, s.estado
             FROM saga_etapas e JOIN saga_execucoes s USING (saga_id)
             WHERE e.estado_tecnico = 'PENDENTE' AND e.proximo_retry_em <= now()
+              AND (
+                s.estado IN ('EM_EXECUCAO','COMPENSANDO','COMPENSACAO_PENDENTE','CANCELANDO','CANCELAMENTO_PENDENTE')
+                OR (s.estado = 'AGUARDANDO_CONFIRMACAO' AND NOT EXISTS (
+                    SELECT 1 FROM saga_execucoes ativa
+                    WHERE ativa.reserva_id = s.reserva_id
+                      AND ativa.estado IN ('EM_EXECUCAO','COMPENSANDO','COMPENSACAO_PENDENTE',
+                                           'CANCELANDO','CANCELAMENTO_PENDENTE')
+                ))
+              )
             ORDER BY e.proximo_retry_em
             LIMIT 1
             FOR UPDATE OF e, s SKIP LOCKED
         """).fetchone()
         if etapa is None:
             return False
+        if etapa["estado"] == "AGUARDANDO_CONFIRMACAO":
+            try:
+                with conexao.transaction():
+                    mudar_estado(conexao, etapa["saga_id"], "CANCELANDO")
+            except UniqueViolation:
+                return False
+            etapa["estado"] = "CANCELANDO"
         # A chamada ocorre com a etapa travada: só este trabalhador decide o passo seguinte.
         try:
             status, corpo, erro = chamar(cliente, etapa)
@@ -152,6 +188,9 @@ def executar_uma(cliente: httpx.Client) -> bool:
             conexao.execute("""
                 UPDATE saga_execucoes SET estado = 'COMPENSANDO' WHERE saga_id = %s AND estado = 'COMPENSACAO_PENDENTE'
             """, (etapa["saga_id"],))
+            conexao.execute("""
+                UPDATE saga_execucoes SET estado = 'CANCELANDO' WHERE saga_id = %s AND estado = 'CANCELAMENTO_PENDENTE'
+            """, (etapa["saga_id"],))
             log.info("SAGA %s: %s -> HTTP %s", etapa["saga_id"], etapa["etapa_id"], status)
             return True
         espera = min(2 ** etapa["tentativas"], BACKOFF_MAXIMO)
@@ -163,6 +202,8 @@ def executar_uma(cliente: httpx.Client) -> bool:
         """, (espera, erro[:500], etapa["saga_id"], etapa["etapa_id"]))
         if etapa["estado"] == "COMPENSANDO":
             mudar_estado(conexao, etapa["saga_id"], "COMPENSACAO_PENDENTE")
+        if etapa["estado"] == "CANCELANDO":
+            mudar_estado(conexao, etapa["saga_id"], "CANCELAMENTO_PENDENTE")
         log.warning("SAGA %s: %s nova tentativa em %ss (%s)", etapa["saga_id"], etapa["etapa_id"], espera, erro)
         return True
 

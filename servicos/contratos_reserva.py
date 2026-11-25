@@ -1,7 +1,7 @@
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, StringConstraints
 
 
 class PedidoReserva(BaseModel):
@@ -31,8 +31,16 @@ class ReservaInterna(DadosReserva):
 
 class LinkReserva(BaseModel):
     href: str
-    method: Literal["GET"]
+    method: Literal["GET", "POST"]
 
 
 class ReservaPublica(DadosReserva):
     links: dict[str, LinkReserva] = Field(serialization_alias="_links")
+
+
+ESTADOS_CANCELAVEIS = ("SOLICITADA", "EM_CONFIRMACAO", "CONFIRMADA")
+
+
+class JustificativaCancelamento(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    justificativa: Annotated[str, StringConstraints(strip_whitespace=True, min_length=5, pattern=r"^[^\x00]+$")]

@@ -1,4 +1,7 @@
+import logging
 import os
+import threading
+from contextlib import asynccontextmanager
 from hashlib import sha256
 from typing import Annotated, Literal
 from uuid import UUID, uuid4
@@ -10,14 +13,33 @@ from psycopg.types.json import Jsonb
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from servicos.banco import BancoIndisponivel, conectar
-from servicos.contratos_reserva import PedidoReserva, ReservaInterna
+from servicos.idempotencia import gravar_resultado, resultado_anterior
+from servicos.contratos_reserva import JustificativaCancelamento, PedidoReserva, ReservaInterna
+from servicos.contratos_retirada import EstadoCanonico
 from servicos.http import cliente_http, consultar
 from servicos.identidade_demo import (
-    Ator, AtorAutenticado, ator_delegado, cidadao_autenticado, orquestrador_autenticado, profissional_autenticado,
+    Ator, AtorAutenticado, ator_cancelamento, ator_delegado, cidadao_autenticado, orquestrador_autenticado, profissional_autenticado,
+    retiradas_autenticado,
 )
 
 
-app = FastAPI(title="GlicoAcesso — Reservas", lifespan=cliente_http)
+from servicos.mensageria import declarar_retiradas, iniciar_consumidor
+from servicos.reservas.eventos import FILA, aplicar_retirada
+
+
+@asynccontextmanager
+async def ciclo(app: FastAPI):
+    parar = threading.Event()
+    async with cliente_http(app):
+        iniciar_consumidor(FILA, declarar_retiradas, aplicar_retirada, parar)
+        threading.Thread(target=expirar_periodicamente, args=(parar,), name="expirar-reservas", daemon=True).start()
+        try:
+            yield
+        finally:
+            parar.set()
+
+
+app = FastAPI(title="GlicoAcesso — Reservas", lifespan=ciclo)
 BANCO = "RESERVAS_DATABASE_URL"
 OPERACAO = "criar-reserva"
 Cidadao = Annotated[str, Depends(cidadao_autenticado)]
@@ -189,7 +211,7 @@ def listar_pendentes_da_unidade(unidade_id: UUID):
     with conectar(BANCO) as conexao:
         return conexao.execute(f"""
             SELECT {CAMPOS} FROM reservas
-            WHERE unidade_id = %s AND status = 'SOLICITADA'
+            WHERE unidade_id = %s AND status = 'SOLICITADA' AND decisao_ate > clock_timestamp()
             ORDER BY decisao_ate, reserva_id
         """, (unidade_id,)).fetchall()
 
@@ -228,7 +250,7 @@ def registrar_decisao(profissional: str, unidade: UUID, reserva_id: UUID, decisa
                 return conflito("CHAVE_IDEMPOTENTE_CONFLITANTE", "Chave reutilizada com outra reserva ou decisão.")
             return anterior["http_status"], anterior["resposta"]
         reserva = conexao.execute("""
-            SELECT unidade_id, status, decisao_ate > now() AS no_prazo
+            SELECT unidade_id, status, decisao_ate
             FROM reservas WHERE reserva_id = %s FOR UPDATE
         """, (reserva_id,)).fetchone()
         if reserva is None:
@@ -237,7 +259,7 @@ def registrar_decisao(profissional: str, unidade: UUID, reserva_id: UUID, decisa
             raise HTTPException(403, "Reserva de outra unidade.")
         if reserva["status"] != "SOLICITADA":
             resultado = conflito("ESTADO_INCOMPATIVEL", f"A reserva está {reserva['status']}.")
-        elif not reserva["no_prazo"]:
+        elif not prazo_vigente(conexao, reserva["decisao_ate"]):
             resultado = conflito("ESTADO_INCOMPATIVEL", "O prazo de decisão terminou.")
         elif decisao == "ACEITAR":
             # O aceite só muda o estado pelo comando do Orquestrador; aqui fixa-se o destino da chave.
@@ -299,7 +321,7 @@ def registrar_transicao(operacao: str, reserva_id: UUID, saga_id: UUID, chave: s
                 return conflito("CHAVE_IDEMPOTENTE_CONFLITANTE", "Chave reutilizada com outro comando.")
             return anterior["http_status"], anterior["resposta"]
         reserva = conexao.execute(f"""
-            SELECT {CAMPOS}, decisao_ate > now() AS "noPrazo"
+            SELECT {CAMPOS}, decisao_ate
             FROM reservas WHERE reserva_id = %s FOR UPDATE
         """, (reserva_id,)).fetchone()
         if reserva is None:
@@ -308,7 +330,7 @@ def registrar_transicao(operacao: str, reserva_id: UUID, saga_id: UUID, chave: s
             raise HTTPException(403, "Reserva de outra unidade.")
         if reserva["status"] != origem:
             resultado = conflito("ESTADO_INCOMPATIVEL", f"A reserva está {reserva['status']}.")
-        elif ator is not None and not reserva["noPrazo"]:
+        elif ator is not None and not prazo_vigente(conexao, reserva["decisao_ate"]):
             resultado = conflito("ESTADO_INCOMPATIVEL", "O prazo de decisão terminou.")
         else:
             conexao.execute("""
@@ -365,3 +387,170 @@ async def falhar_confirmacao(reservaId: UUID, comando: ComandoSaga, _orquestrado
     return responder(await run_in_threadpool(
         registrar_transicao, "falhar-confirmacao", reservaId, comando.sagaId, chave, "EM_CONFIRMACAO", "FALHA_CONFIRMACAO"
     ))
+
+
+@app.get("/internal/v1/reservas/{reservaId}/estado", response_model=EstadoCanonico,
+         dependencies=[Depends(retiradas_autenticado)])
+def consultar_estado_canonico(reservaId: UUID, response: Response):
+    with conectar(BANCO) as conexao:
+        estado = conexao.execute(
+            'SELECT reserva_id AS "reservaId", status FROM reservas WHERE reserva_id = %s', (reservaId,),
+        ).fetchone()
+    if estado is None:
+        raise HTTPException(404, "Reserva não encontrada.")
+    response.headers["Cache-Control"] = "no-store"
+    return estado
+
+
+def prazo_vigente(conexao, prazo):
+    return conexao.execute("SELECT %s > clock_timestamp() AS vigente", (prazo,)).fetchone()["vigente"]
+
+
+def expirar_periodicamente(parar: threading.Event):
+    log = logging.getLogger("uvicorn.error")
+    while not parar.is_set():
+        try:
+            with conectar(BANCO) as conexao:
+                conexao.execute("""
+                    WITH vencidas AS (
+                        SELECT reserva_id FROM reservas
+                        WHERE status = 'SOLICITADA' AND decisao_ate <= clock_timestamp()
+                        ORDER BY decisao_ate LIMIT 100 FOR UPDATE SKIP LOCKED
+                    ), expiradas AS (
+                        UPDATE reservas r SET status = 'EXPIRADA', atualizada_em = clock_timestamp()
+                        FROM vencidas v WHERE r.reserva_id = v.reserva_id
+                        RETURNING r.reserva_id, r.atualizada_em
+                    )
+                    INSERT INTO historico_reserva
+                        (historico_id, reserva_id, status_anterior, status_posterior, ocorrido_em, ator_id)
+                    SELECT gen_random_uuid(), reserva_id, 'SOLICITADA', 'EXPIRADA', atualizada_em, 'reservas'
+                    FROM expiradas
+                """)
+        except Exception:
+            log.exception("Falha ao expirar solicitações.")
+        parar.wait(1)
+
+
+class IniciarCancelamento(ComandoSaga):
+    justificativa: str | None = None
+
+
+def conferir_justificativa(ator: Ator, justificativa: str | None) -> str | None:
+    if ator.papel == "CIDADAO" and justificativa is None:
+        return None
+    if ator.papel == "PROFISSIONAL" and justificativa is not None:
+        try:
+            return JustificativaCancelamento(justificativa=justificativa).justificativa
+        except ValidationError:
+            pass
+    raise HTTPException(422, "Justificativa inválida para o papel informado.")
+
+
+def autorizar_cancelamento(reserva, ator):
+    if reserva is None or (ator.papel == "CIDADAO" and reserva["cidadao_id"] != ator.id):
+        raise HTTPException(404, "Reserva não encontrada.")
+    if ator.papel == "PROFISSIONAL" and reserva["unidade_id"] != ator.unidadeId:
+        raise HTTPException(403, "Reserva de outra unidade.")
+
+
+def mudar_cancelamento(conexao, reserva_id, anterior, destino, ator_id, justificativa, saga_id):
+    conexao.execute("""
+        UPDATE reservas SET status = %s, cancelamento_saga_id = %s, atualizada_em = clock_timestamp()
+        WHERE reserva_id = %s
+    """, (destino, saga_id, reserva_id))
+    conexao.execute("""
+        INSERT INTO historico_reserva (historico_id, reserva_id, status_anterior, status_posterior,
+                                       ocorrido_em, ator_id, justificativa, saga_id)
+        VALUES (%s, %s, %s, %s, clock_timestamp(), %s, %s, %s)
+    """, (uuid4(), reserva_id, anterior, destino, ator_id, justificativa, saga_id))
+    return 200, {"reservaId": str(reserva_id), "status": destino}
+
+
+def cancelar_reserva(reserva_id, ator, chave, justificativa=None, *, saga_id=None, finalizar=False):
+    if not chave.strip() or "\x00" in chave:
+        raise HTTPException(422, "Chave idempotente inválida.")
+    operacao = "finalizar-cancelamento" if finalizar else "iniciar-cancelamento" if saga_id else "cancelamento-local"
+    principal = f"{ator.papel}:{ator.id}" if ator else "orquestrador"
+    resumo = sha256(str((reserva_id, justificativa, saga_id, ator and ator.unidadeId)).encode()).hexdigest()
+    with conectar(BANCO) as conexao:
+        anterior = resultado_anterior(conexao, operacao, principal, chave, resumo)
+        if anterior is not None:
+            return anterior
+        reserva = conexao.execute("""
+            SELECT cidadao_id, unidade_id, status, cancelamento_saga_id, decisao_ate
+            FROM reservas WHERE reserva_id = %s FOR UPDATE
+        """, (reserva_id,)).fetchone()
+        if ator is not None:
+            autorizar_cancelamento(reserva, ator)
+        elif reserva is None:
+            raise HTTPException(404, "Reserva não encontrada.")
+        estado = reserva["status"]
+        if finalizar and estado == "CANCELAMENTO_EM_ANDAMENTO" and reserva["cancelamento_saga_id"] == saga_id:
+            resultado = mudar_cancelamento(conexao, reserva_id, estado, "CANCELADA", principal, None, saga_id)
+        elif saga_id is not None and not finalizar and estado in ("EM_CONFIRMACAO", "CONFIRMADA"):
+            resultado = mudar_cancelamento(
+                conexao, reserva_id, estado, "CANCELAMENTO_EM_ANDAMENTO", ator.id, justificativa, saga_id,
+            )
+        elif saga_id is None and estado == "SOLICITADA" and prazo_vigente(conexao, reserva["decisao_ate"]):
+            resultado = mudar_cancelamento(conexao, reserva_id, estado, "CANCELADA", ator.id, justificativa, None)
+        elif saga_id is None and estado in ("EM_CONFIRMACAO", "CONFIRMADA"):
+            resultado = conflito("CANCELAMENTO_DISTRIBUIDO", "Encaminhe o cancelamento ao Orquestrador.")
+        elif saga_id is None and estado == "CANCELAMENTO_EM_ANDAMENTO":
+            resultado = conflito("CANCELAMENTO_EM_ANDAMENTO", "Já existe um cancelamento em andamento.")
+        else:
+            resultado = 409, {"codigo": "ESTADO_INCOMPATIVEL", "mensagem": "A reserva não pode ser cancelada.",
+                              "status": estado}
+        return gravar_resultado(conexao, operacao, principal, chave, resumo, resultado)
+
+
+@app.post("/api/cidadao/v1/reservas/{reservaId}/cancelar")
+def cancelar_cidadao(reservaId: UUID, cidadao: Cidadao, chave: Chave):
+    return responder(cancelar_reserva(reservaId, Ator("CIDADAO", cidadao), chave))
+
+
+@app.post("/api/unidade/v1/reservas/{reservaId}/cancelar")
+async def cancelar_unidade(request: Request, reservaId: UUID, corpo: JustificativaCancelamento,
+                          profissional: Profissional, chave: Chave):
+    await verificar_vinculo(request, profissional)
+    return responder(await run_in_threadpool(
+        cancelar_reserva, reservaId, profissional, chave, corpo.justificativa,
+    ))
+
+
+def delegado_cancelamento(
+    _orquestrador: Orquestrador,
+    papel: Annotated[str | None, Header(alias="X-Ator-Papel")] = None,
+    ator_id: Annotated[str | None, Header(alias="X-Ator-Id")] = None,
+    unidade: Annotated[str | None, Header(alias="X-Ator-Unidade-Id")] = None,
+):
+    return ator_cancelamento(papel, ator_id, unidade)
+
+
+DelegadoCancelamento = Annotated[Ator, Depends(delegado_cancelamento)]
+
+
+@app.get("/internal/v1/reservas/{reservaId}/permissao-cancelamento", response_model=EstadoCanonico)
+async def permissao_cancelamento(request: Request, reservaId: UUID, ator: DelegadoCancelamento, response: Response):
+    if ator.papel == "PROFISSIONAL":
+        await verificar_vinculo(request, ator)
+    reserva = await run_in_threadpool(buscar_reserva, reservaId)
+    dados = None if reserva is None else {"cidadao_id": reserva["cidadaoId"], "unidade_id": reserva["unidadeId"]}
+    autorizar_cancelamento(dados, ator)
+    response.headers["Cache-Control"] = "no-store"
+    return {"reservaId": reservaId, "status": reserva["status"]}
+
+
+@app.post("/internal/v1/reservas/{reservaId}/iniciar-cancelamento")
+async def iniciar_cancelamento(request: Request, reservaId: UUID, comando: IniciarCancelamento,
+                              ator: DelegadoCancelamento, chave: Chave):
+    if ator.papel == "PROFISSIONAL":
+        await verificar_vinculo(request, ator)
+    justificativa = conferir_justificativa(ator, comando.justificativa)
+    return responder(await run_in_threadpool(
+        cancelar_reserva, reservaId, ator, chave, justificativa, saga_id=comando.sagaId,
+    ))
+
+
+@app.post("/internal/v1/reservas/{reservaId}/finalizar-cancelamento")
+def finalizar_cancelamento(reservaId: UUID, comando: ComandoSaga, _orquestrador: Orquestrador, chave: Chave):
+    return responder(cancelar_reserva(reservaId, None, chave, saga_id=comando.sagaId, finalizar=True))

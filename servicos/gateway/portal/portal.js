@@ -109,6 +109,7 @@ const formularioAcompanhamento = document.querySelector("#acompanhar-reserva");
 const credencial = document.querySelector("#credencial");
 const codigoReserva = document.querySelector("#codigo-reserva");
 const mensagemReserva = document.querySelector("#status-reserva");
+const acoesReserva = document.querySelector("#acoes-reserva");
 let selecaoReserva;
 let ultimaTentativa;
 
@@ -138,7 +139,10 @@ async function requisitarReserva(recurso, opcoes = {}) {
   if (resposta.status === 401) throw new Error("Token do cidadão inválido.");
   if (resposta.status === 404) throw new Error("Reserva não encontrada para este cidadão.");
   if (resposta.status === 422) throw new Error("Confira os dados. A unidade ou o item pode não aceitar reservas.");
-  if (resposta.status === 409) throw new Error("A chave deste pedido já foi usada com outros dados.");
+  if (resposta.status === 409) {
+    const erro = await resposta.json().catch(() => ({}));
+    throw Object.assign(new Error(erro.mensagem ?? "A reserva mudou. Consulte novamente."), {conflito: true});
+  }
   if (!resposta.ok) throw new Error("Não foi possível concluir. Tente novamente.");
   return resposta.json();
 }
@@ -159,6 +163,7 @@ formularioReserva.addEventListener("submit", async (evento) => {
     codigoReserva.value = reserva.reservaId;
     ultimaTentativa = undefined;
     informarReserva("Solicitação registrada. Estado: " + reserva.status + ".");
+    mostrarCancelamento(reserva);
     formularioReserva.hidden = true;
     codigoReserva.focus();
   } catch (erro) {
@@ -172,10 +177,12 @@ formularioAcompanhamento.addEventListener("submit", async (evento) => {
   evento.preventDefault();
   const botao = evento.submitter;
   botao.disabled = true;
+  acoesReserva.replaceChildren();
   informarReserva("Consultando reserva…");
   try {
     const reserva = await requisitarReserva("/reservas/" + encodeURIComponent(codigoReserva.value.trim()));
     informarReserva("Estado: " + reserva.status + ". Quantidade: " + reserva.quantidade + ".");
+    mostrarCancelamento(reserva);
   } catch (erro) {
     informarReserva(erro instanceof TypeError ? "Falha de conexão. Tente consultar novamente." : erro.message, true);
   } finally {
@@ -183,3 +190,43 @@ formularioAcompanhamento.addEventListener("submit", async (evento) => {
   }
 });
 carregarCatalogo();
+
+
+function mostrarCancelamento(reserva) {
+  acoesReserva.replaceChildren();
+  const link = reserva._links?.cancelar;
+  if (!link) return;
+  const botao = document.createElement("button");
+  botao.type = "button";
+  botao.textContent = "Cancelar reserva";
+  botao.addEventListener("click", async () => {
+    if (!window.confirm("Cancelar esta reserva?")) return;
+    const operacao = "glicoacesso:cancelar-cidadao:" + reserva.reservaId;
+    const chave = sessionStorage.getItem(operacao) ?? crypto.randomUUID();
+    sessionStorage.setItem(operacao, chave);
+    botao.disabled = true;
+    try {
+      const resultado = await requisitarReserva(link.href.slice(api.length), {
+        method: link.method, headers: {"Idempotency-Key": chave},
+      });
+      acoesReserva.replaceChildren();
+      if (resultado.status === "CANCELADA") {
+        sessionStorage.removeItem(operacao);
+        informarReserva("Reserva cancelada.");
+      } else {
+        informarReserva("Cancelamento em processamento. Consulte pelo código da reserva.");
+      }
+    } catch (erro) {
+      if (erro.conflito) {
+        sessionStorage.removeItem(operacao);
+        acoesReserva.replaceChildren();
+      }
+      informarReserva(erro instanceof TypeError ? "Falha de conexão. Repita o cancelamento." : erro.message, true);
+      botao.disabled = false;
+    }
+  });
+  acoesReserva.append(botao);
+}
+
+codigoReserva.addEventListener("input", () => acoesReserva.replaceChildren());
+credencial.addEventListener("input", () => acoesReserva.replaceChildren());

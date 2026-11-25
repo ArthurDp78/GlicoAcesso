@@ -1,16 +1,20 @@
 import asyncio
 import os
-from typing import Literal
+from typing import Annotated, Literal
 from uuid import UUID
 
-from fastapi import FastAPI, Header, HTTPException, Request, Response
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
-from servicos.contratos_reserva import DadosReserva, LinkReserva, PedidoReserva, ReservaPublica
-from servicos.http import cliente_http, consultar, requisitar
+from servicos.cancelamento_bff import cancelar_pelo_bff
+from servicos.contratos_reserva import ESTADOS_CANCELAVEIS, DadosReserva, LinkReserva, PedidoReserva, ReservaPublica
+from servicos.delegacao_unidade import emitir_credencial_cidadao
+from servicos.identidade_demo import cidadao_autenticado
+from servicos.http import cliente_http, consultar, correlacionar, requisitar
 
 
 app = FastAPI(title="GlicoAcesso — BFF Cidadão", lifespan=cliente_http)
+app.middleware("http")(correlacionar)
 
 
 class Unidade(BaseModel):
@@ -141,7 +145,10 @@ def apresentar_reserva(resposta, status_esperado: int, saida: Response):
     saida.headers["Cache-Control"] = "no-store"
     if status_esperado == 201:
         saida.headers["Location"] = href
-    return ReservaPublica(**dados.model_dump(), links={"self": LinkReserva(href=href, method="GET")})
+    links = {"self": LinkReserva(href=href, method="GET")}
+    if dados.status in ESTADOS_CANCELAVEIS:
+        links["cancelar"] = LinkReserva(href=href + "/cancelar", method="POST")
+    return ReservaPublica(**dados.model_dump(), links=links)
 
 
 @app.post("/api/cidadao/v1/reservas", status_code=201, response_model=ReservaPublica)
@@ -164,3 +171,16 @@ async def consultar_reserva(request: Request, response: Response, reservaId: UUI
         headers=cabecalhos_autenticados(request),
     )
     return apresentar_reserva(resposta, 200, response)
+
+
+@app.post("/api/cidadao/v1/reservas/{reservaId}/cancelar")
+async def cancelar_reserva(
+    request: Request, reservaId: UUID,
+    cidadao: Annotated[str, Depends(cidadao_autenticado)],
+    chave: Annotated[str, Header(alias="Idempotency-Key", min_length=1, max_length=128)],
+):
+    rota = f"/api/cidadao/v1/reservas/{reservaId}"
+    return await cancelar_pelo_bff(
+        request, origem_reservas(), os.getenv("ORQUESTRADOR_URL", "http://127.0.0.1:8006").rstrip("/"),
+        rota + "/cancelar", rota, reservaId, chave, lambda: emitir_credencial_cidadao(cidadao),
+    )
