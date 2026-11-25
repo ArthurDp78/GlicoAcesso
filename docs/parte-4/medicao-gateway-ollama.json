@@ -1,0 +1,38 @@
+[
+  {
+    "caso": "solicitacao",
+    "ms_total_http": 12104.01,
+    "modo": "orientacao_basica",
+    "http": 200
+  },
+  {
+    "caso": "confirmacao",
+    "ms_total_http": 12077.4,
+    "modo": "orientacao_basica",
+    "http": 200
+  },
+  {
+    "caso": "retirada",
+    "ms_total_http": 12068.547,
+    "modo": "orientacao_basica",
+    "http": 200
+  },
+  {
+    "caso": "cancelamento",
+    "ms_total_http": 12062.604,
+    "modo": "orientacao_basica",
+    "http": 200
+  },
+  {
+    "caso": "disponibilidade",
+    "ms_total_http": 12069.838,
+    "modo": "orientacao_basica",
+    "http": 200
+  },
+  {
+    "caso": "fora_da_base",
+    "ms_total_http": 268.669,
+    "modo": "orientacao_basica",
+    "http": 200
+  }
+]

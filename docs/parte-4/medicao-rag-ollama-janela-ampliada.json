@@ -1,0 +1,188 @@
+{
+  "executado_em": "2026-11-25T14:44:51.726403+00:00",
+  "prazo_total_s": 45.0,
+  "prazo_por_tentativa_geracao_s": 45.0,
+  "modelos_locais": {
+    "embedding": "qwen3-embedding:0.6b",
+    "geracao": "qwen2.5:3b"
+  },
+  "tarifas_openai": {
+    "data": "2026-11-25",
+    "usd_por_milhao": {
+      "embedding": 0.02,
+      "entrada": 0.4,
+      "saida": 1.6
+    }
+  },
+  "amostras": [
+    {
+      "rodada": 1,
+      "caso": "solicitacao",
+      "modo": "orientacao_basica",
+      "interrupcao": "TimeoutError",
+      "chamadas_geracao": 1,
+      "ms_total": 45003.786,
+      "ms_etapas": {
+        "bff": 185.485,
+        "embedding": 119.964,
+        "busca_vetorial": 11.839,
+        "geracao": 44681.832,
+        "chain_e_validacao": 4.666
+      },
+      "tokens_ollama": {
+        "embedding": 17,
+        "entrada": 0,
+        "saida": 0
+      },
+      "tokens_estimados_openai": {
+        "embedding": 16,
+        "entrada": 1082,
+        "saida": 0
+      },
+      "custo_estimado_openai_usd": 0.00043312
+    },
+    {
+      "rodada": 1,
+      "caso": "confirmacao",
+      "modo": "orientacao_basica",
+      "interrupcao": null,
+      "chamadas_geracao": 1,
+      "ms_total": 19119.225,
+      "ms_etapas": {
+        "bff": 104.069,
+        "embedding": 127.993,
+        "busca_vetorial": 19.746,
+        "geracao": 18864.09,
+        "chain_e_validacao": 3.327
+      },
+      "tokens_ollama": {
+        "embedding": 20,
+        "entrada": 1076,
+        "saida": 125
+      },
+      "tokens_estimados_openai": {
+        "embedding": 20,
+        "entrada": 1076,
+        "saida": 94
+      },
+      "custo_estimado_openai_usd": 0.0005812
+    },
+    {
+      "rodada": 1,
+      "caso": "retirada",
+      "modo": "orientacao_basica",
+      "interrupcao": null,
+      "chamadas_geracao": 1,
+      "ms_total": 7492.431,
+      "ms_etapas": {
+        "bff": 97.984,
+        "embedding": 75.574,
+        "busca_vetorial": 7.575,
+        "geracao": 7308.325,
+        "chain_e_validacao": 2.974
+      },
+      "tokens_ollama": {
+        "embedding": 13,
+        "entrada": 1016,
+        "saida": 163
+      },
+      "tokens_estimados_openai": {
+        "embedding": 12,
+        "entrada": 1012,
+        "saida": 132
+      },
+      "custo_estimado_openai_usd": 0.00061624
+    },
+    {
+      "rodada": 1,
+      "caso": "cancelamento",
+      "modo": "orientacao_basica",
+      "interrupcao": null,
+      "chamadas_geracao": 1,
+      "ms_total": 4648.462,
+      "ms_etapas": {
+        "bff": 101.438,
+        "embedding": 76.029,
+        "busca_vetorial": 21.232,
+        "geracao": 4443.715,
+        "chain_e_validacao": 6.048
+      },
+      "tokens_ollama": {
+        "embedding": 18,
+        "entrada": 1020,
+        "saida": 95
+      },
+      "tokens_estimados_openai": {
+        "embedding": 17,
+        "entrada": 1025,
+        "saida": 75
+      },
+      "custo_estimado_openai_usd": 0.00053034
+    },
+    {
+      "rodada": 1,
+      "caso": "disponibilidade",
+      "modo": "orientacao_basica",
+      "interrupcao": null,
+      "chamadas_geracao": 1,
+      "ms_total": 10645.712,
+      "ms_etapas": {
+        "bff": 99.542,
+        "embedding": 59.261,
+        "busca_vetorial": 7.539,
+        "geracao": 10475.92,
+        "chain_e_validacao": 3.45
+      },
+      "tokens_ollama": {
+        "embedding": 23,
+        "entrada": 1112,
+        "saida": 236
+      },
+      "tokens_estimados_openai": {
+        "embedding": 22,
+        "entrada": 1085,
+        "saida": 179
+      },
+      "custo_estimado_openai_usd": 0.00072084
+    },
+    {
+      "rodada": 1,
+      "caso": "fora_da_base",
+      "modo": "orientacao_basica",
+      "interrupcao": null,
+      "chamadas_geracao": 0,
+      "ms_total": 164.688,
+      "ms_etapas": {
+        "bff": 100.289,
+        "embedding": 55.969,
+        "busca_vetorial": 6.854,
+        "geracao": 0.0,
+        "chain_e_validacao": 1.575
+      },
+      "tokens_ollama": {
+        "embedding": 14,
+        "entrada": 0,
+        "saida": 0
+      },
+      "tokens_estimados_openai": {
+        "embedding": 13,
+        "entrada": 0,
+        "saida": 0
+      },
+      "custo_estimado_openai_usd": 2.6e-07
+    }
+  ],
+  "estimativa_indexacao": {
+    "trechos": 8,
+    "tokens": 1126,
+    "usd": 2.252e-05
+  },
+  "projecao_usd": {
+    "por_consulta": 0.0004803333333333333,
+    "por_volume": {
+      "1000": 0.48033333333333333,
+      "10000": 4.803333333333333,
+      "100000": 48.03333333333333
+    }
+  }
+}

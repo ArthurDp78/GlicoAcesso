@@ -1,4 +1,7 @@
-param([ValidateRange(1024, 65535)][int]$Porta = 18080)
+param(
+  [ValidateRange(1024, 65535)][int]$Porta = 18080,
+  [switch]$ComOrientacao
+)
 
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $false
@@ -9,6 +12,11 @@ $arquivo = Join-Path ([IO.Path]::GetTempPath()) "$execucao-unidade.json"
 $url = "http://127.0.0.1:$Porta"
 $principal = @('--project-directory', $raiz, '--env-file', $modelo, '-p', $execucao,
                '-f', (Join-Path $raiz 'docker-compose.yml'))
+$servicosEsperados = 14
+if ($ComOrientacao) {
+  $principal += @('-f', (Join-Path $raiz 'compose.orientacao.yml'), '--profile', 'orientacao')
+  $servicosEsperados = 16
+}
 $admin = @('--project-directory', $raiz, '--env-file', $modelo, '-p', "$execucao-admin",
            '-f', (Join-Path $raiz 'compose.admin.yml'), '--profile', 'admin')
 
@@ -29,7 +37,7 @@ function Requisitar {
   if ($Token) { $cabecalhos.Authorization = "Bearer $Token" }
   if ($Chave) { $cabecalhos['Idempotency-Key'] = $Chave }
   if ($Correlacao) { $cabecalhos['X-Correlation-Id'] = $Correlacao }
-  $opcoes = @{ Uri = "$url$Caminho"; Headers = $cabecalhos; TimeoutSec = 12; UseBasicParsing = $true }
+  $opcoes = @{ Uri = "$url$Caminho"; Headers = $cabecalhos; TimeoutSec = 22; UseBasicParsing = $true }
   if ($null -ne $Corpo -or $PSBoundParameters.ContainsKey('Metodo')) {
     $opcoes.Method = $Metodo
   }
@@ -75,8 +83,26 @@ function Consultar-Banco {
 
 function Conferir-Subida {
   $ids = @(Executar-Compose $principal @('ps', '--status', 'running', '-q'))
-  Conferir ($ids.Count -eq 14) "Esperados 14 serviços em execução. Encontrados $($ids.Count)."
+  Conferir ($ids.Count -eq $servicosEsperados) "Esperados $servicosEsperados serviços em execução. Encontrados $($ids.Count)."
   Conferir ((Requisitar '/health').servico -eq 'gateway') 'Gateway não respondeu à checagem de saúde.'
+}
+
+function Conferir-Orientacao {
+  param([string]$Modo)
+  $pergunta = @{
+    itemId = $medicamento
+    pergunta = 'Qual código devo levar ao balcão e onde vejo as orientações para retirar uma reserva confirmada?'
+  }
+  $orientacao = Requisitar '/api/cidadao/v1/orientacoes' -Token $cidadao -Corpo $pergunta
+  Conferir ($orientacao.modo -eq $Modo) "Esperada resposta $Modo. Recebida $($orientacao.modo): $($orientacao.resposta)"
+  $unidadeConsulta = $orientacao.consulta.unidades | Where-Object unidadeId -eq $unidade
+  Conferir ($orientacao.consulta.status -eq 'consultada' -and $unidadeConsulta.disponivel -eq $true -and
+            $unidadeConsulta.permiteReserva -eq $true -and $unidadeConsulta.atualizadoEm) 'A orientação perdeu os dados de disponibilidade.'
+  if ($Modo -eq 'rag') {
+    Conferir ($orientacao.fontes.id -contains 'retirada#balcao') 'A resposta não citou a seção esperada de retirada.'
+  } else {
+    Conferir (@($orientacao.fontes | Where-Object { $_ }).Count -eq 0) 'A orientação básica apresentou citações.'
+  }
 }
 
 function Saldo-Confere {
@@ -96,13 +122,16 @@ Conferir (Test-Path -LiteralPath $modelo -PathType Leaf) '.env.example ausente n
 $valores = @{}
 $anteriores = @{}
 $gerador = [Security.Cryptography.RandomNumberGenerator]::Create()
+$chaveGoogle = [Environment]::GetEnvironmentVariable('GOOGLE_API_KEY', 'Process')
 $iniciado = $false
 try {
   foreach ($linha in Get-Content -LiteralPath $modelo) {
     if ($linha -match '^([A-Z0-9_]+)=(.*)$') {
       $nome = $Matches[1]
       $valor = $Matches[2]
-      if ($valor -eq '') {
+      if ($nome -eq 'GOOGLE_API_KEY') {
+        $valor = $chaveGoogle
+      } elseif ($valor -eq '') {
         $bytes = New-Object byte[] 32
         $gerador.GetBytes($bytes)
         $valor = [BitConverter]::ToString($bytes).Replace('-', '').ToLowerInvariant()
@@ -235,6 +264,15 @@ try {
   Write-Host "Reserva $idFalha em FALHA_CONFIRMACAO, SAGA COMPENSADA, alocação liberada e saldo disponível restaurado."
   $env:GLICO_FALHA_PREPARAR_AUTORIZACAO = '0'
 
+  $trechosIndexados = $null
+  if ($ComOrientacao -and -not [string]::IsNullOrWhiteSpace($chaveGoogle)) {
+    Write-Host 'Indexando os guias e verificando a orientação pelo Gateway...'
+    Executar-Compose ($principal + @('--profile', 'indexacao')) @('run', '--rm', '-T', '--build', 'indexar-orientacao')
+    $trechosIndexados = Consultar-Banco 'orientacao' 'SELECT count(*) FROM trechos_conhecimento'
+    Conferir ([int]$trechosIndexados -gt 0) 'A base vetorial está vazia.'
+    Conferir-Orientacao 'rag'
+  }
+
   Write-Host 'Recriando os contêineres com os mesmos volumes...'
   Executar-Compose $principal @('down')
   Executar-Compose $principal @('up', '-d', '--wait', '--wait-timeout', '180')
@@ -250,7 +288,18 @@ try {
   Requisitar "$rotaDistribuida/cancelar" -Metodo POST -Status 202 -Token $cidadao -Chave $chaveCancelamento | Out-Null
   $repeticaoEntrega = Requisitar $acao.href -Status 201 -Token $profissional -Chave $chaveRetirada -Corpo $corpoRetirada
   Conferir ($repeticaoEntrega.retiradaId -eq $entrega.retiradaId) 'Retirada ou idempotência perdida após a recriação.'
-  Write-Host 'Validação concluída: 14 serviços, portais, CLI, SAGA, retirada, CQRS e persistência.' -ForegroundColor Green
+  if ($ComOrientacao) {
+    if ($null -ne $trechosIndexados) {
+      Conferir ((Consultar-Banco 'orientacao' 'SELECT count(*) FROM trechos_conhecimento') -eq $trechosIndexados) 'O índice foi perdido após a recriação.'
+      [Environment]::SetEnvironmentVariable('GOOGLE_API_KEY', $null, 'Process')
+      Executar-Compose $principal @('up', '-d', '--no-deps', '--force-recreate', '--wait', 'orientacao')
+    } else {
+      Write-Host 'Chave Google AI Studio ausente. Indexação e geração real ficaram fora desta execução.'
+    }
+    Write-Host 'Verificando orientação básica e disponibilidade com a IA indisponível...'
+    Conferir-Orientacao 'orientacao_basica'
+  }
+  Write-Host "Validação concluída. $servicosEsperados serviços, portais, CLI, SAGA, retirada, CQRS e persistência." -ForegroundColor Green
 } catch {
   if ($iniciado) {
     & docker compose @principal ps --all
@@ -261,6 +310,9 @@ try {
   if ($iniciado) {
     & docker compose @principal down --volumes --remove-orphans
     if ($LASTEXITCODE -ne 0) { Write-Warning "Não foi possível limpar o projeto de teste $execucao." }
+  }
+  if ($ComOrientacao) {
+    [Environment]::SetEnvironmentVariable('GOOGLE_API_KEY', $chaveGoogle, 'Process')
   }
   foreach ($nome in $anteriores.Keys) {
     [Environment]::SetEnvironmentVariable($nome, $anteriores[$nome], 'Process')

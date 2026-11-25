@@ -6,6 +6,7 @@ from fastapi import Depends, FastAPI, Request, Response
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from servicos.contratos_orientacao import ROTA_ORIENTACAO
 from servicos.http import cliente_http, consultar, correlacionar, requisitar
 from servicos.identidade_demo import cidadao_autenticado, profissional_autenticado
 
@@ -60,6 +61,12 @@ async def encaminhar_reserva(request: Request, reservaId: UUID | None = None) ->
     return await repassar(request, os.environ.get("BFF_CIDADAO_URL", "http://127.0.0.1:8001"))
 
 
+@app.post(ROTA_ORIENTACAO, dependencies=[Depends(cidadao_autenticado)])
+async def encaminhar_orientacao(request: Request) -> Response:
+    destino = os.environ.get("BFF_CIDADAO_URL", "http://127.0.0.1:8001")
+    return await repassar(request, destino, timeout=19.0)
+
+
 PROFISSIONAL = [Depends(profissional_autenticado)]
 
 
@@ -82,7 +89,7 @@ async def encaminhar_unidade(request: Request, reservaId: UUID | None = None) ->
     return await repassar(request, os.environ.get("BFF_UNIDADE_URL", "http://127.0.0.1:8005"))
 
 
-async def repassar(request: Request, destino: str) -> Response:
+async def repassar(request: Request, destino: str, *, timeout: float = 4.0) -> Response:
     destino = destino.rstrip("/")
     cabecalhos = {
         nome: request.headers[nome]
@@ -92,13 +99,14 @@ async def repassar(request: Request, destino: str) -> Response:
     resposta = await requisitar(
         request.app.state.http, request.method, destino + request.url.path,
         headers=cabecalhos, content=await request.body(), params=request.query_params.multi_items(),
+        timeout=timeout,
     )
     return Response(
         content=resposta.content,
         status_code=resposta.status_code,
         headers={
             nome: resposta.headers[nome]
-            for nome in ("content-type", "cache-control", "location", "www-authenticate")
+            for nome in ("content-type", "cache-control", "location", "www-authenticate", "retry-after")
             if nome in resposta.headers
         },
     )

@@ -10,6 +10,7 @@ SERVICOS = {
     "reservas": "RESERVAS_DATABASE_URL",
     "orquestrador": "ORQUESTRADOR_DATABASE_URL",
     "retiradas": "RETIRADAS_DATABASE_URL",
+    "orientacao": "ORIENTACAO_DATABASE_URL",
 }
 
 

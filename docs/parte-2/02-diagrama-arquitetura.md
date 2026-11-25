@@ -7,6 +7,8 @@
 
 O diagrama mostra a arquitetura lógica do GlicoAcesso. As fronteiras e responsabilidades seguem os documentos [00 - Decisões arquiteturais compartilhadas](./00-decisoes-compartilhadas.md) e [01 - Microsserviços](./01-microsservicos.md).
 
+[Diagrama completo com a extensão de orientação da Parte 4 (SVG)](../arquitetura-glicoacesso.svg)
+
 ## 1. Visão geral
 
 ```mermaid
@@ -103,3 +105,10 @@ Estoque publica seus próprios eventos pela Outbox. A projeção de disponibilid
 - [Fluxo de reservas](./05-fluxo-reservas.md) e [SAGA](./06-saga.md)
 - [API Gateway](./03-api-gateway.md) e [BFFs](./04-bffs.md)
 - [Bancos](./09-bancos.md), [Outbox e Inbox](./11-outbox.md) e [CQRS](./12-cqrs.md)
+
+## Extensão da Parte 4
+
+Com o perfil `orientacao`, o portal encaminha `POST /api/cidadao/v1/orientacoes` pelo Gateway e BFF Cidadão. O serviço Orientação consulta o BFF para obter a projeção atual do Estoque, lê os guias indexados em PostgreSQL com pgvector e chama o provedor de embeddings e geração pela rede de saída. O banco da orientação fica em sua própria rede privada. O índice é compartilhado com o comando de ingestão por meio do volume nomeado. O perfil acrescenta dois serviços em execução e só o Gateway publica porta.
+
+- [Arquitetura e contrato da orientação](../parte-4/01-orientacao-com-rag.md)
+- [Validação e prova ao vivo da Parte 4](../parte-4/04-roteiro-de-entrega.md)

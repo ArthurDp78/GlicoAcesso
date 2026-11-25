@@ -131,6 +131,8 @@ A proposta é atuar como uma **ponte entre a informação existente na rede part
 
 ## Documentação
 
+[Arquitetura completa do GlicoAcesso em SVG](./docs/arquitetura-glicoacesso.svg)
+
 - [Parte 1 — Concepção e pitch](./docs/parte-1-concepcao-e-pitch.md)
 - [Parte 2 — Resumo e índice da arquitetura](./docs/parte-2/resumo-arquitetura.md)
 - [Decisões compartilhadas](./docs/parte-2/00-decisoes-compartilhadas.md) e [diagrama de arquitetura](./docs/parte-2/02-diagrama-arquitetura.md)
@@ -153,14 +155,14 @@ cd GlicoAcesso
 
 ### Subir o sistema completo com Docker Compose
 
-Com o Docker Desktop aberto e em modo de contêineres Linux, execute o bloco a seguir na raiz do repositório. Na primeira execução ele gera um `.env` a partir de `.env.example`, com valores aleatórios distintos. Se já existir um `.env`, preserve o arquivo e complete os campos faltantes com base no exemplo.
+Com o Docker Desktop aberto e em modo de contêineres Linux, execute o bloco a seguir na raiz do repositório. Na primeira execução ele gera um `.env` a partir de `.env.example`, com valores aleatórios distintos para as credenciais internas. O campo `GOOGLE_API_KEY` fica vazio até você configurar uma chave do provedor. Se já existir um `.env`, preserve o arquivo e complete os campos faltantes com base no exemplo.
 
 ```powershell
 if (-not (Test-Path -LiteralPath .env)) {
   $gerador = [System.Security.Cryptography.RandomNumberGenerator]::Create()
   try {
     $linhas = foreach ($linha in Get-Content -LiteralPath .env.example) {
-      if ($linha -match '^[A-Z0-9_]+=$') {
+      if ($linha -ne 'GOOGLE_API_KEY=' -and $linha -match '^[A-Z0-9_]+=$') {
         $bytes = New-Object byte[] 32
         $gerador.GetBytes($bytes)
         $linha + [BitConverter]::ToString($bytes).Replace('-', '').ToLowerInvariant()
@@ -191,6 +193,10 @@ Somente o Gateway publica uma porta em `127.0.0.1`. Cada PostgreSQL tem uma rede
 
 `docker compose down` encerra os contêineres e preserva os volumes nomeados. Mantenha o mesmo `.env` entre execuções para reutilizar as credenciais dos bancos e do RabbitMQ.
 
+### Habilitar a orientação com RAG
+
+A orientação fica disponível no portal do cidadão após preparar o índice e iniciar o perfil Docker. Use o item selecionado e a credencial do cidadão para enviar uma pergunta. Veja [a configuração da Parte 4](./docs/parte-4/01-orientacao-com-rag.md#executar-a-orientação-no-portal) e o [roteiro de validação e apresentação](./docs/parte-4/04-roteiro-de-entrega.md).
+
 ### Validar a instalação do zero
 
 Em um clone da versão a ser entregue, abra o Docker Desktop e execute na raiz do projeto:
@@ -198,6 +204,8 @@ Em um clone da versão a ser entregue, abra o Docker Desktop e execute na raiz d
 ```powershell
 .\scripts\validar-compose.ps1
 ```
+
+Use `-ComOrientacao` para incluir o serviço de Orientação, seu banco e o fallback. Com `GOOGLE_API_KEY` configurada no processo, a mesma execução também valida a indexação e uma resposta RAG pelo Gateway. Veja o [roteiro da Parte 4](./docs/parte-4/04-roteiro-de-entrega.md).
 
 O script cria um projeto Compose temporário, com credenciais e volumes próprios. Ele verifica a saúde dos 14 serviços, a abertura dos portais e o funcionamento das APIs via Gateway. Cadastra uma unidade pela CLI. Na unidade de demonstração, registra a entrada de quatro unidades de um medicamento, habilita a reserva, confirma uma solicitação de duas unidades do mesmo medicamento pela SAGA e verifica a projeção CQRS. Também registra a entrega no balcão e aguarda `RETIRADA` e a projeção de duas unidades físicas, zero alocadas e duas disponíveis. Em seguida testa o cancelamento local e o distribuído. Para demonstrar a compensação, recria apenas Retiradas com a falha de autorização habilitada e aceita uma nova reserva. O teste confirma a liberação da alocação no banco de Estoque, a ausência da autorização no banco de Retiradas, o estado `COMPENSADA` no Orquestrador e o saldo na projeção. Depois recria os contêineres com os mesmos volumes e confirma que os dados e as respostas idempotentes foram preservados.
 
@@ -283,7 +291,7 @@ Os logs ficam em `.demo-local/logs`. Se o Windows bloquear a execução de scrip
 
 As seções abaixo descrevem cada processo separadamente, para quem quiser subir serviço por serviço.
 
-A base executável da Parte 3 contém dois processos HTTP independentes: API Gateway e BFF Cidadão. Use [uv](https://docs.astral.sh/uv/getting-started/installation/) na raiz do repositório. O `uv` seleciona o Python 3.14 indicado em `.python-version` e instala as versões registradas em `uv.lock`.
+Este exemplo de desenvolvimento inicia apenas o API Gateway e o BFF Cidadão. Para executar o fluxo completo, use o Docker Compose descrito acima. Use [uv](https://docs.astral.sh/uv/getting-started/installation/) na raiz do repositório. O `uv` seleciona o Python 3.14 indicado em `.python-version` e instala as versões registradas em `uv.lock`.
 
 ```powershell
 uv sync --locked

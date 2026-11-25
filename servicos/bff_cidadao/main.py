@@ -1,5 +1,6 @@
 import asyncio
 import os
+from time import monotonic
 from typing import Annotated, Literal
 from uuid import UUID
 
@@ -7,6 +8,9 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from servicos.cancelamento_bff import cancelar_pelo_bff
+from servicos.contratos_orientacao import (
+    PedidoOrientacao, RespostaOrientacao, ROTA_INTERNA_ORIENTACAO, ROTA_ORIENTACAO, TOKEN_ORIENTACAO,
+)
 from servicos.contratos_reserva import ESTADOS_CANCELAVEIS, DadosReserva, LinkReserva, PedidoReserva, ReservaPublica
 from servicos.delegacao_unidade import emitir_credencial_cidadao
 from servicos.identidade_demo import cidadao_autenticado
@@ -115,6 +119,40 @@ async def explorar(request: Request, itemId: UUID):
 
     resultados = await asyncio.gather(*(combinar(unidade) for unidade in unidades))
     return [resultado for resultado in resultados if resultado is not None]
+
+@app.post(ROTA_ORIENTACAO, response_model=RespostaOrientacao)
+async def orientar_cidadao(
+    request: Request, response: Response, pedido: PedidoOrientacao,
+    cidadao: Annotated[str, Depends(cidadao_autenticado)],
+):
+    token = os.getenv(TOKEN_ORIENTACAO, "")
+    if len(token) < 32:
+        raise HTTPException(503, "A orientação está indisponível no momento.")
+
+    janela = int(monotonic() // 60)
+    if getattr(app.state, "janela_orientacao", None) != janela:
+        app.state.janela_orientacao = janela
+        app.state.chamadas_orientacao = {}
+    chamadas = app.state.chamadas_orientacao
+    if chamadas.get(cidadao, 0) >= 10:
+        raise HTTPException(429, "Limite de orientações atingido.", headers={"Retry-After": "60"})
+    chamadas[cidadao] = chamadas.get(cidadao, 0) + 1
+
+    itens = await listar_itens(request)
+    if not any(item.itemId == pedido.itemId for item in itens):
+        raise HTTPException(404, "Item não encontrado no catálogo.")
+
+    origem = os.getenv("ORIENTACAO_URL", "http://127.0.0.1:8008").rstrip("/")
+    resposta = await requisitar(
+        request.app.state.http, "POST", origem + ROTA_INTERNA_ORIENTACAO,
+        headers={"Authorization": f"Bearer {token}"}, json=pedido.model_dump(mode="json"), timeout=14.0,
+    )
+    if resposta.status_code == 429:
+        raise HTTPException(429, "Serviço de orientação ocupado.",
+                            headers={"Retry-After": resposta.headers.get("Retry-After", "2")})
+    response.headers["Cache-Control"] = "no-store"
+    return decodificar(resposta, RespostaOrientacao.model_validate_json)
+
 
 def origem_reservas() -> str:
     return os.environ.get("RESERVAS_URL", "http://127.0.0.1:8004").rstrip("/")
