@@ -9,7 +9,10 @@ from fastapi.responses import JSONResponse, Response
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
 from servicos.banco import BancoIndisponivel, conectar
-from servicos.estoque.eventos import iniciar, registrar_evento
+from servicos.erros import entrada_invalida_400
+from servicos.estoque import administracao
+from servicos.estoque.eventos import iniciar
+from servicos.estoque.saldos import registrar_evento
 from servicos.idempotencia import gravar_resultado, resultado_anterior
 from servicos.identidade_demo import Ator, orquestrador_autenticado, profissional_autenticado, servico_reservas_autenticado
 
@@ -17,12 +20,14 @@ from servicos.identidade_demo import Ator, orquestrador_autenticado, profissiona
 @asynccontextmanager
 async def ciclo(_app: FastAPI):
     parar = threading.Event()
-    iniciar(parar)  # Publicador da Outbox e consumidor da projeção, em segundo plano.
+    iniciar(parar)  # Publicador da Outbox, projeção e baixa de retiradas, em segundo plano.
     yield
     parar.set()
 
 
 app = FastAPI(title="GlicoAcesso — Estoque", lifespan=ciclo)
+app.include_router(administracao.rotas)
+entrada_invalida_400(app, "/internal/v1/alocacoes", "/internal/v1/alocacoes/{reservaId}")
 
 
 class Item(BaseModel):
@@ -50,6 +55,10 @@ def verificar_saude() -> dict[str, str]:
     return {"servico": "estoque", "status": "ok"}
 
 
+@app.get(
+    "/api/unidade/v1/estoque/itens", response_model=list[Item], response_model_exclude_none=True,
+    dependencies=[Depends(profissional_autenticado)],
+)
 @app.get("/api/cidadao/v1/estoque/itens", response_model=list[Item], response_model_exclude_none=True)
 def listar_itens():
     with conectar("ESTOQUE_DATABASE_URL") as conexao:
