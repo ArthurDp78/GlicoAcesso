@@ -26,12 +26,22 @@ def exigir_credencial(credencial: HTTPAuthorizationCredentials | None) -> bytes:
     return credencial.credentials.encode()
 
 
+VARIAVEIS_DE_TOKEN = (
+    "GLICO_CIDADAO_TOKEN", "GLICO_PROFISSIONAL_TOKEN", "GLICO_RESERVAS_SERVICE_TOKEN",
+    "GLICO_ORQUESTRADOR_SERVICE_TOKEN", "GLICO_RETIRADAS_SERVICE_TOKEN", "GLICO_ADMIN_SERVICE_TOKEN",
+)
+
+
 def validar_token(credencial: HTTPAuthorizationCredentials | None, variavel: str) -> None:
     recebido = exigir_credencial(credencial)
     esperado = os.environ.get(variavel, "")
     if len(esperado) < 32:
         raise HTTPException(503, "Credenciais de demonstração não configuradas.")
     if not compare_digest(recebido, esperado.encode()):
+        # Identidade conhecida, mas sem permissão para esta operação.
+        conhecidos = (os.environ.get(outra, "") for outra in VARIAVEIS_DE_TOKEN)
+        if any([len(token) >= 32 and compare_digest(recebido, token.encode()) for token in conhecidos]):
+            raise HTTPException(403, "Operação restrita a outro chamador.")
         raise HTTPException(401, "Credencial inválida.", headers=NAO_AUTENTICADO)
 
 
@@ -84,10 +94,36 @@ def orquestrador_autenticado(credencial: Credencial) -> str:
     return "orquestrador"
 
 
-def ator_delegado(papel: str | None, ator_id: str | None, unidade: str | None) -> Ator:
+def retiradas_autenticado(credencial: Credencial) -> None:
+    validar_token(credencial, "GLICO_RETIRADAS_SERVICE_TOKEN")
+
+
+def administracao_autenticada(credencial: Credencial) -> str:
+    # Cadastros globais (unidades e catálogo) não pertencem a uma unidade e não são expostos pelos BFFs.
+    validar_token(credencial, "GLICO_ADMIN_SERVICE_TOKEN")
+    return "administracao"
+
+
+def reservas_ou_profissional(credencial: Credencial) -> Ator | None:
+    """None = serviço Reservas; Ator = profissional, cujo vínculo a rota confere."""
+    recebido = exigir_credencial(credencial)
+    servico = os.environ.get("GLICO_RESERVAS_SERVICE_TOKEN", "")
+    if len(servico) >= 32 and compare_digest(recebido, servico.encode()):
+        return None
+    return profissional_autenticado(ator_autenticado(credencial))
+
+
+def exigir_unidade(profissional: Ator, unidade_id: UUID) -> None:
+    if profissional.unidadeId != unidade_id:
+        raise HTTPException(403, "Ator sem acesso à unidade.")
+
+
+def ator_delegado(papel: str | None, ator_id: str | None, unidade: str | None, *, aceita_cidadao: bool = False) -> Ator:
     # shortcut: cabeçalhos de ator só valem junto da credencial do Orquestrador; trocar por token delegado assinado.
+    if aceita_cidadao and papel == "CIDADAO" and ator_id:
+        return Ator("CIDADAO", ator_id)
     if papel != "PROFISSIONAL" or not ator_id:
-        raise HTTPException(403, "Ator delegado ausente ou sem papel de profissional.")
+        raise HTTPException(403, "Ator delegado ausente ou sem papel permitido.")
     try:
         return Ator("PROFISSIONAL", ator_id, UUID(unidade or ""))
     except ValueError:

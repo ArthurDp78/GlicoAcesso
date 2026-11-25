@@ -1,5 +1,7 @@
 from psycopg.types.json import Jsonb
 
+from servicos.banco import conectar
+
 
 def resultado_anterior(conexao, operacao: str, principal: str, chave: str, resumo: str):
     """Serializa a chave na transação e devolve o resultado gravado; 409 se o conteúdo divergir."""
@@ -21,3 +23,9 @@ def gravar_resultado(conexao, operacao: str, principal: str, chave: str, resumo:
         VALUES (%s, %s, %s, %s, %s, %s)
     """, (operacao, principal, chave, resumo, resultado[0], Jsonb(resultado[1])))
     return resultado
+
+
+def reobter_resultado(variavel_dsn: str, operacao: str, principal: str, chave: str, resumo: str):
+    """Consulta o resultado gravado antes de validações remotas, para que um retry não dependa delas."""
+    with conectar(variavel_dsn) as conexao:
+        return resultado_anterior(conexao, operacao, principal, chave, resumo)
