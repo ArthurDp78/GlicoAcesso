@@ -68,6 +68,7 @@ foreach ($nome in $bancos.Keys) {
     if ($LASTEXITCODE -eq 0) { break }
     Start-Sleep -Milliseconds 500
   }
+  if ($i -eq 60) { throw "O banco $nome não respondeu. Consulte docker logs glico-$nome-db." }
 }
 
 # --- Tokens de demonstração: gerados uma vez e guardados fora do Git ---
@@ -103,6 +104,7 @@ $tokenRetiradasAnterior = $env:GLICO_RETIRADAS_SERVICE_TOKEN
 Push-Location $raiz
 try {
   uv sync --locked
+  if ($LASTEXITCODE -ne 0) { throw "Falha ao instalar as dependências com uv." }
   foreach ($nome in $bancos.Keys) {
     if ($nome -in 'unidades', 'estoque') { uv run --locked python -m servicos.migracoes $nome --demo }
     else { uv run --locked python -m servicos.migracoes $nome }
@@ -134,7 +136,7 @@ try {
     for ($i = 0; $i -lt 60; $i++) {
       try { Invoke-RestMethod "http://127.0.0.1:$porta/health" -TimeoutSec 1 | Out-Null; break } catch { Start-Sleep -Milliseconds 500 }
     }
-    if ($i -eq 60) { Write-Warning "$nome não respondeu. Veja $logs\$nome.log" }
+    if ($i -eq 60) { throw "$nome não respondeu na porta $porta. Veja $logs\$nome.log" }
   }
 } finally {
   $env:GLICO_BFF_UNIDADE_SIGNING_KEY = $chaveBffAnterior

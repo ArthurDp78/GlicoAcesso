@@ -66,6 +66,13 @@ function Cadastrar-Unidade {
   return $id.ToString()
 }
 
+function Consultar-Banco {
+  param([string]$Banco, [string]$Consulta)
+  $resultado = Executar-Compose $principal @('exec', '-T', "db-$Banco", 'psql', '-XAt', '-v', 'ON_ERROR_STOP=1',
+                                             '-U', 'glico', '-d', $Banco, '-c', $Consulta)
+  return ([string]$resultado).Trim()
+}
+
 function Conferir-Subida {
   $ids = @(Executar-Compose $principal @('ps', '--status', 'running', '-q'))
   Conferir ($ids.Count -eq 14) "Esperados 14 serviços em execução. Encontrados $($ids.Count)."
@@ -185,6 +192,18 @@ try {
   Aguardar { (Requisitar $rotaReserva -Token $cidadao).status -eq 'RETIRADA' } 'Reservas não recebeu a entrega.'
   Aguardar { Saldo-Confere -AposRetirada } 'A baixa física ou a projeção da retirada não convergiu.'
 
+  Write-Host 'Verificando a repetição de um cancelamento após desativar a unidade...'
+  $pendente = Requisitar '/api/cidadao/v1/reservas' -Status 201 -Token $cidadao -Chave ([guid]::NewGuid().ToString()) -Corpo $pedido
+  $rotaProf = "/api/unidade/v1/reservas/$($pendente.reservaId)/cancelar"
+  $chaveProf = [guid]::NewGuid().ToString()
+  $motivo = @{justificativa = 'Suspensão de atendimento'}
+  $cancelada = Requisitar $rotaProf -Token $profissional -Chave $chaveProf -Corpo $motivo
+  $rotaStatus = '/api/unidade/v1/unidade/status'
+  Requisitar $rotaStatus -Metodo PATCH -Token $profissional -Chave ([guid]::NewGuid().ToString()) -Corpo @{ativa = $false} | Out-Null
+  $replay = Requisitar $rotaProf -Token $profissional -Chave $chaveProf -Corpo $motivo
+  Conferir ($replay.status -eq 'CANCELADA' -and $replay.reservaId -eq $cancelada.reservaId) 'O cancelamento gravado não foi reproduzido.'
+  Requisitar $rotaStatus -Metodo PATCH -Token $profissional -Chave ([guid]::NewGuid().ToString()) -Corpo @{ativa = $true} | Out-Null
+
   Write-Host 'Verificando cancelamentos local e distribuído...'
   $pedidoCancelamento = @{unidadeId = $unidade; itemId = $medicamento; quantidade = 1}
   $local = Requisitar '/api/cidadao/v1/reservas' -Status 201 -Token $cidadao -Chave ([guid]::NewGuid().ToString()) -Corpo $pedidoCancelamento
@@ -201,6 +220,20 @@ try {
   Requisitar "$rotaDistribuida/cancelar" -Metodo POST -Status 202 -Token $cidadao -Chave $chaveCancelamento | Out-Null
   Aguardar { (Requisitar $rotaDistribuida -Token $cidadao).status -eq 'CANCELADA' } 'Cancelamento distribuído não concluído.'
   Aguardar { Saldo-Confere -AposRetirada } 'O cancelamento não liberou a alocação.'
+
+  Write-Host 'Provocando uma falha em Retiradas depois da alocação...'
+  $env:GLICO_FALHA_PREPARAR_AUTORIZACAO = '1'
+  Executar-Compose $principal @('up', '-d', '--no-deps', '--force-recreate', '--wait', 'retiradas')
+  $falha = Requisitar '/api/cidadao/v1/reservas' -Status 201 -Token $cidadao -Chave ([guid]::NewGuid().ToString()) -Corpo $pedidoCancelamento
+  $idFalha = [guid]$falha.reservaId
+  Requisitar "/api/unidade/v1/reservas/$idFalha/decisao" -Status 202 -Token $profissional -Chave ([guid]::NewGuid().ToString()) -Corpo @{decisao = 'ACEITAR'} | Out-Null
+  Aguardar { (Requisitar "/api/cidadao/v1/reservas/$idFalha" -Token $cidadao).status -eq 'FALHA_CONFIRMACAO' } 'Reservas não registrou a falha.'
+  Aguardar { (Consultar-Banco 'orquestrador' "SELECT estado FROM saga_execucoes WHERE reserva_id='$idFalha' AND tipo='CONFIRMACAO'") -eq 'COMPENSADA' } 'A SAGA não concluiu a compensação.'
+  Conferir ((Consultar-Banco 'estoque' "SELECT liberada_em IS NOT NULL AND consumida_em IS NULL FROM alocacoes WHERE reserva_id='$idFalha'") -eq 't') 'A alocação não foi criada e liberada.'
+  Conferir ((Consultar-Banco 'retiradas' "SELECT count(*) FROM autorizacoes WHERE reserva_id='$idFalha'") -eq '0') 'Foi encontrada autorização para a reserva compensada.'
+  Aguardar { Saldo-Confere -AposRetirada } 'O saldo projetado diverge após a compensação.'
+  Write-Host "Reserva $idFalha em FALHA_CONFIRMACAO, SAGA COMPENSADA, alocação liberada e saldo disponível restaurado."
+  $env:GLICO_FALHA_PREPARAR_AUTORIZACAO = '0'
 
   Write-Host 'Recriando os contêineres com os mesmos volumes...'
   Executar-Compose $principal @('down')
