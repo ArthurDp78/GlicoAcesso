@@ -93,7 +93,11 @@ def main(caminho):
         print(f"[{vezes}x] {problema}")
     faltam = [f"{o[0]} {o[1]} {o[2]}: {s}" for o in operacoes for s in o[5]["responses"] if (f"{o[0]} {o[1]} {o[2]}", s) not in cobertas]
     print(f"-- respostas documentadas não exercitadas ({len(faltam)}):", *faltam, sep="\n   ")
+    # Falha somente em violações observadas nas trocas; cobertura ausente continua informativa.
+    return 1 if extras or problemas else 0
 
 
 if __name__ == "__main__":
-    main(sys.argv[1])
+    if len(sys.argv) != 2:
+        raise SystemExit("Uso: python -m tests.contratos CAMINHO_TROCAS.jsonl")
+    raise SystemExit(main(sys.argv[1]))

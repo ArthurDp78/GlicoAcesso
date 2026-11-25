@@ -2,6 +2,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.openapi.utils import get_openapi
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -49,3 +50,16 @@ def logo_portal():
 
 
 rotas.instalar(app)
+
+
+def esquema_openapi():
+    if app.openapi_schema is None:
+        schema = get_openapi(title=app.title, version="1.0.0", routes=app.routes)
+        schema.setdefault("components", {}).setdefault("securitySchemes", {})["bearerAuth"] = {
+            "type": "http", "scheme": "bearer",
+        }
+        app.openapi_schema = schema
+    return app.openapi_schema
+
+
+app.openapi = esquema_openapi

@@ -113,19 +113,26 @@ def registrar_entrega(conexao, saga, retirada_id, event_id=None) -> None:
 
 def avancar_cancelamento(conexao, etapa, status: int, corpo: dict) -> bool:
     saga, reserva, codigo = etapa["saga_id"], etapa["reserva_id"], corpo.get("codigo")
+    legado = (etapa.get("dados_execucao") or {}).get("cancelamento_main", False)
     match etapa["etapa_id"], status, codigo:
+        case "INICIAR_CANCELAMENTO", 200, _ if legado:
+            cancelar_autorizacao(conexao, saga, reserva)
         case "INICIAR_CANCELAMENTO", 200, _:
             reverter(conexao, saga, reserva, (etapa["dados_execucao"] or {}).get("efeitos"))
         case ("INICIAR_CANCELAMENTO", 403 | 404, _) | ("INICIAR_CANCELAMENTO", 409, "ESTADO_INCOMPATIVEL"):
             mudar_estado(conexao, saga, "INTERROMPIDA", codigo or f"HTTP_{status}", encerrar=True)
-        case "CANCELAR_AUTORIZACAO", 200, _:
+        case "CANCELAR_AUTORIZACAO" | "REVOGAR_PARA_CANCELAR", 200, _:
             liberar_alocacao(conexao, saga, reserva)
-        case "CANCELAR_AUTORIZACAO", 409, "ENTREGA_JA_REGISTRADA":
+        case "CANCELAR_AUTORIZACAO" | "REVOGAR_PARA_CANCELAR", 404, "AUTORIZACAO_NAO_ENCONTRADA" if legado:
+            liberar_alocacao(conexao, saga, reserva)
+        case "CANCELAR_AUTORIZACAO" | "REVOGAR_PARA_CANCELAR", 409, "ENTREGA_JA_REGISTRADA":
             registrar_entrega(conexao, saga, corpo["retiradaId"])
-        case "LIBERAR_ALOCACAO", 204, _:
+        case "LIBERAR_ALOCACAO" | "LIBERAR_PARA_CANCELAR", 204, _:
             finalizar(conexao, saga, reserva)
         case "FINALIZAR_CANCELAMENTO", 200, _:
             mudar_estado(conexao, saga, "CANCELADA", encerrar=True)
+        case "FINALIZAR_CANCELAMENTO", 409, "ESTADO_INCOMPATIVEL" if legado and corpo.get("status") == "RETIRADA":
+            mudar_estado(conexao, saga, "INTERROMPIDA", ENTREGA, encerrar=True)
         case _:
             # Inclui 404 na revogação: só se chega a ela quando a autorização existiu ou é desconhecida.
             return False

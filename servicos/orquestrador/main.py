@@ -17,7 +17,7 @@ from servicos.identidade_demo import (
 from servicos.orquestrador import pedidos
 from servicos.orquestrador.cancelamento import processar_retirada
 from servicos.orquestrador.executor import laco
-from servicos.orquestrador.pedidos import aceito, erro
+from servicos.orquestrador.pedidos import aceito, erro, verificar_escopo
 from servicos.orquestrador.registro import BANCO, nova_etapa
 
 
@@ -69,6 +69,7 @@ def solicitar_confirmacao(
         if anterior is not None:
             if anterior["request_hash"] != str(reservaId):
                 return erro(409, "CHAVE_IDEMPOTENTE_CONFLITANTE", "Chave reutilizada com outra reserva.")
+            verificar_escopo(conexao, UUID(anterior["resposta"]["sagaId"]), profissional)
             return aceito(anterior["resposta"])
         saga_id = uuid4()
         try:

@@ -1,4 +1,5 @@
 """Cancelamento local e início do cancelamento distribuído."""
+from hashlib import sha256
 from typing import Annotated
 from uuid import UUID
 
@@ -6,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict
 
 from servicos.banco import conectar
+from servicos.contratos_reserva import CancelamentoUnidade
 from servicos.comandos import RASTREADO, Chave, Justificativa, NaoNulo, responder, resumir
 from servicos.idempotencia import gravar_resultado, resultado_anterior
 from servicos.identidade_demo import Ator, CidadaoDelegado, ProfissionalDelegado, ator_do_orquestrador
@@ -17,12 +19,6 @@ BANCO = "RESERVAS_DATABASE_URL"
 Cidadao = CidadaoDelegado
 Profissional = ProfissionalDelegado
 Delegado = Annotated[Ator, Depends(ator_do_orquestrador)]
-
-
-class CancelamentoUnidade(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    justificativa: Justificativa
 
 
 class IniciarCancelamento(BaseModel):
@@ -56,10 +52,17 @@ def cancelar_local(ator: Ator, reserva_id: UUID, justificativa: str | None, chav
     operacao = f"cancelar-{ator.papel.lower()}"
     resumo = resumir(reserva_id, justificativa or "")
     with conectar(BANCO) as conexao:
-        if (anterior := resultado_anterior(conexao, operacao, ator.id, chave, resumo)) is not None:
+        anterior = resultado_anterior(conexao, operacao, ator.id, chave, resumo)
+        if anterior is None:
+            # A main usava outro escopo e outro resumo. O registro original permanece intacto.
+            legado = sha256(str((reserva_id, justificativa, None, ator.unidadeId)).encode()).hexdigest()
+            anterior = resultado_anterior(conexao, "cancelamento-local", f"{ator.papel}:{ator.id}", chave, legado)
+        if anterior is not None and anterior[1].get("codigo") == "CHAVE_IDEMPOTENTE_CONFLITANTE":
             return anterior
-        reserva = buscar(conexao, reserva_id, travar=True)
+        reserva = buscar(conexao, reserva_id, travar=anterior is None)
         autorizar(reserva, ator)
+        if anterior is not None:
+            return anterior
         status = reserva["status"]
         if status == "SOLICITADA":
             transicionar(conexao, reserva_id, status, "CANCELADA", ator_id=ator.id, justificativa=justificativa)
@@ -79,10 +82,16 @@ def iniciar(ator: Ator, reserva_id: UUID, comando: IniciarCancelamento, chave: s
         raise HTTPException(400, "Justificativa obrigatória para o profissional.")
     resumo = resumir(reserva_id, comando.sagaId, ator.papel, ator.id, comando.justificativa or "")
     with conectar(BANCO) as conexao:
-        if (anterior := resultado_anterior(conexao, operacao, principal, chave, resumo)) is not None:
+        anterior = resultado_anterior(conexao, operacao, principal, chave, resumo)
+        if anterior is None:
+            legado = sha256(str((reserva_id, comando.justificativa, comando.sagaId, ator.unidadeId)).encode()).hexdigest()
+            anterior = resultado_anterior(conexao, operacao, f"{ator.papel}:{ator.id}", chave, legado)
+        if anterior is not None and anterior[1].get("codigo") == "CHAVE_IDEMPOTENTE_CONFLITANTE":
             return anterior
-        reserva = buscar(conexao, reserva_id, travar=True)
+        reserva = buscar(conexao, reserva_id, travar=anterior is None)
         autorizar(reserva, ator)
+        if anterior is not None:
+            return anterior
         if reserva["status"] in ("EM_CONFIRMACAO", "CONFIRMADA"):
             transicionar(conexao, reserva_id, reserva["status"], "CANCELAMENTO_EM_ANDAMENTO", ator_id=ator.id,
                          justificativa=comando.justificativa, saga_id=comando.sagaId)

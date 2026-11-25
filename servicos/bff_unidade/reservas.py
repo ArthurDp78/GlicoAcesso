@@ -1,14 +1,17 @@
 """Painel de reservas, decisões, cancelamento e entrega."""
 import asyncio
+from datetime import datetime, timezone
 from typing import Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Request, Response
+from fastapi import APIRouter, Response
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from servicos.bff import encaminhar
-from servicos.bff_unidade.administracao import ESTOQUE_PAINEL, UNIDADE, caminho_unidade
-from servicos.bff_unidade.contexto import API, Comando, Consulta
+from servicos.bff_unidade.contexto import API, Comando, Consulta, caminho_unidade
+from servicos.bff_unidade.representacoes import ESTOQUE_PAINEL, UNIDADE
+from servicos.contratos_reserva import CancelamentoUnidade
+from servicos.contratos_retirada import PedidoRetirada
 from servicos.contratos_reserva import CANCELAVEIS, LinkReserva, ReservaInterna
 
 
@@ -45,10 +48,13 @@ RESERVAS = TypeAdapter(list[ReservaInterna])
 AUTORIZACAO = TypeAdapter(DadosAutorizacao)
 
 
-def links_da_reserva(reserva: ReservaInterna, autorizacao: DadosAutorizacao | None, unidade_ativa: bool):
+def links_da_reserva(reserva: ReservaInterna, autorizacao: DadosAutorizacao | None, unidade_ativa: bool,
+                     *, agora: datetime | None = None):
     consulta, acoes = f"{API}/painel/reservas/{reserva.reservaId}", f"{API}/reservas/{reserva.reservaId}"
     links = {"self": LinkReserva(href=consulta, method="GET")}
-    if reserva.status == "SOLICITADA":
+    instante = agora or datetime.now(timezone.utc)
+    dentro_do_prazo = reserva.decisaoAte > instante
+    if reserva.status == "SOLICITADA" and dentro_do_prazo:
         if unidade_ativa:  # Uma unidade inativa não aceita solicitações; não se oferece a ação.
             links["aceitar"] = LinkReserva(href=acoes + "/decisao", method="POST", body={"decisao": "ACEITAR"})
         links["rejeitar"] = LinkReserva(href=acoes + "/decisao", method="POST", body={"decisao": "REJEITAR"})
@@ -95,9 +101,13 @@ async def consultar_reserva(reservaId: UUID, servicos: Consulta, response: Respo
     response.headers["Cache-Control"] = "no-store"
     # Reservas verifica o vínculo antes de qualquer dado complementar ser consultado.
     reserva = await servicos.obter("reservas", f"/internal/v1/reservas/{reservaId}", RESERVA)
+    autorizacao_pendente = (
+        servicos.complementar("retiradas", f"/internal/v1/autorizacoes/{reservaId}", AUTORIZACAO,
+                              exigir_integracao=True)
+        if reserva.status == "CONFIRMADA" else asyncio.sleep(0, result=None)
+    )
     itens, unidade, autorizacao, estoque = await asyncio.gather(
-        catalogo(servicos), cadastro(servicos),
-        servicos.complementar("retiradas", f"/internal/v1/autorizacoes/{reservaId}", AUTORIZACAO),
+        catalogo(servicos), cadastro(servicos), autorizacao_pendente,
         servicos.complementar("estoque", f"{API}/estoque/{reserva.unidadeId}/itens", ESTOQUE_PAINEL),
     )
     return apresentar(reserva, itens, unidade, autorizacao, estoque)
@@ -112,15 +122,14 @@ async def decidir(reservaId: UUID, corpo: DecisaoProfissional, servicos: Comando
 
 
 @rotas.post("/reservas/{reservaId}/cancelar")
-async def cancelar(request: Request, reservaId: UUID, servicos: Comando):
-    # A justificativa é validada por Reservas e, no pedido distribuído, pelo Orquestrador.
-    corpo = await request.body()
+async def cancelar(reservaId: UUID, corpo: CancelamentoUnidade, servicos: Comando):
+    payload = corpo.model_dump_json().encode()
     return await encaminhar(
         servicos, reservaId, f"{API}/reservas/{reservaId}/cancelar", "CANCELAMENTO_DISTRIBUIDO", "cancelamentos",
-        f"{API}/painel/reservas/{reservaId}", corpo=corpo, corpo_saga=corpo,
+        f"{API}/painel/reservas/{reservaId}", corpo=payload, corpo_saga=payload,
     )
 
 
 @rotas.post("/retiradas", status_code=201)
-async def registrar_retirada(servicos: Comando):
-    return await servicos.comandar("retiradas", "POST", API + "/retiradas")
+async def registrar_retirada(corpo: PedidoRetirada, servicos: Comando):
+    return await servicos.comandar("retiradas", "POST", API + "/retiradas", corpo)

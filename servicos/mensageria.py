@@ -19,6 +19,8 @@ EXCHANGE_ERROS = "glico.eventos.erros"
 FILA_PROJECAO = "estoque.projecao-disponibilidade"
 RETIRADA_CONCLUIDA = "retirada.concluida.v1"
 FILA_RETIRADA_ESTOQUE = "estoque.baixa-retirada"
+FILA_RETIRADA_ESTOQUE_MAIN = "estoque.retirada-concluida"
+EXCHANGE_ERROS_RETIRADA_MAIN = "glico.retirada.erros"
 FILA_RETIRADA_RESERVAS = "reservas.retirada-concluida"
 FILA_RETIRADA_ORQUESTRADOR = "orquestrador.retirada-concluida"
 FILAS_RETIRADA = (FILA_RETIRADA_ESTOQUE, FILA_RETIRADA_RESERVAS, FILA_RETIRADA_ORQUESTRADOR)
@@ -35,6 +37,21 @@ def todas_as_filas() -> list[str]:
     return filas + [fila_de_erros(fila) for fila in filas]
 
 
+def fila_existe(canal, fila: str) -> bool:
+    # Uma consulta passiva a uma fila ausente fecha somente este canal auxiliar.
+    consulta = canal.connection.channel()
+    try:
+        consulta.queue_declare(fila, passive=True)
+    except pika.exceptions.ChannelClosedByBroker as erro:
+        if erro.reply_code != 404:
+            raise
+        return False
+    finally:
+        if consulta.is_open:
+            consulta.close()
+    return True
+
+
 def declarar(canal) -> None:
     """Declara todos os vínculos: um produtor nunca publica antes de existirem as filas dos consumidores."""
     canal.exchange_declare(EXCHANGE, "topic", durable=True)
@@ -43,11 +60,19 @@ def declarar(canal) -> None:
     canal.queue_bind(fila_de_erros(FILA_PROJECAO), EXCHANGE_ERROS)
     canal.queue_declare(FILA_PROJECAO, durable=True, arguments={"x-dead-letter-exchange": EXCHANGE_ERROS})
     canal.queue_bind(FILA_PROJECAO, EXCHANGE, routing_key="estoque.#")
-    for fila in FILAS_RETIRADA:
+    estoque_main = fila_existe(canal, FILA_RETIRADA_ESTOQUE_MAIN)
+    canal.exchange_declare(EXCHANGE_ERROS_RETIRADA_MAIN, "direct", durable=True)
+    filas = (*FILAS_RETIRADA, FILA_RETIRADA_ESTOQUE_MAIN) if estoque_main else FILAS_RETIRADA
+    for fila in filas:
         canal.queue_declare(fila_de_erros(fila), durable=True)
-        canal.queue_declare(fila, durable=True, arguments={
-            "x-dead-letter-exchange": "", "x-dead-letter-routing-key": fila_de_erros(fila)})
-        canal.queue_bind(fila, EXCHANGE, routing_key=RETIRADA_CONCLUIDA)
+        canal.queue_bind(fila_de_erros(fila), EXCHANGE_ERROS_RETIRADA_MAIN, routing_key=fila)
+        # O RabbitMQ não permite trocar argumentos de uma fila existente. A main
+        # usa outra dead-letter exchange; a fila e todas as mensagens são mantidas.
+        if not fila_existe(canal, fila):
+            canal.queue_declare(fila, durable=True, arguments={
+                "x-dead-letter-exchange": "", "x-dead-letter-routing-key": fila_de_erros(fila)})
+        if not estoque_main or fila != FILA_RETIRADA_ESTOQUE:
+            canal.queue_bind(fila, EXCHANGE, routing_key=RETIRADA_CONCLUIDA)
 
 
 # --- Outbox ---
@@ -145,8 +170,11 @@ def registrar_inbox(conexao, consumidor: str, event_id: UUID) -> bool:
     """, (consumidor, event_id)).fetchone() is not None
 
 
-def consumidor(fila: str, processar):
+def consumidor(fila: str, processar, *, opcional=False):
     def consumir(canal, parar: threading.Event) -> None:
+        if opcional and not fila_existe(canal, fila):
+            parar.wait()
+            return
         canal.basic_qos(prefetch_count=10)
         for metodo, _propriedades, corpo in canal.consume(fila, inactivity_timeout=1):
             if parar.is_set():

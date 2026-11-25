@@ -3,6 +3,15 @@ from uuid import UUID
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
+from servicos.comandos import Justificativa
+
+
+
+class CancelamentoUnidade(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    justificativa: Justificativa
+
 
 class PedidoReserva(BaseModel):
     model_config = ConfigDict(extra="forbid")

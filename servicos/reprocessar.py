@@ -37,7 +37,9 @@ def reprocessar(fila: str) -> int:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Reprocessa os eventos da fila de erros de um consumidor.")
-    parser.add_argument("fila", choices=[mensageria.FILA_PROJECAO, *mensageria.FILAS_RETIRADA])
+    parser.add_argument("fila", choices=[
+        mensageria.FILA_PROJECAO, *mensageria.FILAS_RETIRADA, mensageria.FILA_RETIRADA_ESTOQUE_MAIN,
+    ])
     print(f"Eventos devolvidos à fila: {reprocessar(parser.parse_args().fila)}.")
 
 

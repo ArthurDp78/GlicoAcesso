@@ -16,7 +16,7 @@ from servicos.comandos import PRAZO_MAXIMO_HORAS, RASTREADO
 from servicos.contratos_reserva import PedidoReserva, ReservaInterna
 from servicos.erros import entrada_invalida_400
 from servicos.http import cliente_http, consultar, falha_de_configuracao
-from servicos.idempotencia import reobter_resultado
+from servicos.idempotencia import resultado_anterior
 from servicos.identidade_demo import (
     TOKEN_BFF_CIDADAO, TOKEN_BFF_UNIDADE, TOKEN_ORQUESTRADOR, TOKEN_RESERVAS, TOKEN_RETIRADAS, Ator, AtorDelegado,
     CidadaoDelegado, ProfissionalDelegado, ator_do_orquestrador, exigir_credenciais, orquestrador_autenticado,
@@ -248,7 +248,8 @@ def conflito(codigo: str, mensagem: str) -> tuple[int, dict]:
     return 409, {"codigo": codigo, "mensagem": mensagem}
 
 
-def registrar_decisao(profissional: str, unidade: UUID, reserva_id: UUID, decisao: str, chave: str):
+def registrar_decisao(profissional: str, unidade: UUID, reserva_id: UUID, decisao: str, chave: str, *,
+                     somente_consulta: bool = False):
     resumo = sha256(f"{reserva_id}:{decisao}".encode()).hexdigest()
     with conectar(BANCO) as conexao:
         controle = f"{OPERACAO_DECISAO}:{profissional}:{chave}"
@@ -260,7 +261,10 @@ def registrar_decisao(profissional: str, unidade: UUID, reserva_id: UUID, decisa
         if anterior is not None:
             if anterior["request_hash"] != resumo:
                 return conflito("CHAVE_IDEMPOTENTE_CONFLITANTE", "Chave reutilizada com outra reserva ou decisão.")
+            exigir_reserva_da_unidade(conexao, reserva_id, unidade)
             return anterior["http_status"], anterior["resposta"]
+        if somente_consulta:
+            return None
         reserva = conexao.execute("""
             SELECT unidade_id, status, decisao_ate > now() AS no_prazo
             FROM reservas WHERE reserva_id = %s FOR UPDATE
@@ -300,20 +304,21 @@ def registrar_decisao(profissional: str, unidade: UUID, reserva_id: UUID, decisa
 async def decidir(request: Request, reservaId: UUID, corpo: Decisao, profissional: Profissional, chave: Chave):
     if not chave.strip():
         raise HTTPException(400, "Chave idempotente vazia.")
-    # O replay vem antes da consulta remota: um retry recupera o destino original mesmo se a unidade mudou.
-    anterior = await run_in_threadpool(
-        reobter_resultado, BANCO, OPERACAO_DECISAO, profissional.id, chave,
-        sha256(f"{reservaId}:{corpo.decisao}".encode()).hexdigest(),
-    )
-    if anterior is not None:
-        return responder(anterior)
+    argumentos = (profissional.id, profissional.unidadeId, reservaId, corpo.decisao, chave)
     if corpo.decisao == "ACEITAR":
-        # Uma unidade inativa não aceita solicitações, mas ainda pode rejeitar as existentes.
-        await verificar_vinculo(request, profissional)
-    status, dados = await run_in_threadpool(
-        registrar_decisao, profissional.id, profissional.unidadeId, reservaId, corpo.decisao, chave
-    )
-    return JSONResponse(dados, status_code=status, headers={"Cache-Control": "no-store"})
+        anterior = await run_in_threadpool(registrar_decisao, *argumentos, somente_consulta=True)
+        if anterior is not None:
+            return responder(anterior)
+        try:
+            await verificar_vinculo(request, profissional)
+        except HTTPException:
+            # Uma decisão concorrente pode ter sido gravada enquanto Unidades era consultado.
+            anterior = await run_in_threadpool(registrar_decisao, *argumentos, somente_consulta=True)
+            if anterior is not None:
+                return responder(anterior)
+            raise
+    return responder(await run_in_threadpool(registrar_decisao, *argumentos))
+
 
 
 class ComandoSaga(BaseModel):
@@ -325,22 +330,38 @@ class ComandoSaga(BaseModel):
 Orquestrador = Annotated[str, Depends(orquestrador_autenticado)]
 
 
+def exigir_reserva_da_unidade(conexao, reserva_id: UUID, unidade: UUID) -> None:
+    reserva = conexao.execute("SELECT unidade_id FROM reservas WHERE reserva_id = %s", (reserva_id,)).fetchone()
+    if reserva is None:
+        raise HTTPException(404, "Reserva não encontrada.")
+    if reserva["unidade_id"] != unidade:
+        raise HTTPException(403, "Reserva de outra unidade.")
+
+
 def registrar_transicao(operacao: str, reserva_id: UUID, saga_id: UUID, chave: str,
-                        origem: str, destino: str, ator: Ator | None = None):
+                        origem: str, destino: str, ator: Ator | None = None, *, somente_consulta=False):
     """Transição pedida pelo Orquestrador: efeito, histórico e resultado idempotente na mesma transação."""
     principal = "orquestrador"
     resumo = sha256(f"{reserva_id}:{saga_id}".encode()).hexdigest()
+    resumo_legado = (
+        sha256(str((reserva_id, None, saga_id, None)).encode()).hexdigest()
+        if operacao == "finalizar-cancelamento" else None
+    )
     with conectar(BANCO) as conexao:
-        controle = f"{operacao}:{principal}:{chave}"
-        conexao.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (controle,))
-        anterior = conexao.execute("""
-            SELECT request_hash, http_status, resposta FROM idempotencia_comandos
-            WHERE operacao = %s AND principal_id = %s AND chave = %s
-        """, (operacao, principal, chave)).fetchone()
+        anterior = resultado_anterior(conexao, operacao, principal, chave, resumo, resumo_legado=resumo_legado)
         if anterior is not None:
-            if anterior["request_hash"] != resumo:
-                return conflito("CHAVE_IDEMPOTENTE_CONFLITANTE", "Chave reutilizada com outro comando.")
-            return anterior["http_status"], anterior["resposta"]
+            if ator is not None and anterior[1].get("codigo") != "CHAVE_IDEMPOTENTE_CONFLITANTE":
+                exigir_reserva_da_unidade(conexao, reserva_id, ator.unidadeId)
+            if ator is not None and anterior[0] == 200:
+                autor = conexao.execute("""
+                    SELECT ator_id FROM historico_reserva
+                    WHERE reserva_id = %s AND saga_id = %s AND status_posterior = 'EM_CONFIRMACAO'
+                """, (reserva_id, saga_id)).fetchone()
+                if autor is None or autor["ator_id"] != ator.id:
+                    raise HTTPException(403, "Aceite registrado por outro ator.")
+            return anterior
+        if somente_consulta:
+            return None
         reserva = conexao.execute(f"""
             SELECT {CAMPOS}, decisao_ate > now() AS "noPrazo"
             FROM reservas WHERE reserva_id = %s FOR UPDATE
@@ -351,6 +372,8 @@ def registrar_transicao(operacao: str, reserva_id: UUID, saga_id: UUID, chave: s
             raise HTTPException(403, "Reserva de outra unidade.")
         if reserva["status"] != origem:
             resultado = conflito("ESTADO_INCOMPATIVEL", f"A reserva está {reserva['status']}.")
+            if operacao == "finalizar-cancelamento" and reserva["status"] == "RETIRADA":
+                resultado[1]["status"] = "RETIRADA"
         elif ator is not None and not reserva["noPrazo"]:
             resultado = conflito("ESTADO_INCOMPATIVEL", "O prazo de decisão terminou.")
         else:
@@ -389,17 +412,19 @@ async def aceitar(
 ):
     if ator.papel != "PROFISSIONAL":
         raise HTTPException(403, "O aceite é exclusivo de profissional da unidade.")
-    # Um aceite já gravado é recuperado sem reavaliar a unidade; senão a SAGA o trataria como recusado.
-    anterior = await run_in_threadpool(
-        reobter_resultado, BANCO, "aceitar-reserva", "orquestrador", chave,
-        sha256(f"{reservaId}:{comando.sagaId}".encode()).hexdigest(),
-    )
+    argumentos = ("aceitar-reserva", reservaId, comando.sagaId, chave, "SOLICITADA", "EM_CONFIRMACAO", ator)
+    anterior = await run_in_threadpool(registrar_transicao, *argumentos, somente_consulta=True)
     if anterior is not None:
         return responder(anterior)
-    await verificar_vinculo(request, ator)
-    return responder(await run_in_threadpool(
-        registrar_transicao, "aceitar-reserva", reservaId, comando.sagaId, chave, "SOLICITADA", "EM_CONFIRMACAO", ator
-    ))
+    try:
+        await verificar_vinculo(request, ator)
+    except HTTPException:
+        anterior = await run_in_threadpool(registrar_transicao, *argumentos, somente_consulta=True)
+        if anterior is not None:
+            return responder(anterior)
+        raise
+    return responder(await run_in_threadpool(registrar_transicao, *argumentos))
+
 
 
 @app.post("/internal/v1/reservas/{reservaId}/confirmar", dependencies=RASTREADO)

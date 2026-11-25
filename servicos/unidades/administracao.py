@@ -17,12 +17,21 @@ rotas = APIRouter()
 BANCO = "UNIDADES_DATABASE_URL"
 Profissional = ProfissionalDelegado
 Administracao = Annotated[str, Depends(administracao_autenticada)]
+OPERACOES_MAIN = {
+    "atualizar-unidade": "atualizar-cadastro",
+    "substituir-horarios": "atualizar-horarios",
+    "alterar-status": "atualizar-situacao",
+    "configurar-prazo": "atualizar-prazo",
+}
 
 
 def cadastrar(principal: str, chave: str, dados: UnidadeInput):
     resumo = resumir(dados.model_dump_json())
     with conectar(BANCO) as conexao:
-        if (anterior := resultado_anterior(conexao, "cadastrar-unidade", principal, chave, resumo)) is not None:
+        anterior = resultado_anterior(conexao, "cadastrar-unidade", principal, chave, resumo)
+        if anterior is None:
+            anterior = resultado_anterior(conexao, "cadastrar-unidade", "gestor-rede-demo", chave, resumo)
+        if anterior is not None:
             return anterior
         try:
             with conexao.transaction():
@@ -37,7 +46,10 @@ def alterar(operacao: str, profissional: Ator, unidade_id: UUID, chave: str, dad
     exigir_unidade(profissional, unidade_id)
     resumo = resumir(unidade_id, dados.model_dump_json())
     with conectar(BANCO) as conexao:
-        if (anterior := resultado_anterior(conexao, operacao, profissional.id, chave, resumo)) is not None:
+        anterior = resultado_anterior(conexao, operacao, profissional.id, chave, resumo)
+        if anterior is None:
+            anterior = resultado_anterior(conexao, OPERACOES_MAIN[operacao], profissional.id, chave, resumo)
+        if anterior is not None:
             return anterior
         if not repositorio.travar(conexao, unidade_id):
             raise HTTPException(404, "Unidade não encontrada.")

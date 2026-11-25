@@ -1,5 +1,6 @@
 """Encaminhamento das rotas públicas aos BFFs. Só o que está na tabela é alcançável pelo cliente."""
 import os
+import re
 
 from fastapi import APIRouter, FastAPI, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
@@ -19,7 +20,8 @@ OPERACOES = {
     UNIDADE: (
         ("GET", "/unidade"), ("PUT", "/unidade"), ("PUT", "/unidade/horarios"), ("PUT", "/unidade/prazo-analise"),
         ("PATCH", "/unidade/status"),
-        ("GET", "/painel/estoque"), ("GET", "/painel/reservas"), ("GET", "/painel/reservas/{reservaId}"),
+        ("GET", "/painel/estoque"), ("GET", "/painel/estoque/catalogo"),
+        ("GET", "/painel/reservas"), ("GET", "/painel/reservas/{reservaId}"),
         ("PUT", "/painel/estoque/{unidadeId}/itens/{itemId}/permissao"),
         ("POST", "/painel/estoque/{unidadeId}/itens/{itemId}/entradas"),
         ("POST", "/painel/estoque/{unidadeId}/itens/{itemId}/ajustes"),
@@ -31,17 +33,36 @@ COM_400 = ("/reservas/{reservaId}/decisao", "/reservas/{reservaId}/cancelar")
 # Listas fechadas: cabeçalhos de identidade delegada (X-Ator-*) e quaisquer outros não atravessam a borda.
 CABECALHOS_DE_IDA = ("authorization", "idempotency-key", "content-type")
 CABECALHOS_DE_VOLTA = ("content-type", "cache-control", "location", "www-authenticate")
+LIMITE_CORPO_BYTES = 1_048_576
+
+
+async def ler_corpo_limitado(request: Request) -> bytes:
+    """Limita o corpo antes de agregá-lo em memória; Content-Length pode faltar ou mentir."""
+    tamanho = request.headers.get("content-length")
+    if tamanho is not None:
+        try:
+            if int(tamanho) > LIMITE_CORPO_BYTES:
+                raise HTTPException(413, "Corpo da requisição excede o limite permitido.")
+        except ValueError:
+            raise HTTPException(400, "Content-Length inválido.") from None
+    partes, total = [], 0
+    async for parte in request.stream():
+        total += len(parte)
+        if total > LIMITE_CORPO_BYTES:
+            raise HTTPException(413, "Corpo da requisição excede o limite permitido.")
+        partes.append(parte)
+    return b"".join(partes)
 
 
 async def repassar(request: Request, prefixo: str) -> Response:
     variavel, padrao = BFFS[prefixo]
     cabecalhos = {nome: request.headers[nome] for nome in CABECALHOS_DE_IDA if nome in request.headers}
     cabecalhos[CABECALHO] = request.state.correlacao
+    corpo = await ler_corpo_limitado(request) if request.method in ("POST", "PUT", "PATCH") else None
     try:
         resposta = await requisitar(
             request.app.state.http, request.method, os.environ.get(variavel, padrao).rstrip("/") + request.url.path,
-            params=request.query_params.multi_items(), headers=cabecalhos,
-            content=await request.body() if request.method in ("POST", "PUT", "PATCH") else None,
+            params=request.query_params.multi_items(), headers=cabecalhos, content=corpo,
         )
     except HTTPException as erro:
         raise HTTPException(503, "Serviço temporariamente indisponível. Em comandos, repita com a mesma chave e conteúdo.") from erro
@@ -69,6 +90,32 @@ def instalar(app: FastAPI) -> None:
     rotas = APIRouter()
     for prefixo, operacoes in OPERACOES.items():
         for metodo, caminho in operacoes:
-            rotas.add_api_route(prefixo + caminho, criar_encaminhamento(prefixo, caminho), methods=[metodo],
-                                name=f"{metodo} {prefixo}{caminho}")
+            rota = prefixo + caminho
+            parametros = [
+                {"name": nome, "in": "path", "required": True,
+                 "schema": {"type": "string", "format": "uuid"}}
+                for nome in re.findall(r"\{(\w+)\}", caminho)
+            ]
+            parametros.append({
+                "name": "X-Correlation-Id", "in": "header", "required": False,
+                "schema": {"type": "string", "format": "uuid"},
+            })
+            if metodo in ("POST", "PUT", "PATCH"):
+                parametros.append({
+                    "name": "Idempotency-Key", "in": "header", "required": True,
+                    "schema": {"type": "string", "minLength": 1, "maxLength": 128},
+                })
+            documentacao = {
+                "parameters": parametros,
+                "responses": {"503": {"description": "Serviço temporariamente indisponível."}},
+            }
+            if prefixo == UNIDADE or caminho not in PUBLICAS:
+                documentacao["security"] = [{"bearerAuth": []}]
+            if caminho == "/explorar":
+                documentacao["parameters"].append({
+                    "name": "itemId", "in": "query", "required": True,
+                    "schema": {"type": "string", "format": "uuid"},
+                })
+            rotas.add_api_route(rota, criar_encaminhamento(prefixo, caminho), methods=[metodo],
+                                name=f"{metodo} {rota}", openapi_extra=documentacao)
     app.include_router(rotas)

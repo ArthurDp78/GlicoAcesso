@@ -179,6 +179,9 @@ class Agregacao(Base):
             self.assertEqual((dados.status_code, [c for c in campos if c in dados.json()]), (200, []))
         a.proxies["bff>retiradas"].recusar["/"] = 1
         self.assertEqual(uni("GET", f"/painel/reservas/{reserva}").status_code, 200)
+        confirmada = a.confirmada(1, a.item_com_saldo(2))
+        a.proxies["bff>retiradas"].recusar["/"] = 1
+        self.assertEqual(uni("GET", f"/painel/reservas/{confirmada}").status_code, 503)
         a.proxies["bff>reservas"].recusar["/"] = 2
         self.assertEqual([cid("GET", f"/reservas/{reserva}").status_code, uni("GET", f"/painel/reservas/{reserva}").status_code], [503, 503])
         a.proxies["bff>estoque"].recusar["/disponibilidade"] = 1

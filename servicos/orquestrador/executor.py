@@ -9,6 +9,7 @@ import os
 import threading
 
 import httpx
+from psycopg.errors import UniqueViolation
 from servicos.banco import conectar
 from servicos.http import falha_de_configuracao
 from servicos.orquestrador.cancelamento import (
@@ -142,12 +143,24 @@ def executar_uma(cliente: httpx.Client) -> bool:
                            AND p.estado_tecnico = 'CONCLUIDA') AS autorizacao_criada
             FROM saga_etapas e JOIN saga_execucoes s USING (saga_id)
             WHERE e.estado_tecnico = 'PENDENTE' AND e.proximo_retry_em <= now() AND s.encerrada_em IS NULL
+              AND (s.estado <> 'AGUARDANDO_CONFIRMACAO' OR NOT EXISTS (
+                  SELECT 1 FROM saga_execucoes AS outra
+                  WHERE outra.reserva_id = s.reserva_id AND outra.saga_id <> s.saga_id
+                    AND outra.encerrada_em IS NULL AND outra.estado <> 'AGUARDANDO_CONFIRMACAO'
+              ))
             ORDER BY e.proximo_retry_em
             LIMIT 1
             FOR NO KEY UPDATE OF e, s SKIP LOCKED
         """).fetchone()
         if etapa is None:
             return False
+        if etapa["estado"] == "AGUARDANDO_CONFIRMACAO":
+            try:
+                with conexao.transaction():
+                    mudar_estado(conexao, etapa["saga_id"], "CANCELANDO")
+            except UniqueViolation:
+                return False
+            etapa["estado"] = "CANCELANDO"
         # A chamada ocorre com a etapa travada: só este trabalhador decide o passo seguinte.
         try:
             status, corpo, erro = chamar(cliente, etapa)

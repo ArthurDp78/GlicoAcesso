@@ -1,5 +1,6 @@
 """Recepção e consulta de pedidos de cancelamento distribuído."""
 import os
+from hashlib import sha256
 from typing import Annotated
 from uuid import UUID, uuid4
 
@@ -12,7 +13,7 @@ from pydantic import BaseModel, ConfigDict
 from servicos.banco import conectar
 from servicos.comandos import RASTREADO, Chave, Correlacao, Justificativa, NaoNulo, resumir
 from servicos.http import falha_de_configuracao
-from servicos.idempotencia import gravar_resultado, reobter_resultado, resultado_anterior
+from servicos.idempotencia import gravar_resultado, resultado_anterior
 from servicos.identidade_demo import Ator, AtorDelegado, cabecalhos_do_ator
 from servicos.orquestrador.cancelamento import iniciar_execucao
 from servicos.orquestrador.registro import BANCO
@@ -64,14 +65,25 @@ def consultar_permissao(reserva_id: UUID, ator: Ator, correlacao: UUID) -> str:
         raise HTTPException(503, "Não foi possível verificar a permissão em Reservas.") from falha
 
 
+def repetir_cancelamento(conexao, reserva_id, ator, justificativa, chave, resumo):
+    anterior = resultado_anterior(conexao, OPERACAO, ator.id, chave, resumo)
+    if anterior is None:
+        legado = sha256(str((reserva_id, ator.unidadeId, justificativa)).encode()).hexdigest()
+        anterior = resultado_anterior(conexao, OPERACAO, f"{ator.papel}:{ator.id}", chave, legado)
+    if anterior is not None and anterior[0] == 202:
+        verificar_escopo(conexao, UUID(anterior[1]["sagaId"]), ator)
+    return anterior
+
+
 def registrar(reserva_id: UUID, ator: Ator, justificativa: str | None, chave: str, resumo: str, correlacao: UUID):
     """Grava pedido, intenção e resultado idempotente na mesma transação."""
     with conectar(BANCO) as conexao:
-        if (anterior := resultado_anterior(conexao, OPERACAO, ator.id, chave, resumo)) is not None:
+        if (anterior := repetir_cancelamento(conexao, reserva_id, ator, justificativa, chave, resumo)) is not None:
             return anterior
         saga_id = uuid4()
         ativa = conexao.execute("""
             SELECT saga_id, tipo FROM saga_execucoes WHERE reserva_id = %s AND encerrada_em IS NULL
+            ORDER BY (tipo = 'CANCELAMENTO') DESC LIMIT 1
         """, (reserva_id,)).fetchone()
         concorrente = 409, {"codigo": "EXECUCAO_CONCORRENTE", "mensagem": "Já existe um cancelamento para esta reserva."}
         if ativa is not None and ativa["tipo"] == "CANCELAMENTO":
@@ -106,30 +118,48 @@ def solicitar_cancelamento(reservaId: UUID, ator: AtorDelegado, chave: Chave,
     if ator.papel == "CIDADAO" and justificativa is not None:
         return erro(400, "ENTRADA_INVALIDA", "O cancelamento pelo cidadão não recebe justificativa.")
     resumo = resumir(reservaId, justificativa or "")
-    anterior = reobter_resultado(BANCO, OPERACAO, ator.id, chave, resumo)
+    with conectar(BANCO) as conexao:
+        anterior = repetir_cancelamento(conexao, reservaId, ator, justificativa, chave, resumo)
     if anterior is not None:
         return responder(anterior)
     correlacao = correlacao or uuid4()
-    estado = consultar_permissao(reservaId, ator, correlacao)
+    try:
+        estado = consultar_permissao(reservaId, ator, correlacao)
+    except HTTPException:
+        with conectar(BANCO) as conexao:
+            anterior = repetir_cancelamento(conexao, reservaId, ator, justificativa, chave, resumo)
+        if anterior is not None:
+            return responder(anterior)
+        raise
     if estado not in ("EM_CONFIRMACAO", "CONFIRMADA"):
+        with conectar(BANCO) as conexao:
+            anterior = repetir_cancelamento(conexao, reservaId, ator, justificativa, chave, resumo)
+        if anterior is not None:
+            return responder(anterior)
         return erro(409, "ESTADO_INCOMPATIVEL", f"A reserva está {estado}.")
     return responder(registrar(reservaId, ator, justificativa, chave, resumo, correlacao))
+
+
+def verificar_escopo(conexao, saga_id: UUID, ator: Ator):
+    # Um pedido ainda não ativado ou recusado não tem execução própria nem estado técnico.
+    pedido = conexao.execute("""
+        SELECT saga_id AS "sagaId", reserva_id AS "reservaId", tipo, estado AS "estadoExecucao",
+            motivo_encerramento AS "motivoEncerramento", ator_papel, ator_id, ator_unidade_id
+        FROM saga_execucoes WHERE saga_id = %(saga)s
+        UNION ALL
+        SELECT saga_id_solicitado, reserva_id, 'CANCELAMENTO', NULL, motivo_encerramento, ator_papel, ator_id, ator_unidade_id
+        FROM saga_pedidos_cancelamento WHERE saga_id_solicitado = %(saga)s AND fase <> 'ATIVADO'
+    """, {"saga": saga_id}).fetchone()
+    if pedido is None:
+        raise HTTPException(404, "Pedido não encontrado.")
+    if (pedido.pop("ator_papel"), pedido.pop("ator_id"), pedido.pop("ator_unidade_id")) != (
+        ator.papel, ator.id, ator.unidadeId
+    ):
+        raise HTTPException(403, "Pedido de outro ator ou unidade.")
+    return {chave: valor for chave, valor in pedido.items() if valor is not None}
 
 
 @rotas.get("/internal/v1/sagas/{sagaId}", dependencies=RASTREADO)
 def consultar_pedido(sagaId: UUID, ator: AtorDelegado):
     with conectar(BANCO) as conexao:
-        # Um pedido ainda não ativado ou recusado não tem execução própria nem estado técnico.
-        pedido = conexao.execute("""
-            SELECT saga_id AS "sagaId", reserva_id AS "reservaId", tipo, estado AS "estadoExecucao",
-                motivo_encerramento AS "motivoEncerramento", ator_papel, ator_id
-            FROM saga_execucoes WHERE saga_id = %(saga)s
-            UNION ALL
-            SELECT saga_id_solicitado, reserva_id, 'CANCELAMENTO', NULL, motivo_encerramento, ator_papel, ator_id
-            FROM saga_pedidos_cancelamento WHERE saga_id_solicitado = %(saga)s AND fase <> 'ATIVADO'
-        """, {"saga": sagaId}).fetchone()
-    if pedido is None:
-        raise HTTPException(404, "Pedido não encontrado.")
-    if (pedido.pop("ator_papel"), pedido.pop("ator_id")) != (ator.papel, ator.id):
-        raise HTTPException(403, "Pedido de outro ator.")
-    return {chave: valor for chave, valor in pedido.items() if valor is not None}
+        return verificar_escopo(conexao, sagaId, ator)

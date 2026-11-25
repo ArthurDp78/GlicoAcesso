@@ -58,7 +58,13 @@ def configurar_permissao(profissional: Ator, unidade_id: UUID, item_id: UUID, da
     exigir_unidade(profissional, unidade_id)
     resumo = resumir(unidade_id, item_id, dados.model_dump_json())
     with conectar(BANCO) as conexao:
-        if (anterior := resultado_anterior(conexao, "configurar-permissao", profissional.id, chave, resumo)) is not None:
+        anterior = resultado_anterior(conexao, "configurar-permissao", profissional.id, chave, resumo)
+        if anterior is None:
+            anterior = resultado_anterior(conexao, "configurar-reserva", profissional.id, chave, resumo)
+            if anterior is not None and anterior[0] == 200:
+                # A resposta da main não incluía os identificadores que o contrato atual exige.
+                return 200, {"unidadeId": str(unidade_id), "itemId": str(item_id), **anterior[1]}
+        if anterior is not None:
             return anterior
         if conexao.execute("SELECT 1 FROM itens WHERE item_id = %s", (item_id,)).fetchone() is None:
             raise HTTPException(404, "Item não encontrado.")
@@ -80,12 +86,18 @@ def configurar_permissao(profissional: Ator, unidade_id: UUID, item_id: UUID, da
 
 
 def movimentar(operacao: str, evento: str, profissional: Ator, unidade_id: UUID, item_id: UUID, variacao: int,
-               motivo: str, chave: str, correlacao):
+               motivo: str, chave: str, correlacao, resumo_legado: str):
     """Saldo, movimentação, evento e resultado idempotente na mesma transação."""
     exigir_unidade(profissional, unidade_id)
     resumo = resumir(unidade_id, item_id, variacao, motivo)
     with conectar(BANCO) as conexao:
-        if (anterior := resultado_anterior(conexao, operacao, profissional.id, chave, resumo)) is not None:
+        anterior = resultado_anterior(
+            conexao, operacao, profissional.id, chave, resumo,
+            resumo_legado=resumo_legado if operacao == "registrar-entrada" else None,
+        )
+        if anterior is None and operacao == "registrar-ajuste":
+            anterior = resultado_anterior(conexao, "ajustar-estoque", profissional.id, chave, resumo_legado)
+        if anterior is not None:
             return anterior
         saldo = travar_saldo(conexao, unidade_id, item_id)
         if saldo is None:
@@ -129,12 +141,14 @@ def alterar_permissao(unidadeId: UUID, itemId: UUID, dados: PermissaoInput, prof
 @rotas.post("/api/unidade/v1/estoque/{unidadeId}/itens/{itemId}/entradas", status_code=201, response_model=Movimentacao)
 def registrar_entrada(unidadeId: UUID, itemId: UUID, dados: EntradaFisica, profissional: Profissional, chave: Chave,
                       correlacao: Correlacao = None):
+    legado = resumir(unidadeId, itemId, dados.model_dump_json())
     return responder(movimentar("registrar-entrada", "estoque.entrada-registrada.v1", profissional, unidadeId, itemId,
-                                dados.quantidade, dados.motivo, chave, correlacao))
+                                dados.quantidade, dados.motivo, chave, correlacao, legado))
 
 
 @rotas.post("/api/unidade/v1/estoque/{unidadeId}/itens/{itemId}/ajustes", status_code=201, response_model=Movimentacao)
 def registrar_ajuste(unidadeId: UUID, itemId: UUID, dados: AjusteFisico, profissional: Profissional, chave: Chave,
                      correlacao: Correlacao = None):
+    legado = resumir(unidadeId, itemId, dados.model_dump_json())
     return responder(movimentar("registrar-ajuste", "estoque.ajustado.v1", profissional, unidadeId, itemId,
-                                dados.variacaoFisica, dados.motivo, chave, correlacao))
+                                dados.variacaoFisica, dados.motivo, chave, correlacao, legado))

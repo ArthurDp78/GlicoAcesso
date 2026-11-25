@@ -149,28 +149,50 @@ cd GlicoAcesso
 
 ## Desenvolvimento local
 
-### Rodar tudo com um comando (Windows)
+### Rodar com Docker Compose
 
-Pré-requisitos: Docker Desktop aberto e [uv](https://docs.astral.sh/uv/getting-started/installation/) instalado. Na raiz do repositório, em um PowerShell:
+Instale o Docker com o Compose v2 e o [uv](https://docs.astral.sh/uv/getting-started/installation/).
+Na raiz do repositório, rode os mesmos comandos em Linux, macOS ou Windows:
 
-```powershell
-.\scripts\demo-local.ps1
+```sh
+uv run --no-project --python 3.14 python scripts/configurar-compose.py
+docker compose up --build --wait
 ```
 
-O script faz o seguinte:
-- sobe os cinco PostgreSQL e o RabbitMQ em Docker;
-- gera os tokens de demonstração uma única vez e os guarda em `.demo-local/`, que fica fora do Git;
-- aplica as migrações e inicia os oito processos em segundo plano;
-- mostra os endereços dos portais e os tokens.
+O script cria o `.env` local e preenche apenas as credenciais ausentes. Use valores
+distintos e mantenha o arquivo fora do Git. Em POSIX, novos arquivos são gravados
+com permissão `0600`. O Compose passa para cada serviço as credenciais que ele usa.
+Os bancos, o RabbitMQ, os BFFs e os serviços de domínio se comunicam por redes Docker.
+Só o Gateway publica uma porta, em `127.0.0.1:8000` por padrão. Abra
+`/cidadao` ou `/unidade` e consulte no `.env` o token do perfil correspondente.
 
-Se a porta 8000 estiver ocupada, use `-GatewayPorta 8010`. As outras opções:
-- `-FalharRetiradas`: Retiradas passa a recusar as autorizações, para demonstrar a compensação.
-- `-Zerar`: apaga os bancos e a fila de demonstração e começa do estado inicial.
-- `-Parar`: encerra os processos.
+Para atualizar um ambiente da `main`, pare os contêineres e faça backup dos seis
+volumes antes da troca. Mantenha os nomes de projeto e dos volumes e os valores
+já usados nos cinco PostgreSQL e no RabbitMQ. Alterar as senhas de inicialização
+no `.env` não muda as credenciais gravadas em um volume existente. Os tokens
+internos novos são preenchidos separadamente. As migrações rodam na inicialização
+e adaptam o esquema legado preservando os registros. Configure
+`GLICO_CARREGAR_DEMO=0` se o ambiente deve permanecer sem os dados de exemplo.
 
-Os logs ficam em `.demo-local/logs`. Se o Windows bloquear a execução de scripts, use `powershell -ExecutionPolicy Bypass -File .\scripts\demo-local.ps1`.
+No PowerShell, `.\scripts\demo-local.ps1` prepara o ambiente e chama o
+Compose. Use `-GatewayPorta 8010` para mudar a porta nesta execução,
+`-FalharRetiradas` para simular a compensação ou `-Parar` para parar os
+contêineres preservando os volumes. Os logs ficam disponíveis em
+`docker compose logs`.
 
-As seções abaixo descrevem cada processo separadamente, para quem quiser subir serviço por serviço.
+O cadastro administrativo continua interno. Use a rede do projeto em
+`GLICO_REDE_ADMINISTRATIVA` se estiver rodando com um nome de projeto customizado:
+
+```sh
+docker compose -f compose.admin.yml --profile admin run --rm --build \
+  --volume "/caminho/unidade.json:/dados/unidade.json:ro" \
+  cadastro-unidades --arquivo /dados/unidade.json --chave "chave-do-cadastro"
+```
+
+### Rodar os processos individualmente
+
+As seções abaixo são para depuração de serviços com `uv` em terminais separados.
+Para executar a aplicação com a topologia de rede e o isolamento acima, use o Compose.
 
 A base executável da Parte 3 contém dois processos HTTP independentes: API Gateway e BFF Cidadão. Use [uv](https://docs.astral.sh/uv/getting-started/installation/) na raiz do repositório. O `uv` seleciona o Python 3.14 indicado em `.python-version` e instala as versões registradas em `uv.lock`.
 
@@ -412,7 +434,7 @@ Cada token tem no mínimo 32 caracteres e deve ser diferente dos demais. Um proc
 | Retiradas | `GLICO_RETIRADAS_SERVICE_TOKEN`, `GLICO_ORQUESTRADOR_SERVICE_TOKEN`, `GLICO_BFF_UNIDADE_TOKEN` |
 | Orquestrador | `GLICO_ORQUESTRADOR_SERVICE_TOKEN`, `GLICO_BFF_CIDADAO_TOKEN`, `GLICO_BFF_UNIDADE_TOKEN` |
 
-Na futura configuração do Docker Compose, cada contêiner deve receber apenas as próprias credenciais, distintas e protegidas fora do Git. Veja o [documento 03](./docs/parte-2/03-api-gateway.md).
+O Compose injeta em cada contêiner as credenciais listadas acima. A credencial de um canal interno é compartilhada apenas pelos participantes desse canal. Veja o [documento 03](./docs/parte-2/03-api-gateway.md).
 
 ### Administração, cancelamento e retirada
 

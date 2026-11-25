@@ -54,7 +54,10 @@ def preparar() -> None:
         return
     admin, broker = os.environ.get("GLICO_TESTE_PG"), os.environ.get("GLICO_TESTE_RABBIT")
     if not admin or not broker:
-        raise unittest.SkipTest("Defina GLICO_TESTE_PG e GLICO_TESTE_RABBIT para os testes de integração.")
+        mensagem = "Defina GLICO_TESTE_PG e GLICO_TESTE_RABBIT para os testes de integração."
+        if os.environ.get("GLICO_TESTE_OBRIGATORIO") == "1":
+            raise RuntimeError(mensagem)
+        raise unittest.SkipTest(mensagem)
     with psycopg.connect(admin, autocommit=True) as conexao:
         for servico in SERVICOS:
             nome = sql.Identifier(f"teste_{servico}")

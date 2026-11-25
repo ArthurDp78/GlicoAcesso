@@ -1,0 +1,14 @@
+# O contexto contém somente a aplicação e os arquivos necessários ao build.
+**
+!pyproject.toml
+!uv.lock
+!.python-version
+!servicos/
+!servicos/**
+!identidade-visual/
+!identidade-visual/logo-sem-fundo.png
+
+servicos/**/__pycache__/
+servicos/**/*.py[cod]
+servicos/**/.env*
+servicos/**/Dockerfile

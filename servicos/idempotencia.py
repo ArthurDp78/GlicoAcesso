@@ -3,7 +3,8 @@ from psycopg.types.json import Jsonb
 from servicos.banco import conectar
 
 
-def resultado_anterior(conexao, operacao: str, principal: str, chave: str, resumo: str):
+def resultado_anterior(conexao, operacao: str, principal: str, chave: str, resumo: str, *,
+                       resumo_legado: str | None = None):
     """Serializa a chave na transação e devolve o resultado gravado; 409 se o conteúdo divergir."""
     conexao.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (f"{operacao}:{principal}:{chave}",))
     anterior = conexao.execute("""
@@ -12,7 +13,7 @@ def resultado_anterior(conexao, operacao: str, principal: str, chave: str, resum
     """, (operacao, principal, chave)).fetchone()
     if anterior is None:
         return None
-    if anterior["request_hash"] != resumo:
+    if anterior["request_hash"] not in (resumo, resumo_legado):
         return 409, {"codigo": "CHAVE_IDEMPOTENTE_CONFLITANTE", "mensagem": "Chave reutilizada com outro conteúdo."}
     return anterior["http_status"], anterior["resposta"]
 

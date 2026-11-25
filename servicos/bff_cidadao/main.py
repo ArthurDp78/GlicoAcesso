@@ -10,6 +10,7 @@ from servicos.comandos import Chave
 from servicos.contratos_reserva import CANCELAVEIS, DadosReserva, LinkReserva, PedidoReserva, ReservaPublica
 from servicos.erros import entrada_invalida_400
 from servicos.identidade_demo import TOKEN_BFF_CIDADAO, TOKEN_CIDADAO, Ator, ator_autenticado
+from servicos.http import falha_de_configuracao
 
 
 app = criar_app("GlicoAcesso — BFF Cidadão", TOKEN_CIDADAO, TOKEN_BFF_CIDADAO)
@@ -96,8 +97,8 @@ async def explorar(servicos: DoBff, itemId: UUID):
                 dado = await servicos.obter("estoque", API + "/estoque/disponibilidade", DISPONIBILIDADE, publico=True,
                                             params={"unidadeId": str(unidade.unidadeId), "itemId": str(itemId)})
         except RespostaRecusada as erro:
-            if erro.resposta.status_code == 404:  # Combinação sem projeção: omitida do resultado.
-                return None
+            if erro.resposta.status_code == 404 and not falha_de_configuracao(erro.resposta):
+                return None  # Combinação sem projeção; rota inexistente continua sendo erro de integração.
             raise
         return UnidadeDisponivel(
             unidadeId=unidade.unidadeId,

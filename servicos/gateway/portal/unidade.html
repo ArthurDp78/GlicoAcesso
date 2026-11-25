@@ -32,7 +32,7 @@
           <label for="credencial">Token do profissional de demonstração</label>
           <input id="credencial" type="password" autocomplete="off" spellcheck="false" required>
         </div>
-        <button type="submit">Carregar solicitações</button>
+        <button type="submit">Carregar painel</button>
       </form>
     </section>
 
@@ -42,9 +42,34 @@
       <div id="lista" class="lista"></div>
     </section>
 
+    <section class="resultados" aria-labelledby="titulo-retiradas">
+      <h2 id="titulo-retiradas">Consultar reserva e registrar retirada</h2>
+      <form id="consultar-retirada">
+        <div class="campo">
+          <label for="codigo-retirada">Código da reserva</label>
+          <input id="codigo-retirada" type="text" required autocomplete="off" spellcheck="false">
+        </div>
+        <button type="submit">Consultar reserva</button>
+      </form>
+      <p id="status-retirada" class="status" role="status" aria-live="polite"></p>
+      <div id="reserva-retirada" class="lista"></div>
+    </section>
+
     <section class="resultados" aria-labelledby="titulo-estoque">
       <h2 id="titulo-estoque">Estoque da unidade</h2>
-      <p id="status-estoque" class="status" role="status" aria-live="polite">A disponibilidade vem do modelo de leitura e pode levar alguns segundos para refletir uma confirmação.</p>
+      <form id="entrada-estoque" hidden>
+        <div class="campo">
+          <label for="item-entrada">Medicamento ou insumo</label>
+          <select id="item-entrada" required></select>
+        </div>
+        <div class="campo">
+          <label for="quantidade-entrada">Quantidade recebida</label>
+          <input id="quantidade-entrada" type="number" min="1" max="2147483647" step="1" required>
+        </div>
+        <button type="submit">Registrar entrada</button>
+      </form>
+      <p id="status-entrada" class="status" role="status" aria-live="polite"></p>
+      <p id="status-estoque" class="status" role="status" aria-live="polite">A disponibilidade pode levar alguns segundos para refletir alterações no estoque.</p>
       <div id="estoque" class="lista"></div>
     </section>
 

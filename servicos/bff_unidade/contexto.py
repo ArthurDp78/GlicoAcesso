@@ -12,6 +12,11 @@ API = "/api/unidade/v1"
 Profissional = Annotated[Ator, Depends(profissional_autenticado)]
 
 
+def caminho_unidade(servicos, sufixo: str = "") -> str:
+    # A unidade vem do vínculo autenticado, nunca do cliente.
+    return f"/internal/v1/unidades/{servicos.ator.unidadeId}{sufixo}"
+
+
 def consulta(request: Request, profissional: Profissional) -> Servicos:
     return Servicos(request, TOKEN_BFF_UNIDADE, profissional)
 

@@ -62,4 +62,5 @@ def iniciar(parar: threading.Event) -> None:
         "publicador-outbox": mensageria.publicador(BANCO),
         "projecao-disponibilidade": mensageria.consumidor(mensageria.FILA_PROJECAO, aplicar),
         "baixa-retirada": mensageria.consumidor(mensageria.FILA_RETIRADA_ESTOQUE, processar_retirada),
+        "baixa-retirada-main": mensageria.consumidor(mensageria.FILA_RETIRADA_ESTOQUE_MAIN, processar_retirada, opcional=True),
     }, parar)

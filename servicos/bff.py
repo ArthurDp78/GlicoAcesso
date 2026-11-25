@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
-from pydantic import TypeAdapter, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from servicos import correlacao
 from servicos.http import cliente_http, falha_de_configuracao, requisitar
@@ -91,20 +91,30 @@ class Servicos:
         except ValidationError as erro:
             raise HTTPException(503, INDISPONIVEL) from erro
 
-    async def complementar(self, servico: str, caminho: str, modelo: TypeAdapter, **opcoes):
-        """Dado opcional de apresentação: sua ausência não impede a resposta principal."""
+    async def complementar(self, servico: str, caminho: str, modelo: TypeAdapter, *, exigir_integracao=False, **opcoes):
+        """Busca um complemento; callers podem exigir dependência quando ela decide ações disponíveis."""
         try:
             return await self.obter(servico, caminho, modelo, **opcoes)
         except RespostaRecusada as erro:
-            if erro.resposta.status_code != 404:
+            if erro.resposta.status_code == 404 and not falha_de_configuracao(erro.resposta):
+                return None  # Recurso opcional ausente, conforme contrato.
+            if erro.resposta.status_code >= 500:
                 log.warning("Complemento de %s indisponível: HTTP %s", servico, erro.resposta.status_code)
-        except HTTPException:
-            log.warning("Complemento de %s indisponível", servico)
-        return None
+                if exigir_integracao:
+                    raise HTTPException(503, INDISPONIVEL) from erro
+                return None
+            log.warning("Complemento de %s respondeu fora do contrato: HTTP %s", servico, erro.resposta.status_code)
+            raise HTTPException(503, INDISPONIVEL) from erro
+        except HTTPException as erro:
+            log.warning("Complemento de %s indisponível: HTTP %s", servico, erro.status_code)
+            if exigir_integracao:
+                raise HTTPException(503, INDISPONIVEL) from erro
+            return None
 
-    async def comandar(self, servico: str, metodo: str, caminho: str) -> Response:
-        """Encaminha o comando sem reinterpretar o corpo: as regras pertencem ao serviço."""
-        return repassar(await self.chamar(servico, metodo, caminho, corpo=await self.request.body()))
+    async def comandar(self, servico: str, metodo: str, caminho: str, corpo: BaseModel) -> Response:
+        """Encaminha o DTO validado pelo contrato da borda ao serviço dono da regra."""
+        conteudo = corpo.model_dump_json().encode()
+        return repassar(await self.chamar(servico, metodo, caminho, corpo=conteudo))
 
 
 def codigo_do_conflito(resposta: httpx.Response) -> str | None:
