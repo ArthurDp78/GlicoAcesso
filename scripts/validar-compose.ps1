@@ -24,18 +24,24 @@ function Conferir {
 }
 
 function Requisitar {
-  param([string]$Caminho, [int]$Status = 200, [string]$Token = '', [string]$Chave = '', [hashtable]$Corpo)
+  param([string]$Caminho, [int]$Status = 200, [string]$Token = '', [string]$Chave = '', [hashtable]$Corpo, [string]$Metodo = 'POST', [string]$Correlacao = '')
   $cabecalhos = @{}
   if ($Token) { $cabecalhos.Authorization = "Bearer $Token" }
   if ($Chave) { $cabecalhos['Idempotency-Key'] = $Chave }
+  if ($Correlacao) { $cabecalhos['X-Correlation-Id'] = $Correlacao }
   $opcoes = @{ Uri = "$url$Caminho"; Headers = $cabecalhos; TimeoutSec = 12; UseBasicParsing = $true }
+  if ($null -ne $Corpo -or $PSBoundParameters.ContainsKey('Metodo')) {
+    $opcoes.Method = $Metodo
+  }
   if ($null -ne $Corpo) {
-    $opcoes.Method = 'POST'
     $opcoes.ContentType = 'application/json; charset=utf-8'
     $opcoes.Body = [Text.Encoding]::UTF8.GetBytes(($Corpo | ConvertTo-Json -Depth 6 -Compress))
   }
   $resposta = Invoke-WebRequest @opcoes
   Conferir ($resposta.StatusCode -eq $Status) "$Caminho retornou HTTP $($resposta.StatusCode) em vez de $Status."
+  if ($Correlacao) {
+    Conferir ([string]$resposta.Headers['X-Correlation-Id'] -eq $Correlacao) "$Caminho não devolveu a correlação enviada."
+  }
   if ($resposta.Headers['Content-Type'] -like 'application/json*') {
     return ($resposta.Content | ConvertFrom-Json)
   }
@@ -67,11 +73,13 @@ function Conferir-Subida {
 }
 
 function Saldo-Confere {
+  param([switch]$AposRetirada)
+  $fisico = if ($AposRetirada) { 2 } else { 4 }
+  $alocado = if ($AposRetirada) { 0 } else { 2 }
   $saldos = @(Requisitar '/api/unidade/v1/painel/estoque' -Token $profissional)
   $med = $saldos | Where-Object itemId -eq $medicamento
-  $item = $saldos | Where-Object itemId -eq $insumo
-  return ($med.estoqueFisicoAtual -eq 4 -and $med.quantidadeDisponivel -eq 4 -and $med.permiteReserva -eq $false -and
-          $item.estoqueFisicoAtual -eq 10 -and $item.quantidadeAlocada -eq 2 -and $item.quantidadeDisponivel -eq 8)
+  return ($med.estoqueFisicoAtual -eq $fisico -and $med.quantidadeAlocada -eq $alocado -and
+          $med.quantidadeDisponivel -eq 2 -and $med.permiteReserva -eq $true)
 }
 
 docker info --format '{{.ServerVersion}}' | Out-Null
@@ -108,7 +116,6 @@ try {
   $profissional = $valores.GLICO_PROFISSIONAL_TOKEN
   $unidade = $valores.GLICO_PROFISSIONAL_UNIDADE_ID
   $medicamento = '31a8296a-87a9-58ef-b8fc-a2248dab22b3'
-  $insumo = '20000000-0000-4000-8000-000000000001'
   $chaveCadastro = [guid]::NewGuid().ToString()
   $cadastro = @{
     nome = 'Unidade da validação'; logradouro = 'Rua da Validação'; numero = '20'
@@ -140,19 +147,60 @@ try {
   $repeticao = Requisitar $rotaEntrada -Status 201 -Token $profissional -Chave $chaveEntrada -Corpo @{quantidade = 4}
   Conferir ($entrada.movimentacaoId -and $entrada.movimentacaoId -eq $repeticao.movimentacaoId) 'A entrada foi duplicada.'
 
-  $pedido = @{unidadeId = $unidade; itemId = $insumo; quantidade = 2}
+  $rotaPermissao = "/api/unidade/v1/painel/estoque/$unidade/itens/$medicamento/permissao"
+  $chavePermissao = [guid]::NewGuid().ToString()
+  $correlacao = [guid]::NewGuid().ToString()
+  $permissao = Requisitar $rotaPermissao -Metodo PUT -Token $profissional -Chave $chavePermissao -Corpo @{permiteReserva = $true}
+  Conferir ($permissao.permiteReserva -eq $true) 'A permissão de reserva não foi habilitada.'
+  Aguardar {
+    $opcoesMedicamento = @(Requisitar "/api/cidadao/v1/explorar?itemId=$medicamento")
+    $disponivel = $opcoesMedicamento | Where-Object unidadeId -eq $unidade
+    $disponivel.disponivel -and $disponivel.permiteReserva
+  } 'O portal do cidadão não recebeu a permissão na projeção.'
+  $pedido = @{unidadeId = $unidade; itemId = $medicamento; quantidade = 2}
   $reserva = Requisitar '/api/cidadao/v1/reservas' -Status 201 -Token $cidadao -Chave ([guid]::NewGuid().ToString()) -Corpo $pedido
   Conferir ($reserva.status -eq 'SOLICITADA') 'A reserva não foi criada como SOLICITADA.'
   $pendentes = @(Requisitar '/api/unidade/v1/painel/reservas' -Token $profissional)
   Conferir (@($pendentes | Where-Object reservaId -eq $reserva.reservaId).Count -eq 1) 'Reserva ausente do painel da unidade.'
   $decisao = "/api/unidade/v1/reservas/$($reserva.reservaId)/decisao"
-  Requisitar $decisao -Status 202 -Token $profissional -Chave ([guid]::NewGuid().ToString()) -Corpo @{decisao = 'ACEITAR'} | Out-Null
+  Requisitar $decisao -Status 202 -Token $profissional -Chave ([guid]::NewGuid().ToString()) -Corpo @{decisao = 'ACEITAR'} -Correlacao $correlacao | Out-Null
   $rotaReserva = "/api/cidadao/v1/reservas/$($reserva.reservaId)"
   Aguardar { (Requisitar $rotaReserva -Token $cidadao).status -eq 'CONFIRMADA' } 'A SAGA não confirmou a reserva.'
   Aguardar { Saldo-Confere } 'A projeção não refletiu a entrada e a alocação.'
   $explorar = @(Requisitar "/api/cidadao/v1/explorar?itemId=$medicamento")
   $disponibilidade = $explorar | Where-Object unidadeId -eq $unidade
-  Conferir ($disponibilidade.disponivel -and $disponibilidade.permiteReserva -eq $false) 'Consulta pública de disponibilidade divergente.'
+  Conferir ($disponibilidade.disponivel -and $disponibilidade.permiteReserva -eq $true) 'Consulta pública de disponibilidade divergente.'
+
+  Write-Host 'Registrando a retirada no balcão...'
+  $rotaPainel = "/api/unidade/v1/painel/reservas/$($reserva.reservaId)"
+  $detalhe = Requisitar $rotaPainel -Token $profissional
+  $acao = $detalhe._links.'autorizacao-retirada'
+  Conferir ($detalhe.dadosAutorizacao.status -eq 'ATIVA' -and $acao.href -eq '/api/unidade/v1/retiradas') 'Autorização ativa ausente no painel.'
+  $corpoRetirada = @{autorizacaoId = $acao.body.autorizacaoId}
+  $chaveRetirada = [guid]::NewGuid().ToString()
+  $entrega = Requisitar $acao.href -Status 201 -Token $profissional -Chave $chaveRetirada -Corpo $corpoRetirada
+  Conferir ([bool]$entrega.retiradaId) 'Identificador da retirada ausente.'
+  Conferir ((Requisitar $rotaPainel -Token $profissional).dadosAutorizacao.status -eq 'UTILIZADA') 'A autorização ainda aparece como ativa.'
+
+  Aguardar { (Requisitar $rotaReserva -Token $cidadao).status -eq 'RETIRADA' } 'Reservas não recebeu a entrega.'
+  Aguardar { Saldo-Confere -AposRetirada } 'A baixa física ou a projeção da retirada não convergiu.'
+
+  Write-Host 'Verificando cancelamentos local e distribuído...'
+  $pedidoCancelamento = @{unidadeId = $unidade; itemId = $medicamento; quantidade = 1}
+  $local = Requisitar '/api/cidadao/v1/reservas' -Status 201 -Token $cidadao -Chave ([guid]::NewGuid().ToString()) -Corpo $pedidoCancelamento
+  $rotaLocal = "/api/cidadao/v1/reservas/$($local.reservaId)/cancelar"
+  $localCancelada = Requisitar $rotaLocal -Metodo POST -Token $cidadao -Chave ([guid]::NewGuid().ToString())
+  Conferir ($localCancelada.status -eq 'CANCELADA') 'Cancelamento local não concluído.'
+
+  $distribuida = Requisitar '/api/cidadao/v1/reservas' -Status 201 -Token $cidadao -Chave ([guid]::NewGuid().ToString()) -Corpo $pedidoCancelamento
+  $rotaDistribuida = "/api/cidadao/v1/reservas/$($distribuida.reservaId)"
+  $rotaAceite = "/api/unidade/v1/reservas/$($distribuida.reservaId)/decisao"
+  Requisitar $rotaAceite -Status 202 -Token $profissional -Chave ([guid]::NewGuid().ToString()) -Corpo @{decisao = 'ACEITAR'} | Out-Null
+  Aguardar { (Requisitar $rotaDistribuida -Token $cidadao).status -eq 'CONFIRMADA' } 'Reserva para cancelamento não confirmada.'
+  $chaveCancelamento = [guid]::NewGuid().ToString()
+  Requisitar "$rotaDistribuida/cancelar" -Metodo POST -Status 202 -Token $cidadao -Chave $chaveCancelamento | Out-Null
+  Aguardar { (Requisitar $rotaDistribuida -Token $cidadao).status -eq 'CANCELADA' } 'Cancelamento distribuído não concluído.'
+  Aguardar { Saldo-Confere -AposRetirada } 'O cancelamento não liberou a alocação.'
 
   Write-Host 'Recriando os contêineres com os mesmos volumes...'
   Executar-Compose $principal @('down')
@@ -161,11 +209,15 @@ try {
   Conferir ((Cadastrar-Unidade) -eq $cadastrada) 'A resposta idempotente da CLI se perdeu após a recriação.'
   $unidades = @(Requisitar '/api/cidadao/v1/unidades')
   Conferir (@($unidades | Where-Object unidadeId -eq $cadastrada).Count -eq 1) 'Cadastro perdido após a recriação.'
-  Conferir ((Requisitar $rotaReserva -Token $cidadao).status -eq 'CONFIRMADA') 'Reserva perdida após a recriação.'
+  Conferir ((Requisitar $rotaReserva -Token $cidadao).status -eq 'RETIRADA') 'Estado RETIRADA perdido após a recriação.'
   $repeticao = Requisitar $rotaEntrada -Status 201 -Token $profissional -Chave $chaveEntrada -Corpo @{quantidade = 4}
   Conferir ($repeticao.movimentacaoId -eq $entrada.movimentacaoId) 'Movimentação ou idempotência perdida após a recriação.'
-  Conferir (Saldo-Confere) 'Projeção divergente após a recriação.'
-  Write-Host 'Validação concluída: 14 serviços, portais, CLI, SAGA, CQRS e persistência.' -ForegroundColor Green
+  Conferir (Saldo-Confere -AposRetirada) 'Projeção divergente após a recriação.'
+  Conferir ((Requisitar $rotaDistribuida -Token $cidadao).status -eq 'CANCELADA') 'Cancelamento perdido após a recriação.'
+  Requisitar "$rotaDistribuida/cancelar" -Metodo POST -Status 202 -Token $cidadao -Chave $chaveCancelamento | Out-Null
+  $repeticaoEntrega = Requisitar $acao.href -Status 201 -Token $profissional -Chave $chaveRetirada -Corpo $corpoRetirada
+  Conferir ($repeticaoEntrega.retiradaId -eq $entrega.retiradaId) 'Retirada ou idempotência perdida após a recriação.'
+  Write-Host 'Validação concluída: 14 serviços, portais, CLI, SAGA, retirada, CQRS e persistência.' -ForegroundColor Green
 } catch {
   if ($iniciado) {
     & docker compose @principal ps --all

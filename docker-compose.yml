@@ -40,6 +40,9 @@ services:
       dockerfile: servicos/gateway/Dockerfile
     environment:
       GLICO_PORTA: "8000"
+      GLICO_CIDADAO_TOKEN: "${GLICO_CIDADAO_TOKEN:?Configure GLICO_CIDADAO_TOKEN no arquivo .env}"
+      GLICO_PROFISSIONAL_TOKEN: "${GLICO_PROFISSIONAL_TOKEN:?Configure GLICO_PROFISSIONAL_TOKEN no arquivo .env}"
+      GLICO_PROFISSIONAL_UNIDADE_ID: "${GLICO_PROFISSIONAL_UNIDADE_ID:-10000000-0000-4000-8000-000000000001}"
       BFF_CIDADAO_URL: "http://bff-cidadao:8001"
       BFF_UNIDADE_URL: "http://bff-unidade:8005"
     ports:
@@ -58,6 +61,9 @@ services:
       dockerfile: servicos/bff_cidadao/Dockerfile
     environment:
       GLICO_PORTA: "8001"
+      GLICO_BFF_CIDADAO_SIGNING_KEY: "${GLICO_BFF_CIDADAO_SIGNING_KEY:-}"
+      ORQUESTRADOR_URL: "http://orquestrador:8006"
+      GLICO_CIDADAO_TOKEN: "${GLICO_CIDADAO_TOKEN:?Configure GLICO_CIDADAO_TOKEN no arquivo .env}"
       UNIDADES_URL: "http://unidades:8002"
       ESTOQUE_URL: "http://estoque:8003"
       RESERVAS_URL: "http://reservas:8004"
@@ -77,6 +83,8 @@ services:
       dockerfile: servicos/bff_unidade/Dockerfile
     environment:
       GLICO_PORTA: "8005"
+      RETIRADAS_URL: "http://retiradas:8007"
+      UNIDADES_URL: "http://unidades:8002"
       ESTOQUE_URL: "http://estoque:8003"
       RESERVAS_URL: "http://reservas:8004"
       ORQUESTRADOR_URL: "http://orquestrador:8006"
@@ -92,6 +100,8 @@ services:
         condition: service_healthy
       orquestrador:
         condition: service_healthy
+      retiradas:
+        condition: service_healthy
 
   unidades:
     <<: *api-com-banco
@@ -101,6 +111,9 @@ services:
     environment:
       GLICO_PORTA: "8002"
       GLICO_SERVICO: unidades
+      GLICO_CIDADAO_TOKEN: "${GLICO_CIDADAO_TOKEN:?Configure GLICO_CIDADAO_TOKEN no arquivo .env}"
+      GLICO_PROFISSIONAL_TOKEN: "${GLICO_PROFISSIONAL_TOKEN:?Configure GLICO_PROFISSIONAL_TOKEN no arquivo .env}"
+      GLICO_PROFISSIONAL_UNIDADE_ID: "${GLICO_PROFISSIONAL_UNIDADE_ID:-10000000-0000-4000-8000-000000000001}"
       UNIDADES_DATABASE_URL: "postgresql://glico:${POSTGRES_UNIDADES_PASSWORD:?Configure POSTGRES_UNIDADES_PASSWORD no arquivo .env}@db-unidades:5432/unidades"
       GLICO_CARREGAR_DEMO: "${GLICO_CARREGAR_DEMO:-1}"
       GLICO_RESERVAS_SERVICE_TOKEN: "${GLICO_RESERVAS_SERVICE_TOKEN:?Configure GLICO_RESERVAS_SERVICE_TOKEN no arquivo .env}"
@@ -144,6 +157,8 @@ services:
     environment:
       GLICO_PORTA: "8004"
       GLICO_SERVICO: reservas
+      RABBITMQ_URL: "amqp://glico:${RABBITMQ_PASSWORD:?Configure RABBITMQ_PASSWORD no arquivo .env}@rabbitmq:5672/%2F"
+      GLICO_RETIRADAS_SERVICE_TOKEN: "${GLICO_RETIRADAS_SERVICE_TOKEN:-}"
       RESERVAS_DATABASE_URL: "postgresql://glico:${POSTGRES_RESERVAS_PASSWORD:?Configure POSTGRES_RESERVAS_PASSWORD no arquivo .env}@db-reservas:5432/reservas"
       UNIDADES_URL: "http://unidades:8002"
       ESTOQUE_URL: "http://estoque:8003"
@@ -152,8 +167,10 @@ services:
       GLICO_PROFISSIONAL_UNIDADE_ID: "${GLICO_PROFISSIONAL_UNIDADE_ID:-10000000-0000-4000-8000-000000000001}"
       GLICO_RESERVAS_SERVICE_TOKEN: "${GLICO_RESERVAS_SERVICE_TOKEN:?Configure GLICO_RESERVAS_SERVICE_TOKEN no arquivo .env}"
       GLICO_ORQUESTRADOR_SERVICE_TOKEN: "${GLICO_ORQUESTRADOR_SERVICE_TOKEN:?Configure GLICO_ORQUESTRADOR_SERVICE_TOKEN no arquivo .env}"
-    networks: [servicos, dados-reservas]
+    networks: [servicos, dados-reservas, mensageria]
     depends_on:
+      rabbitmq:
+        condition: service_healthy
       db-reservas:
         condition: service_healthy
       estoque:
@@ -168,15 +185,19 @@ services:
       dockerfile: servicos/orquestrador/Dockerfile
     environment:
       GLICO_PORTA: "8006"
+      GLICO_BFF_CIDADAO_SIGNING_KEY: "${GLICO_BFF_CIDADAO_SIGNING_KEY:-}"
       GLICO_SERVICO: orquestrador
+      RABBITMQ_URL: "amqp://glico:${RABBITMQ_PASSWORD:?Configure RABBITMQ_PASSWORD no arquivo .env}@rabbitmq:5672/%2F"
       ORQUESTRADOR_DATABASE_URL: "postgresql://glico:${POSTGRES_ORQUESTRADOR_PASSWORD:?Configure POSTGRES_ORQUESTRADOR_PASSWORD no arquivo .env}@db-orquestrador:5432/orquestrador"
       RESERVAS_URL: "http://reservas:8004"
       ESTOQUE_URL: "http://estoque:8003"
       RETIRADAS_URL: "http://retiradas:8007"
       GLICO_ORQUESTRADOR_SERVICE_TOKEN: "${GLICO_ORQUESTRADOR_SERVICE_TOKEN:?Configure GLICO_ORQUESTRADOR_SERVICE_TOKEN no arquivo .env}"
       GLICO_BFF_UNIDADE_SIGNING_KEY: "${GLICO_BFF_UNIDADE_SIGNING_KEY:?Configure GLICO_BFF_UNIDADE_SIGNING_KEY no arquivo .env}"
-    networks: [servicos, dados-orquestrador]
+    networks: [servicos, dados-orquestrador, mensageria]
     depends_on:
+      rabbitmq:
+        condition: service_healthy
       db-orquestrador:
         condition: service_healthy
       reservas:
@@ -194,11 +215,19 @@ services:
     environment:
       GLICO_PORTA: "8007"
       GLICO_SERVICO: retiradas
+      RABBITMQ_URL: "amqp://glico:${RABBITMQ_PASSWORD:?Configure RABBITMQ_PASSWORD no arquivo .env}@rabbitmq:5672/%2F"
+      RESERVAS_URL: "http://reservas:8004"
+      GLICO_RETIRADAS_SERVICE_TOKEN: "${GLICO_RETIRADAS_SERVICE_TOKEN:-}"
+      GLICO_CIDADAO_TOKEN: "${GLICO_CIDADAO_TOKEN:?Configure GLICO_CIDADAO_TOKEN no arquivo .env}"
+      GLICO_PROFISSIONAL_TOKEN: "${GLICO_PROFISSIONAL_TOKEN:?Configure GLICO_PROFISSIONAL_TOKEN no arquivo .env}"
+      GLICO_PROFISSIONAL_UNIDADE_ID: "${GLICO_PROFISSIONAL_UNIDADE_ID:-10000000-0000-4000-8000-000000000001}"
       RETIRADAS_DATABASE_URL: "postgresql://glico:${POSTGRES_RETIRADAS_PASSWORD:?Configure POSTGRES_RETIRADAS_PASSWORD no arquivo .env}@db-retiradas:5432/retiradas"
       GLICO_FALHA_PREPARAR_AUTORIZACAO: "${GLICO_FALHA_PREPARAR_AUTORIZACAO:-0}"
       GLICO_ORQUESTRADOR_SERVICE_TOKEN: "${GLICO_ORQUESTRADOR_SERVICE_TOKEN:?Configure GLICO_ORQUESTRADOR_SERVICE_TOKEN no arquivo .env}"
-    networks: [servicos, dados-retiradas]
+    networks: [servicos, dados-retiradas, mensageria]
     depends_on:
+      rabbitmq:
+        condition: service_healthy
       db-retiradas:
         condition: service_healthy
 

@@ -74,7 +74,7 @@ foreach ($nome in $bancos.Keys) {
 $arquivoTokens = Join-Path $estado 'tokens.json'
 $tokens = if (Test-Path $arquivoTokens) { Get-Content $arquivoTokens -Raw | ConvertFrom-Json } else { [pscustomobject]@{} }
 $tokensAlterados = $false
-foreach ($nome in 'servico', 'orquestrador', 'cidadao', 'profissional', 'bff_unidade') {
+foreach ($nome in 'servico', 'orquestrador', 'cidadao', 'profissional', 'bff_unidade', 'retiradas', 'bff_cidadao') {
   if (-not $tokens.$nome) {
     $bytes = New-Object byte[] 32
     [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
@@ -98,6 +98,8 @@ $env:RABBITMQ_URL = 'amqp://guest:guest@127.0.0.1:5672/%2F'
 $env:GLICO_FALHA_PREPARAR_AUTORIZACAO = if ($FalharRetiradas) { '1' } else { '' }
 
 $chaveBffAnterior = $env:GLICO_BFF_UNIDADE_SIGNING_KEY
+$chaveCidadaoAnterior = $env:GLICO_BFF_CIDADAO_SIGNING_KEY
+$tokenRetiradasAnterior = $env:GLICO_RETIRADAS_SERVICE_TOKEN
 Push-Location $raiz
 try {
   uv sync --locked
@@ -119,6 +121,8 @@ try {
   }
   foreach ($nome in $servicos.Keys) {
     $env:GLICO_BFF_UNIDADE_SIGNING_KEY = if ($nome -in 'bff-unidade', 'orquestrador') { $tokens.bff_unidade } else { $null }
+    $env:GLICO_BFF_CIDADAO_SIGNING_KEY = if ($nome -in 'bff-cidadao', 'orquestrador') { $tokens.bff_cidadao } else { $null }
+    $env:GLICO_RETIRADAS_SERVICE_TOKEN = if ($nome -in 'retiradas', 'reservas') { $tokens.retiradas } else { $null }
     $app, $porta = $servicos[$nome]
     $processo = Start-Process -PassThru -WindowStyle Hidden -FilePath uv `
       -ArgumentList 'run', '--locked', 'uvicorn', $app, '--host', '127.0.0.1', '--port', "$porta" `
@@ -134,6 +138,8 @@ try {
   }
 } finally {
   $env:GLICO_BFF_UNIDADE_SIGNING_KEY = $chaveBffAnterior
+  $env:GLICO_BFF_CIDADAO_SIGNING_KEY = $chaveCidadaoAnterior
+  $env:GLICO_RETIRADAS_SERVICE_TOKEN = $tokenRetiradasAnterior
   Pop-Location
 }
 
