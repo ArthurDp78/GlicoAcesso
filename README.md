@@ -398,6 +398,33 @@ docker run -d --name glico-rabbitmq -p 127.0.0.1:5672:5672 -p 127.0.0.1:15672:15
 
 Estoque usa `RABBITMQ_URL` (padrão `amqp://guest:guest@127.0.0.1:5672/%2F`). Para o painel de estoque da unidade, Estoque e BFF Unidade também precisam de `GLICO_PROFISSIONAL_TOKEN` e `GLICO_PROFISSIONAL_UNIDADE_ID`. O painel, em `/api/unidade/v1/painel/estoque`, mostra o estoque físico, o alocado, o disponível e o instante da projeção (`atualizadoEm`). O painel `/unidade` exibe esses dados abaixo das solicitações.
 
+### Administração, cancelamento e retirada
+
+Além das variáveis das seções anteriores, configure:
+
+| Processo | Variável | Uso |
+|---|---|---|
+| Reservas e Retiradas | `GLICO_RETIRADAS_SERVICE_TOKEN` | Retiradas consulta o estado canônico em Reservas antes da entrega. |
+| Unidades e Estoque | `GLICO_ADMIN_SERVICE_TOKEN` | Cadastro de unidades e do catálogo, operações internas sem vínculo com uma unidade. |
+| Unidades e Retiradas | `GLICO_CIDADAO_TOKEN`, `GLICO_PROFISSIONAL_TOKEN`, `GLICO_PROFISSIONAL_UNIDADE_ID` | Autorizar as operações do profissional. |
+| Reservas, Retiradas e Orquestrador | `RABBITMQ_URL` | Publicar e consumir `retirada.concluida.v1`. |
+| Retiradas | `RESERVAS_URL` | Padrão `http://127.0.0.1:8004`. |
+| Reservas | `GLICO_EXPIRACAO_INTERVALO` | Intervalo da expiração em segundos, padrão `5`. |
+
+Reaplique as migrações dos cinco serviços. Uma retirada que não corresponda à alocação não recebe baixa: ela é registrada em `ocorrencias_retirada` e o evento fica em `estoque.baixa-retirada.erros`. Corrigida a causa, devolva os eventos à fila (a Inbox continua deduplicando):
+
+```bash
+uv run --locked python -m servicos.reprocessar estoque.baixa-retirada
+```
+
+Os testes de integração usam um PostgreSQL e um RabbitMQ **descartáveis**. Eles apagam os bancos `teste_*` e esvaziam as filas do broker indicado, então não aponte para o ambiente de demonstração.
+
+```bash
+export GLICO_TESTE_PG='postgresql://postgres:teste@127.0.0.1:55432/postgres'
+export GLICO_TESTE_RABBIT='amqp://guest:guest@127.0.0.1:55672/%2F'
+uv run --locked python -m unittest tests.test_unidades tests.test_estoque tests.test_reservas tests.test_retiradas tests.test_saga
+```
+
 ## Referências
 
 1. [International Diabetes Federation - Dados sobre diabetes no Brasil](https://diabetesatlas.org/es/data-by-location/country/brazil/).
