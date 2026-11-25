@@ -149,6 +149,76 @@ cd GlicoAcesso
 
 ## Desenvolvimento local
 
+### Subir o sistema completo com Docker Compose
+
+Com o Docker Desktop aberto e em modo de contêineres Linux, execute o bloco a seguir na raiz do repositório. Na primeira execução ele gera um `.env` a partir de `.env.example`, com valores aleatórios distintos. Se já existir um `.env`, preserve o arquivo e complete os campos faltantes com base no exemplo.
+
+```powershell
+if (-not (Test-Path -LiteralPath .env)) {
+  $gerador = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+  try {
+    $linhas = foreach ($linha in Get-Content -LiteralPath .env.example) {
+      if ($linha -match '^[A-Z0-9_]+=$') {
+        $bytes = New-Object byte[] 32
+        $gerador.GetBytes($bytes)
+        $linha + [BitConverter]::ToString($bytes).Replace('-', '').ToLowerInvariant()
+      } else {
+        $linha
+      }
+    }
+    [IO.File]::WriteAllLines((Join-Path (Get-Location).Path '.env'),
+      [string[]]$linhas, [Text.UTF8Encoding]::new($false))
+  } finally {
+    $gerador.Dispose()
+  }
+}
+docker compose up --build -d --wait
+```
+
+A mesma subida pode ser feita em primeiro plano com `docker compose up --build`. O Compose aguarda os bancos, roda as migrações antes de iniciar as APIs e verifica a saúde de cada serviço. A carga de demonstração é aplicada em Unidades e Estoque por padrão. Use `GLICO_CARREGAR_DEMO=0` no `.env` para iniciar uma base nova apenas com as migrações e o catálogo oficial.
+
+- **Portal do cidadão** em [http://127.0.0.1:8000/cidadao](http://127.0.0.1:8000/cidadao), com `GLICO_CIDADAO_TOKEN` para reservar.
+- **Painel da unidade** em [http://127.0.0.1:8000/unidade](http://127.0.0.1:8000/unidade), com `GLICO_PROFISSIONAL_TOKEN`.
+- **Diagnóstico** com `docker compose ps` e `docker compose logs <serviço>`. Se a porta 8000 estiver ocupada, ajuste `GLICO_GATEWAY_PORTA` no `.env`.
+
+Somente o Gateway publica uma porta em `127.0.0.1`. Cada PostgreSQL tem uma rede privada com seu serviço e um volume próprio. Estoque acessa o RabbitMQ pela rede de mensageria. Unidades também participa da rede administrativa usada pela CLI.
+
+`docker compose down` encerra os contêineres e preserva os volumes nomeados. Mantenha o mesmo `.env` entre execuções para reutilizar as credenciais dos bancos e do RabbitMQ.
+
+### Cadastrar uma unidade pelo comando administrativo
+
+Prepare um arquivo `unidade.json` com os campos abaixo. O serviço Unidades gera o identificador e cria a unidade ativa.
+
+```json
+{
+  "nome": "Unidade de Saúde Central",
+  "logradouro": "Rua Exemplo",
+  "numero": "200",
+  "bairro": "Centro",
+  "cidade": "Cidade Exemplo",
+  "estado": "MG",
+  "cep": "30000-000",
+  "orientacoesRetirada": "Apresente o código da reserva no balcão.",
+  "contatos": [],
+  "horarios": [{"diaSemana": 1, "horarioInicial": "08:00", "horarioFinal": "17:00"}],
+  "prazoAnaliseHoras": 24
+}
+```
+
+Depois de subir o Compose principal, execute o comando pelo `compose.admin.yml`. Ele acessa `unidades:8002` pela rede `GLICO_REDE_ADMINISTRATIVA` e usa a mesma `GLICO_GESTOR_REDE_TOKEN` do `.env`.
+
+```powershell
+$arquivo = (Resolve-Path .\unidade.json).Path
+$chave = [guid]::NewGuid().ToString()
+docker compose -f compose.admin.yml --profile admin run --build --rm `
+  --volume "${arquivo}:/dados/unidade.json:ro" cadastro-unidades `
+  --arquivo /dados/unidade.json --chave $chave
+```
+
+O comando imprime o ID da unidade em caso de sucesso. Em caso de timeout, use o mesmo arquivo e o mesmo valor de `$chave` na próxima tentativa para recuperar a resposta sem repetir o cadastro.
+
+Com Unidades em execução diretamente no Windows, aplique `uv run --locked python -m servicos.migracoes unidades` e configure a mesma credencial no processo de Unidades e no terminal do comando. Nesse ambiente, use `uv run --locked python -m servicos.unidades.cli --arquivo .\unidade.json --chave $chave`. Para outra porta ou endereço local, defina `UNIDADES_URL`. Confira a unidade ativa em `GET /api/cidadao/v1/unidades` pelo Gateway. Ela aparece na busca do portal quando houver disponibilidade projetada para o item consultado.
+
 ### Construir as imagens da aplicação
 
 Cada um dos oito serviços tem um Dockerfile em `servicos/<serviço>/Dockerfile`. Use a raiz do repositório como contexto para que o build tenha acesso ao `uv.lock` e aos módulos compartilhados. No PowerShell, com o Docker Desktop em modo de contêineres Linux:
@@ -170,7 +240,7 @@ Para uma checagem isolada da imagem de entrada, suba o Gateway e consulte `http:
 docker run --rm -p 127.0.0.1:8000:8000 glicoacesso/gateway:local
 ```
 
-### Rodar tudo com um comando (Windows)
+### Demonstração com serviços Python no Windows
 
 Pré-requisitos: Docker Desktop aberto e [uv](https://docs.astral.sh/uv/getting-started/installation/) instalado. Na raiz do repositório, em um PowerShell:
 

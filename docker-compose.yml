@@ -1,0 +1,296 @@
+name: glicoacesso
+
+x-api: &api
+  healthcheck:
+    test:
+      - CMD
+      - python
+      - -c
+      - "from os import environ; from urllib.request import urlopen; urlopen('http://127.0.0.1:' + environ['GLICO_PORTA'] + '/health', timeout=2).close()"
+    interval: 3s
+    timeout: 3s
+    retries: 30
+
+x-api-com-banco: &api-com-banco
+  <<: *api
+  command:
+    - sh
+    - -ec
+    - |
+      set -- "$$GLICO_SERVICO"
+      if [ "$${GLICO_CARREGAR_DEMO:-0}" = "1" ]; then
+        set -- "$$@" --demo
+      fi
+      python -m servicos.migracoes "$$@"
+      exec python -m uvicorn "servicos.$$GLICO_SERVICO.main:app" --host 0.0.0.0 --port "$$GLICO_PORTA"
+
+x-postgres: &postgres
+  image: postgres:17
+  healthcheck:
+    test: ["CMD-SHELL", 'pg_isready -h 127.0.0.1 -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
+    interval: 3s
+    timeout: 3s
+    retries: 30
+
+services:
+  gateway:
+    <<: *api
+    build:
+      context: .
+      dockerfile: servicos/gateway/Dockerfile
+    environment:
+      GLICO_PORTA: "8000"
+      BFF_CIDADAO_URL: "http://bff-cidadao:8001"
+      BFF_UNIDADE_URL: "http://bff-unidade:8005"
+    ports:
+      - "127.0.0.1:${GLICO_GATEWAY_PORTA:-8000}:8000"
+    networks: [borda]
+    depends_on:
+      bff-cidadao:
+        condition: service_healthy
+      bff-unidade:
+        condition: service_healthy
+
+  bff-cidadao:
+    <<: *api
+    build:
+      context: .
+      dockerfile: servicos/bff_cidadao/Dockerfile
+    environment:
+      GLICO_PORTA: "8001"
+      UNIDADES_URL: "http://unidades:8002"
+      ESTOQUE_URL: "http://estoque:8003"
+      RESERVAS_URL: "http://reservas:8004"
+    networks: [borda, servicos]
+    depends_on:
+      unidades:
+        condition: service_healthy
+      estoque:
+        condition: service_healthy
+      reservas:
+        condition: service_healthy
+
+  bff-unidade:
+    <<: *api
+    build:
+      context: .
+      dockerfile: servicos/bff_unidade/Dockerfile
+    environment:
+      GLICO_PORTA: "8005"
+      ESTOQUE_URL: "http://estoque:8003"
+      RESERVAS_URL: "http://reservas:8004"
+      ORQUESTRADOR_URL: "http://orquestrador:8006"
+      GLICO_CIDADAO_TOKEN: "${GLICO_CIDADAO_TOKEN:?Configure GLICO_CIDADAO_TOKEN no arquivo .env}"
+      GLICO_PROFISSIONAL_TOKEN: "${GLICO_PROFISSIONAL_TOKEN:?Configure GLICO_PROFISSIONAL_TOKEN no arquivo .env}"
+      GLICO_PROFISSIONAL_UNIDADE_ID: "${GLICO_PROFISSIONAL_UNIDADE_ID:-10000000-0000-4000-8000-000000000001}"
+      GLICO_BFF_UNIDADE_SIGNING_KEY: "${GLICO_BFF_UNIDADE_SIGNING_KEY:?Configure GLICO_BFF_UNIDADE_SIGNING_KEY no arquivo .env}"
+    networks: [borda, servicos]
+    depends_on:
+      estoque:
+        condition: service_healthy
+      reservas:
+        condition: service_healthy
+      orquestrador:
+        condition: service_healthy
+
+  unidades:
+    <<: *api-com-banco
+    build:
+      context: .
+      dockerfile: servicos/unidades/Dockerfile
+    environment:
+      GLICO_PORTA: "8002"
+      GLICO_SERVICO: unidades
+      UNIDADES_DATABASE_URL: "postgresql://glico:${POSTGRES_UNIDADES_PASSWORD:?Configure POSTGRES_UNIDADES_PASSWORD no arquivo .env}@db-unidades:5432/unidades"
+      GLICO_CARREGAR_DEMO: "${GLICO_CARREGAR_DEMO:-1}"
+      GLICO_RESERVAS_SERVICE_TOKEN: "${GLICO_RESERVAS_SERVICE_TOKEN:?Configure GLICO_RESERVAS_SERVICE_TOKEN no arquivo .env}"
+      GLICO_GESTOR_REDE_TOKEN: "${GLICO_GESTOR_REDE_TOKEN:?Configure GLICO_GESTOR_REDE_TOKEN no arquivo .env}"
+    networks: [servicos, dados-unidades, administracao]
+    depends_on:
+      db-unidades:
+        condition: service_healthy
+
+  estoque:
+    <<: *api-com-banco
+    build:
+      context: .
+      dockerfile: servicos/estoque/Dockerfile
+    environment:
+      GLICO_PORTA: "8003"
+      GLICO_SERVICO: estoque
+      ESTOQUE_DATABASE_URL: "postgresql://glico:${POSTGRES_ESTOQUE_PASSWORD:?Configure POSTGRES_ESTOQUE_PASSWORD no arquivo .env}@db-estoque:5432/estoque"
+      GLICO_CARREGAR_DEMO: "${GLICO_CARREGAR_DEMO:-1}"
+      UNIDADES_URL: "http://unidades:8002"
+      RABBITMQ_URL: "amqp://glico:${RABBITMQ_PASSWORD:?Configure RABBITMQ_PASSWORD no arquivo .env}@rabbitmq:5672/%2F"
+      GLICO_CIDADAO_TOKEN: "${GLICO_CIDADAO_TOKEN:?Configure GLICO_CIDADAO_TOKEN no arquivo .env}"
+      GLICO_PROFISSIONAL_TOKEN: "${GLICO_PROFISSIONAL_TOKEN:?Configure GLICO_PROFISSIONAL_TOKEN no arquivo .env}"
+      GLICO_PROFISSIONAL_UNIDADE_ID: "${GLICO_PROFISSIONAL_UNIDADE_ID:-10000000-0000-4000-8000-000000000001}"
+      GLICO_RESERVAS_SERVICE_TOKEN: "${GLICO_RESERVAS_SERVICE_TOKEN:?Configure GLICO_RESERVAS_SERVICE_TOKEN no arquivo .env}"
+      GLICO_ORQUESTRADOR_SERVICE_TOKEN: "${GLICO_ORQUESTRADOR_SERVICE_TOKEN:?Configure GLICO_ORQUESTRADOR_SERVICE_TOKEN no arquivo .env}"
+    networks: [servicos, dados-estoque, mensageria]
+    depends_on:
+      db-estoque:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      unidades:
+        condition: service_healthy
+
+  reservas:
+    <<: *api-com-banco
+    build:
+      context: .
+      dockerfile: servicos/reservas/Dockerfile
+    environment:
+      GLICO_PORTA: "8004"
+      GLICO_SERVICO: reservas
+      RESERVAS_DATABASE_URL: "postgresql://glico:${POSTGRES_RESERVAS_PASSWORD:?Configure POSTGRES_RESERVAS_PASSWORD no arquivo .env}@db-reservas:5432/reservas"
+      UNIDADES_URL: "http://unidades:8002"
+      ESTOQUE_URL: "http://estoque:8003"
+      GLICO_CIDADAO_TOKEN: "${GLICO_CIDADAO_TOKEN:?Configure GLICO_CIDADAO_TOKEN no arquivo .env}"
+      GLICO_PROFISSIONAL_TOKEN: "${GLICO_PROFISSIONAL_TOKEN:?Configure GLICO_PROFISSIONAL_TOKEN no arquivo .env}"
+      GLICO_PROFISSIONAL_UNIDADE_ID: "${GLICO_PROFISSIONAL_UNIDADE_ID:-10000000-0000-4000-8000-000000000001}"
+      GLICO_RESERVAS_SERVICE_TOKEN: "${GLICO_RESERVAS_SERVICE_TOKEN:?Configure GLICO_RESERVAS_SERVICE_TOKEN no arquivo .env}"
+      GLICO_ORQUESTRADOR_SERVICE_TOKEN: "${GLICO_ORQUESTRADOR_SERVICE_TOKEN:?Configure GLICO_ORQUESTRADOR_SERVICE_TOKEN no arquivo .env}"
+    networks: [servicos, dados-reservas]
+    depends_on:
+      db-reservas:
+        condition: service_healthy
+      estoque:
+        condition: service_healthy
+      unidades:
+        condition: service_healthy
+
+  orquestrador:
+    <<: *api-com-banco
+    build:
+      context: .
+      dockerfile: servicos/orquestrador/Dockerfile
+    environment:
+      GLICO_PORTA: "8006"
+      GLICO_SERVICO: orquestrador
+      ORQUESTRADOR_DATABASE_URL: "postgresql://glico:${POSTGRES_ORQUESTRADOR_PASSWORD:?Configure POSTGRES_ORQUESTRADOR_PASSWORD no arquivo .env}@db-orquestrador:5432/orquestrador"
+      RESERVAS_URL: "http://reservas:8004"
+      ESTOQUE_URL: "http://estoque:8003"
+      RETIRADAS_URL: "http://retiradas:8007"
+      GLICO_ORQUESTRADOR_SERVICE_TOKEN: "${GLICO_ORQUESTRADOR_SERVICE_TOKEN:?Configure GLICO_ORQUESTRADOR_SERVICE_TOKEN no arquivo .env}"
+      GLICO_BFF_UNIDADE_SIGNING_KEY: "${GLICO_BFF_UNIDADE_SIGNING_KEY:?Configure GLICO_BFF_UNIDADE_SIGNING_KEY no arquivo .env}"
+    networks: [servicos, dados-orquestrador]
+    depends_on:
+      db-orquestrador:
+        condition: service_healthy
+      reservas:
+        condition: service_healthy
+      estoque:
+        condition: service_healthy
+      retiradas:
+        condition: service_healthy
+
+  retiradas:
+    <<: *api-com-banco
+    build:
+      context: .
+      dockerfile: servicos/retiradas/Dockerfile
+    environment:
+      GLICO_PORTA: "8007"
+      GLICO_SERVICO: retiradas
+      RETIRADAS_DATABASE_URL: "postgresql://glico:${POSTGRES_RETIRADAS_PASSWORD:?Configure POSTGRES_RETIRADAS_PASSWORD no arquivo .env}@db-retiradas:5432/retiradas"
+      GLICO_FALHA_PREPARAR_AUTORIZACAO: "${GLICO_FALHA_PREPARAR_AUTORIZACAO:-0}"
+      GLICO_ORQUESTRADOR_SERVICE_TOKEN: "${GLICO_ORQUESTRADOR_SERVICE_TOKEN:?Configure GLICO_ORQUESTRADOR_SERVICE_TOKEN no arquivo .env}"
+    networks: [servicos, dados-retiradas]
+    depends_on:
+      db-retiradas:
+        condition: service_healthy
+
+  db-unidades:
+    <<: *postgres
+    environment:
+      POSTGRES_DB: unidades
+      POSTGRES_USER: glico
+      POSTGRES_PASSWORD: "${POSTGRES_UNIDADES_PASSWORD:?Configure POSTGRES_UNIDADES_PASSWORD no arquivo .env}"
+    networks: [dados-unidades]
+    volumes:
+      - postgres-unidades:/var/lib/postgresql/data
+
+  db-estoque:
+    <<: *postgres
+    environment:
+      POSTGRES_DB: estoque
+      POSTGRES_USER: glico
+      POSTGRES_PASSWORD: "${POSTGRES_ESTOQUE_PASSWORD:?Configure POSTGRES_ESTOQUE_PASSWORD no arquivo .env}"
+    networks: [dados-estoque]
+    volumes:
+      - postgres-estoque:/var/lib/postgresql/data
+
+  db-reservas:
+    <<: *postgres
+    environment:
+      POSTGRES_DB: reservas
+      POSTGRES_USER: glico
+      POSTGRES_PASSWORD: "${POSTGRES_RESERVAS_PASSWORD:?Configure POSTGRES_RESERVAS_PASSWORD no arquivo .env}"
+    networks: [dados-reservas]
+    volumes:
+      - postgres-reservas:/var/lib/postgresql/data
+
+  db-orquestrador:
+    <<: *postgres
+    environment:
+      POSTGRES_DB: orquestrador
+      POSTGRES_USER: glico
+      POSTGRES_PASSWORD: "${POSTGRES_ORQUESTRADOR_PASSWORD:?Configure POSTGRES_ORQUESTRADOR_PASSWORD no arquivo .env}"
+    networks: [dados-orquestrador]
+    volumes:
+      - postgres-orquestrador:/var/lib/postgresql/data
+
+  db-retiradas:
+    <<: *postgres
+    environment:
+      POSTGRES_DB: retiradas
+      POSTGRES_USER: glico
+      POSTGRES_PASSWORD: "${POSTGRES_RETIRADAS_PASSWORD:?Configure POSTGRES_RETIRADAS_PASSWORD no arquivo .env}"
+    networks: [dados-retiradas]
+    volumes:
+      - postgres-retiradas:/var/lib/postgresql/data
+
+  rabbitmq:
+    image: rabbitmq:4-management
+    hostname: rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: glico
+      RABBITMQ_DEFAULT_PASS: "${RABBITMQ_PASSWORD:?Configure RABBITMQ_PASSWORD no arquivo .env}"
+    networks: [mensageria]
+    volumes:
+      - rabbitmq:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+
+networks:
+  borda:
+  servicos:
+    internal: true
+  administracao:
+    name: "${GLICO_REDE_ADMINISTRATIVA:-glicoacesso_admin}"
+    internal: true
+  mensageria:
+    internal: true
+  dados-unidades:
+    internal: true
+  dados-estoque:
+    internal: true
+  dados-reservas:
+    internal: true
+  dados-orquestrador:
+    internal: true
+  dados-retiradas:
+    internal: true
+
+volumes:
+  postgres-unidades:
+  postgres-estoque:
+  postgres-reservas:
+  postgres-orquestrador:
+  postgres-retiradas:
+  rabbitmq:
