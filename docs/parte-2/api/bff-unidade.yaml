@@ -176,6 +176,7 @@ paths:
                       horarioFinal: { type: string, format: time }
                 prazoAnaliseHoras: { type: integer, minimum: 1, maximum: 720 }
       responses:
+        '422': { description: Entrada ou cabeçalho inválido. }
         '200': { description: Cadastro atualizado. }
         '403': { description: Ator não pertence à unidade correspondente. }
         '409': { description: "`Idempotency-Key` reutilizada com conteúdo diferente." }
@@ -203,6 +204,7 @@ paths:
                       horarioInicial: { type: string, format: time }
                       horarioFinal: { type: string, format: time }
       responses:
+        '422': { description: Entrada ou cabeçalho inválido. }
         '200': { description: Horários atualizados. }
         '403': { description: Ator não pertence à unidade correspondente. }
         '409': { description: "`Idempotency-Key` reutilizada com conteúdo diferente." }
@@ -222,6 +224,7 @@ paths:
               properties:
                 ativa: { type: boolean }
       responses:
+        '422': { description: Entrada ou cabeçalho inválido. }
         '200': { description: Situação operacional atualizada. }
         '403': { description: Ator não pertence à unidade correspondente. }
         '409': { description: "`Idempotency-Key` reutilizada com conteúdo diferente." }
@@ -241,6 +244,7 @@ paths:
               properties:
                 prazoAnaliseHoras: { type: integer, minimum: 1, maximum: 720 }
       responses:
+        '422': { description: Entrada ou cabeçalho inválido. }
         '200': { description: Prazo atualizado; reservas existentes mantêm o prazo aplicado. }
         '403': { description: Ator não pertence à unidade correspondente. }
         '409': { description: "`Idempotency-Key` reutilizada com conteúdo diferente." }
@@ -269,6 +273,7 @@ paths:
               properties:
                 permiteReserva: { type: boolean }
       responses:
+        '422': { description: Entrada ou cabeçalho inválido. }
         '200': { description: Configuração atualizada. }
         '403': { description: Ator sem permissão para a unidade. }
         '404': { description: Item ou saldo não encontrado. }
@@ -365,6 +370,7 @@ paths:
                     - { type: integer, minimum: 1 }
                 motivo: { type: string, minLength: 1 }
       responses:
+        '422': { description: Entrada ou cabeçalho inválido. }
         '201':
           description: Ajuste registrado.
           content:
@@ -530,6 +536,7 @@ paths:
           required: true
           schema: { type: string, format: uuid }
       responses:
+        '422': { description: Entrada ou cabeçalho inválido. }
         '200':
           description: Vista operacional composta com dados da reserva, estoque e autorização.
           content:

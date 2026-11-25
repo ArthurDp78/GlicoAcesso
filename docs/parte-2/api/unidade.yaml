@@ -171,6 +171,7 @@ paths:
           required: true
           schema: { type: string, format: uuid }
       responses:
+        '422': { description: Entrada ou cabeçalho inválido. }
         '200':
           description: Cadastro, contatos, horários e prazo vigente.
           content:
@@ -192,6 +193,7 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/UnidadeInput' }
       responses:
+        '422': { description: Entrada ou cabeçalho inválido. }
         '200': { description: Cadastro atualizado. }
         '404': { description: Unidade não encontrada. }
         '409': { description: Chave idempotente reutilizada com conteúdo diferente. }
@@ -217,6 +219,7 @@ paths:
                   type: array
                   items: { $ref: '#/components/schemas/Horario' }
       responses:
+        '422': { description: Entrada ou cabeçalho inválido. }
         '200': { description: Horários substituídos. }
         '404': { description: Unidade não encontrada. }
         '409': { description: Chave idempotente reutilizada com conteúdo diferente. }
@@ -240,6 +243,7 @@ paths:
               properties:
                 ativa: { type: boolean }
       responses:
+        '422': { description: Entrada ou cabeçalho inválido. }
         '200': { description: Situação operacional atualizada; cadastro e referências históricas são preservados. }
         '404': { description: Unidade não encontrada. }
         '409': { description: Chave idempotente reutilizada com conteúdo diferente. }
@@ -283,6 +287,7 @@ paths:
               properties:
                 prazoAnaliseHoras: { type: integer, minimum: 1, maximum: 720 }
       responses:
+        '422': { description: Entrada ou cabeçalho inválido. }
         '200': { description: Prazo atualizado; reservas existentes mantêm o prazo já aplicado. }
         '404': { description: Unidade não encontrada. }
         '409': { description: Chave idempotente reutilizada com conteúdo diferente. }

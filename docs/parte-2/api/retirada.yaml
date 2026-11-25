@@ -77,6 +77,7 @@ paths:
           required: true
           schema: { type: string, format: uuid }
       responses:
+        '422': { description: Entrada ou cabeçalho inválido. }
         '200':
           description: Autorização encontrada, inclusive se cancelada ou utilizada.
           content:
@@ -169,12 +170,19 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ErroComando' }
         '422':
-          description: "AUTORIZACAO_NAO_CRIADA registra recusa conclusiva com ausência de autorização vinculada à reserva."
+          description: Entrada inválida ou recusa de negócio. Somente AUTORIZACAO_NAO_CRIADA confirma a ausência de autorização.
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ErroComando' }
-        '400':
-          description: "Entrada inválida ou cabeçalho obrigatório ausente."
+              schema:
+                oneOf:
+                  - { $ref: '#/components/schemas/ErroComando' }
+                  - type: object
+                    required: [detail]
+                    properties:
+                      detail:
+                        oneOf:
+                          - { type: array, items: { type: object } }
+                          - { type: string }
         '401':
           description: "Credencial ausente ou inválida."
         '403':
@@ -213,7 +221,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ConflitoRevogacao' }
-        '400':
+        '422':
           description: "Entrada inválida ou cabeçalho obrigatório ausente."
         '401':
           description: "Credencial ausente ou inválida."

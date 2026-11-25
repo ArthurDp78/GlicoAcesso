@@ -90,7 +90,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/PedidoRecebido' }
-        '400':
+        '422':
           description: "Entrada inválida ou cabeçalho obrigatório ausente."
         '401':
           description: "Credencial ausente ou inválida."
@@ -155,6 +155,7 @@ paths:
           schema: { type: string, format: uuid }
         - { $ref: '#/components/parameters/CorrelationId' }
       responses:
+        '422': { description: Entrada ou cabeçalho inválido. }
         '200':
           description: "Pedido encontrado."
           content:

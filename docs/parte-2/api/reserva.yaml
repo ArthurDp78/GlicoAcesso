@@ -139,6 +139,7 @@ paths:
           description: correlationId do fluxo, quando propagado para rastreamento.
           schema: { type: string, format: uuid }
       responses:
+        '422': { description: Entrada ou cabeçalho inválido. }
         '200':
           description: Estado canônico atual. Status diferente de CONFIRMADA não autoriza a entrega.
           headers:
@@ -172,6 +173,7 @@ paths:
           required: true
           schema: { type: string, format: uuid }
       responses:
+        '422': { description: Entrada ou cabeçalho inválido. }
         '200':
           description: Solicitação encontrada e visível ao ator autenticado.
           content:
@@ -352,7 +354,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/AceiteRegistrado' }
-        '400':
+        '422':
           description: "Entrada inválida ou cabeçalho obrigatório ausente."
         '401':
           description: "Credencial ausente ou inválida."
@@ -389,7 +391,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/EstadoReserva' }
-        '400':
+        '422':
           description: "Entrada inválida ou cabeçalho obrigatório ausente."
         '401':
           description: "Credencial ausente ou inválida."
@@ -426,7 +428,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/EstadoReserva' }
-        '400':
+        '422':
           description: "Entrada inválida ou cabeçalho obrigatório ausente."
         '401':
           description: "Credencial ausente ou inválida."

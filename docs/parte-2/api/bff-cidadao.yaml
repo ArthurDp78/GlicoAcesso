@@ -191,6 +191,7 @@ paths:
           required: true
           schema: { type: string, format: uuid }
       responses:
+        '422': { description: Entrada ou cabeçalho inválido. }
         '200':
           description: Vista segura e simplificada da reserva.
           content:
