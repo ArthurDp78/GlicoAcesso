@@ -1,4 +1,6 @@
 import os
+import threading
+from contextlib import asynccontextmanager
 from hashlib import sha256
 from typing import Annotated
 from uuid import UUID, uuid4
@@ -7,13 +9,31 @@ from fastapi import Depends, FastAPI, Header
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
+from servicos import mensageria
 from servicos.banco import BancoIndisponivel, conectar
+from servicos.comandos import RASTREADO
+from servicos.erros import entrada_invalida_400
+from servicos.http import cliente_http
 from servicos.idempotencia import gravar_resultado, resultado_anterior
 from servicos.identidade_demo import orquestrador_autenticado
+from servicos.retiradas import entregas
 
 
-app = FastAPI(title="GlicoAcesso — Retiradas")
 BANCO = "RETIRADAS_DATABASE_URL"
+
+
+@asynccontextmanager
+async def ciclo(app: FastAPI):
+    parar = threading.Event()
+    mensageria.iniciar({"publicador-outbox": mensageria.publicador(BANCO)}, parar)
+    async with cliente_http(app):
+        yield
+    parar.set()
+
+
+app = FastAPI(title="GlicoAcesso — Retiradas", lifespan=ciclo)
+app.include_router(entregas.rotas)
+entrada_invalida_400(app, "/internal/v1/autorizacoes", "/internal/v1/autorizacoes/{reservaId}/cancelar")
 PRINCIPAL = "orquestrador"
 Orquestrador = Annotated[str, Depends(orquestrador_autenticado)]
 Chave = Annotated[str, Header(alias="Idempotency-Key", min_length=1, max_length=128)]
@@ -80,14 +100,20 @@ def cancelar(reserva_id: UUID, saga_id: UUID, chave: str):
     with conectar(BANCO) as conexao:
         if (anterior := resultado_anterior(conexao, "cancelar-autorizacao", PRINCIPAL, chave, resumo)) is not None:
             return anterior
-        # shortcut: sem a tabela de entregas, ENTREGA_JA_REGISTRADA ainda não ocorre; entra com o registro da retirada.
-        linha = conexao.execute(f"""
-            UPDATE autorizacoes SET cancelada_em = COALESCE(cancelada_em, now()), updated_at = now()
-            WHERE reserva_id = %s RETURNING {CAMPOS}
-        """, (reserva_id,)).fetchone()
-        if linha is None:
+        # Trava a autorização: revogação e entrega disputam esta mesma linha.
+        autorizacao = conexao.execute("SELECT autorizacao_id FROM autorizacoes WHERE reserva_id = %s FOR UPDATE",
+                                      (reserva_id,)).fetchone()
+        entrega = autorizacao and conexao.execute("SELECT retirada_id FROM retiradas WHERE autorizacao_id = %s",
+                                                  (autorizacao["autorizacao_id"],)).fetchone()
+        if autorizacao is None:
             resultado = 404, {"codigo": "AUTORIZACAO_NAO_ENCONTRADA", "mensagem": "Não há autorização para a reserva."}
+        elif entrega is not None:
+            resultado = 409, {"codigo": "ENTREGA_JA_REGISTRADA", "retiradaId": str(entrega["retirada_id"])}
         else:
+            linha = conexao.execute(f"""
+                UPDATE autorizacoes SET cancelada_em = COALESCE(cancelada_em, now()), updated_at = now()
+                WHERE reserva_id = %s RETURNING {CAMPOS}
+            """, (reserva_id,)).fetchone()
             resultado = 200, json_autorizacao(linha)
         return gravar_resultado(conexao, "cancelar-autorizacao", PRINCIPAL, chave, resumo, resultado)
 
@@ -100,7 +126,7 @@ def preparar_autorizacao(
     return responder(preparar(pedido, chave, correlacao))
 
 
-@app.post("/internal/v1/autorizacoes/{reservaId}/cancelar")
+@app.post("/internal/v1/autorizacoes/{reservaId}/cancelar", dependencies=RASTREADO)
 def cancelar_autorizacao(
     reservaId: UUID, _orquestrador: Orquestrador, chave: Chave,
     saga_id: Annotated[UUID, Header(alias="X-Saga-Id")],
