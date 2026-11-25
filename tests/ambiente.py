@@ -29,7 +29,8 @@ RAIZ = Path(__file__).resolve().parents[1]
 UNIDADE = "10000000-0000-4000-8000-000000000001"
 ITEM = "20000000-0000-4000-8000-000000000001"
 TOKENS = {nome: f"token-de-teste-{nome}".ljust(40, "x") for nome in
-          ("cidadao", "profissional", "reservas", "orquestrador", "retiradas", "admin")}
+          ("cidadao", "profissional", "reservas", "orquestrador", "retiradas", "admin", "bff-cidadao", "bff-unidade")}
+BORDA = ("gateway", "bff-cidadao", "bff-unidade")
 APPS = {"unidades": "unidades", "estoque": "estoque", "reservas": "reservas", "orquestrador": "orquestrador",
         "retiradas": "retiradas", "bff-cidadao": "bff_cidadao", "bff-unidade": "bff_unidade", "gateway": "gateway"}
 processos: dict[str, subprocess.Popen] = {}
@@ -67,6 +68,7 @@ def preparar() -> None:
     os.environ |= {
         "RABBITMQ_URL": broker, "GLICO_PROFISSIONAL_UNIDADE_ID": UNIDADE, "GLICO_FALHA_PREPARAR_AUTORIZACAO": "",
         "GLICO_EXPIRACAO_INTERVALO": "0.3",
+        "GLICO_BFF_CIDADAO_TOKEN": TOKENS["bff-cidadao"], "GLICO_BFF_UNIDADE_TOKEN": TOKENS["bff-unidade"],
         "GLICO_CIDADAO_TOKEN": TOKENS["cidadao"], "GLICO_PROFISSIONAL_TOKEN": TOKENS["profissional"],
         **{f"GLICO_{nome.upper()}_SERVICE_TOKEN": TOKENS[nome] for nome in ("reservas", "orquestrador", "retiradas", "admin")},
     }
@@ -215,8 +217,18 @@ def esperar(condicao, limite: float = 20, mensagem: str = "condição não ating
     raise AssertionError(mensagem)
 
 
+DELEGADOS = {
+    "cidadao": ("bff-cidadao", {"X-Ator-Papel": "CIDADAO", "X-Ator-Id": "cidadao-demo"}),
+    "profissional": ("bff-unidade", {"X-Ator-Papel": "PROFISSIONAL", "X-Ator-Id": "profissional-demo", "X-Ator-Unidade-Id": UNIDADE}),
+}
+
+
 def chamar(nome: str, metodo: str, caminho: str, token: str | None = None, chave: str | None = None, **opcoes):
     cabecalhos = dict(opcoes.pop("cabecalhos", {}))
+    if nome not in BORDA and token in DELEGADOS:
+        # Os serviços de domínio recebem a identidade delegada pelo BFF, nunca o token do usuário.
+        token, delegados = DELEGADOS[token]
+        cabecalhos = {**delegados, **cabecalhos}
     if token:
         cabecalhos["Authorization"] = f"Bearer {TOKENS.get(token, token)}"
     if chave:
@@ -302,7 +314,7 @@ def alocacao(reserva: str) -> dict | None:
 
 
 def item_com_saldo(quantidade: int) -> str:
-    item = chamar("estoque", "POST", "/internal/v1/itens", "admin", nova_chave(), json={"nome": "Item", "tipo": "INSUMO"}).json()["itemId"]
+    item = chamar("estoque", "POST", "/internal/v1/itens", "admin", nova_chave(), json={"nome": f"Item {uuid4()}", "tipo": "INSUMO"}).json()["itemId"]
     base = f"/api/unidade/v1/estoque/{UNIDADE}/itens/{item}"
     chamar("estoque", "PUT", base + "/permissao", "profissional", nova_chave(), json={"permiteReserva": True})
     chamar("estoque", "POST", base + "/entradas", "profissional", nova_chave(), json={"quantidade": quantidade, "motivo": "teste"})

@@ -167,18 +167,14 @@ class RespostasDocumentadas(unittest.TestCase):
 
     def test_unidades_404_e_409(self):
         base, desconhecida = f"/internal/v1/unidades/{a.UNIDADE}", str(uuid4())
-        a.matar("unidades")
-        a.subir("unidades", GLICO_PROFISSIONAL_UNIDADE_ID=desconhecida)
         cadastro = {"nome": "N", "logradouro": "L", "numero": "1", "bairro": "B", "cidade": "C", "estado": "MG", "cep": "1",
                     "orientacoesRetirada": "O", "contatos": [], "horarios": [], "prazoAnaliseHoras": 24}
         comandos = (("PUT", "", cadastro, {**cadastro, "nome": "M"}), ("PUT", "/horarios", {"horarios": []}, {"horarios": [{"diaSemana": 2, "horarioInicial": "08:00:00", "horarioFinal": "09:00:00"}]}),
                     ("PATCH", "/status", {"ativa": True}, {"ativa": False}), ("PUT", "/prazo-analise", {"prazoAnaliseHoras": 24}, {"prazoAnaliseHoras": 25}))
-        try:
-            for metodo, sufixo, corpo, _ in comandos:
-                self.assertEqual(a.chamar("unidades", metodo, f"/internal/v1/unidades/{desconhecida}{sufixo}", "profissional", a.nova_chave(), json=corpo).status_code, 404)
-        finally:
-            a.matar("unidades")
-            a.subir("unidades")
+        for metodo, sufixo, corpo, _ in comandos:
+            r = a.chamar("unidades", metodo, f"/internal/v1/unidades/{desconhecida}{sufixo}", "profissional", a.nova_chave(),
+                         json=corpo, cabecalhos={"X-Ator-Unidade-Id": desconhecida})
+            self.assertEqual(r.status_code, 404)
         for metodo, sufixo, corpo, outro in comandos:
             chave = a.nova_chave()
             self.assertEqual(a.chamar("unidades", metodo, base + sufixo, "profissional", chave, json=corpo).status_code, 200)

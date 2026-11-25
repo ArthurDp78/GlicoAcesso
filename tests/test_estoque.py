@@ -14,7 +14,7 @@ def setUpModule():
 
 def novo_item():
     return a.chamar("estoque", "POST", "/internal/v1/itens", "admin", a.nova_chave(),
-                    json={"nome": "Insulina NPH", "tipo": "MEDICAMENTO"}).json()["itemId"]
+                    json={"nome": f"Insulina {uuid4()}", "tipo": "MEDICAMENTO"}).json()["itemId"]
 
 
 def base(item, unidade=a.UNIDADE):
