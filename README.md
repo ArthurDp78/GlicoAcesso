@@ -185,6 +185,18 @@ Somente o Gateway publica uma porta em `127.0.0.1`. Cada PostgreSQL tem uma rede
 
 `docker compose down` encerra os contêineres e preserva os volumes nomeados. Mantenha o mesmo `.env` entre execuções para reutilizar as credenciais dos bancos e do RabbitMQ.
 
+### Validar a instalação do zero
+
+Em um clone da versão a ser entregue, abra o Docker Desktop e execute na raiz do projeto:
+
+```powershell
+.\scripts\validar-compose.ps1
+```
+
+O script cria um projeto Compose temporário, com credenciais e volumes próprios. Ele verifica a saúde dos 14 serviços, a abertura dos portais e o funcionamento das APIs via Gateway. Cadastra uma unidade pela CLI, registra uma entrada de estoque, confirma uma reserva pela SAGA e espera a atualização da projeção CQRS. Depois recria os contêineres com os mesmos volumes e confirma que os dados e as respostas idempotentes foram preservados.
+
+O resultado esperado é a mensagem **Validação concluída**. Em caso de erro, o script informa a etapa e mostra o estado e os últimos logs dos serviços. Use `-Porta 18081` se a porta local 18080 já estiver em uso. Ao final, o script limpa os contêineres e volumes do projeto temporário.
+
 ### Cadastrar uma unidade pelo comando administrativo
 
 Prepare um arquivo `unidade.json` com os campos abaixo. O serviço Unidades gera o identificador e cria a unidade ativa.
