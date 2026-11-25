@@ -138,14 +138,14 @@ A proposta é atuar como uma **ponte entre a informação existente na rede part
 
 ## Versão de entrega e execução local
 
-A versão executável da Parte 3 está na [branch `feat/fase-3`](https://github.com/ArthurDp78/GlicoAcesso/tree/feat/fase-3). O Compose reúne oito aplicações (Gateway, dois BFFs, Orquestrador, Unidades, Estoque, Reservas e Retiradas), cinco instâncias PostgreSQL e RabbitMQ.
+A versão executável da Parte 3 está na branch principal (`main`). O Compose reúne oito aplicações (Gateway, dois BFFs, Orquestrador, Unidades, Estoque, Reservas e Retiradas), cinco instâncias PostgreSQL e RabbitMQ.
 
 O cidadão consulta a disponibilidade, solicita e acompanha reservas. O profissional registra entradas de estoque, configura a permissão de reserva e aceita ou rejeita solicitações. A API profissional também oferece manutenção do cadastro da unidade e ajustes de saldo. A SAGA de confirmação prepara a autorização de retirada e o CQRS atualiza a disponibilidade. O cadastro de unidades é feito pela CLI administrativa. O profissional consulta uma reserva pelo código e registra a entrega no balcão. A entrega e seu evento são gravados juntos em Retiradas. O RabbitMQ distribui o evento para Reservas, Estoque e Orquestrador. A reserva passa a `RETIRADA`, o estoque baixa o físico e encerra a alocação, e o Orquestrador guarda a evidência para reconciliação. O cidadão cancela a própria reserva. O profissional pode cancelar com justificativa. Solicitações vencidas saem da fila de decisão e ficam como `EXPIRADA`. Se a confirmação já estiver ativa, o cancelamento é registrado e aguarda sua conclusão ou compensação.
 
-Clone a branch de entrega e entre na pasta antes de executar os comandos de desenvolvimento local.
+Clone o repositório e entre na pasta antes de executar os comandos de desenvolvimento local.
 
 ```bash
-git clone --branch feat/fase-3 --single-branch https://github.com/ArthurDp78/GlicoAcesso.git
+git clone https://github.com/ArthurDp78/GlicoAcesso.git
 cd GlicoAcesso
 ```
 
