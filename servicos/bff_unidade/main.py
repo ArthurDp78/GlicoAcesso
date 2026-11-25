@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, TypeAdapter, ValidationError
 
 from servicos.contratos_reserva import ReservaInterna
+from servicos.contratos_estoque import EntradaEstoque, Item, MovimentacaoEstoque
 from servicos.delegacao_unidade import emitir_credencial
 from servicos.http import cliente_http, consultar, requisitar
 from servicos.identidade_demo import Ator, profissional_autenticado
@@ -14,6 +15,7 @@ from servicos.identidade_demo import Ator, profissional_autenticado
 
 app = FastAPI(title="GlicoAcesso — BFF Unidade", lifespan=cliente_http)
 API = "/api/unidade/v1"
+Profissional = Annotated[Ator, Depends(profissional_autenticado)]
 
 
 class Link(BaseModel):
@@ -152,6 +154,49 @@ class EstoquePainelItem(BaseModel):
 
 
 ESTOQUE_PAINEL = TypeAdapter(list[EstoquePainelItem])
+ITENS = TypeAdapter(list[Item])
+
+
+class CatalogoPainel(BaseModel):
+    unidadeId: UUID
+    itens: list[Item]
+
+
+@app.get(API + "/painel/estoque/catalogo", response_model=CatalogoPainel, response_model_exclude_none=True)
+async def catalogo_estoque(request: Request, response: Response, profissional: Profissional):
+    resposta = await consultar(
+        request.app.state.http,
+        origem("ESTOQUE_URL", "http://127.0.0.1:8003") + "/api/cidadao/v1/estoque/itens",
+    )
+    if resposta.status_code != 200:
+        return repassar_erro(resposta)
+    try:
+        itens = ITENS.validate_json(resposta.content)
+    except ValidationError as erro:
+        raise HTTPException(502, "Estoque retornou um catálogo incompatível.") from erro
+    response.headers["Cache-Control"] = "no-store"
+    return {"unidadeId": profissional.unidadeId, "itens": itens}
+
+
+@app.post(API + "/painel/estoque/{unidadeId}/itens/{itemId}/entradas", status_code=201, response_model=MovimentacaoEstoque)
+async def registrar_entrada(
+    request: Request, unidadeId: UUID, itemId: UUID, entrada: EntradaEstoque,
+    profissional: Profissional, chave: Annotated[str, Header(alias="Idempotency-Key", min_length=1, max_length=128)],
+):
+    if profissional.unidadeId != unidadeId:
+        raise HTTPException(403, "Ator sem acesso à unidade.")
+    destino = origem("ESTOQUE_URL", "http://127.0.0.1:8003")
+    resposta = await requisitar(
+        request.app.state.http, "POST", f"{destino}/api/unidade/v1/estoque/{unidadeId}/itens/{itemId}/entradas",
+        headers={**credencial(request), "Idempotency-Key": chave}, json=entrada.model_dump(mode="json"),
+    )
+    if resposta.status_code != 201:
+        return repassar_erro(resposta)
+    try:
+        movimento = MovimentacaoEstoque.model_validate_json(resposta.content)
+    except ValidationError as erro:
+        raise HTTPException(502, "Estoque retornou uma movimentação incompatível.") from erro
+    return JSONResponse(movimento.model_dump(mode="json"), status_code=201, headers={"Cache-Control": "no-store"})
 
 
 @app.get(API + "/painel/estoque", response_model=list[EstoquePainelItem])

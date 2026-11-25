@@ -1,15 +1,19 @@
+import os
 import threading
 from contextlib import asynccontextmanager
 from hashlib import sha256
-from typing import Annotated, Literal
+from typing import Annotated
 from uuid import UUID, uuid4
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse, Response
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
 from servicos.banco import BancoIndisponivel, conectar
+from servicos.contratos_estoque import EntradaEstoque, Item, LIMITE_ESTOQUE, MovimentacaoEstoque
 from servicos.estoque.eventos import iniciar, registrar_evento
+from servicos.http import cliente_http, consultar
 from servicos.idempotencia import gravar_resultado, resultado_anterior
 from servicos.identidade_demo import Ator, orquestrador_autenticado, profissional_autenticado, servico_reservas_autenticado
 
@@ -17,19 +21,15 @@ from servicos.identidade_demo import Ator, orquestrador_autenticado, profissiona
 @asynccontextmanager
 async def ciclo(_app: FastAPI):
     parar = threading.Event()
-    iniciar(parar)  # Publicador da Outbox e consumidor da projeção, em segundo plano.
-    yield
-    parar.set()
+    async with cliente_http(_app):
+        iniciar(parar)
+        try:
+            yield
+        finally:
+            parar.set()
 
 
 app = FastAPI(title="GlicoAcesso — Estoque", lifespan=ciclo)
-
-
-class Item(BaseModel):
-    itemId: UUID
-    nome: str
-    tipo: Literal["MEDICAMENTO", "INSUMO"]
-    descricao: str | None = None
 
 
 class DisponibilidadeItem(BaseModel):
@@ -239,3 +239,88 @@ def listar_estoque_da_unidade(unidadeId: UUID, profissional: Annotated[Ator, Dep
             WHERE d.unidade_id = %s
             ORDER BY i.nome, d.item_id
         """, (unidadeId,)).fetchall()
+
+
+class UnidadeAtiva(BaseModel):
+    unidadeId: UUID
+
+
+UNIDADES_ATIVAS = TypeAdapter(list[UnidadeAtiva])
+OPERACAO_ENTRADA = "registrar-entrada"
+
+
+async def verificar_unidade_ativa(request: Request, unidade_id: UUID):
+    unidades = os.environ.get("UNIDADES_URL", "http://127.0.0.1:8002").rstrip("/")
+    resposta = await consultar(request.app.state.http, f"{unidades}/api/cidadao/v1/unidades")
+    if resposta.status_code != 200:
+        raise HTTPException(503, "Não foi possível validar a unidade.")
+    try:
+        ativas = UNIDADES_ATIVAS.validate_json(resposta.content)
+    except ValidationError as erro:
+        raise HTTPException(502, "Unidades retornou dados incompatíveis.") from erro
+    if all(unidade.unidadeId != unidade_id for unidade in ativas):
+        raise HTTPException(404, "Unidade ativa não encontrada.")
+
+
+def reobter_entrada(ator: str, chave: str, resumo: str):
+    with conectar(BANCO) as conexao:
+        return resultado_anterior(conexao, OPERACAO_ENTRADA, ator, chave, resumo)
+
+
+def persistir_entrada(unidade_id: UUID, item_id: UUID, entrada: EntradaEstoque, ator: str, chave: str, resumo: str):
+    with conectar(BANCO) as conexao:
+        anterior = resultado_anterior(conexao, OPERACAO_ENTRADA, ator, chave, resumo)
+        if anterior is not None:
+            return anterior
+        item = conexao.execute("SELECT 1 FROM itens WHERE item_id = %s", (item_id,)).fetchone()
+        if item is None:
+            resultado = 404, {"codigo": "ITEM_NAO_ENCONTRADO", "mensagem": "Item não encontrado no catálogo."}
+        else:
+            saldo = conexao.execute("""
+                INSERT INTO saldos (unidade_id, item_id, estoque_fisico_atual, permite_reserva, estoque_version)
+                VALUES (%s, %s, %s, false, 1)
+                ON CONFLICT (unidade_id, item_id) DO UPDATE SET
+                    estoque_fisico_atual = saldos.estoque_fisico_atual + EXCLUDED.estoque_fisico_atual,
+                    estoque_version = saldos.estoque_version + 1, updated_at = clock_timestamp()
+                WHERE saldos.estoque_fisico_atual::bigint + EXCLUDED.estoque_fisico_atual <= %s
+                RETURNING unidade_id, item_id, estoque_fisico_atual, quantidade_alocada, permite_reserva,
+                          estoque_version, updated_at
+            """, (unidade_id, item_id, entrada.quantidade, LIMITE_ESTOQUE)).fetchone()
+            if saldo is None:
+                resultado = 409, {"codigo": "LIMITE_ESTOQUE_EXCEDIDO", "mensagem": "A entrada excede o limite do saldo."}
+            else:
+                movimento_id = uuid4()
+                conexao.execute("""
+                    INSERT INTO movimentacoes (movimentacao_id, unidade_id, item_id, variacao_fisica, estoque_version,
+                                              ocorrida_em, ator_id, motivo)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                """, (movimento_id, unidade_id, item_id, entrada.quantidade, saldo["estoque_version"],
+                      saldo["updated_at"], ator, entrada.motivo))
+                registrar_evento(conexao, "estoque.entrada-registrada.v1", "MovimentacaoEstoque", movimento_id, None,
+                                 saldo, {"movimentacaoId": str(movimento_id), "variacaoFisica": entrada.quantidade})
+                corpo = MovimentacaoEstoque(
+                    movimentacaoId=movimento_id, unidadeId=unidade_id, itemId=item_id,
+                    variacaoFisica=entrada.quantidade, ocorridaEm=saldo["updated_at"],
+                    estoqueVersion=saldo["estoque_version"],
+                )
+                resultado = 201, corpo.model_dump(mode="json")
+        return gravar_resultado(conexao, OPERACAO_ENTRADA, ator, chave, resumo, resultado)
+
+
+@app.post("/api/unidade/v1/estoque/{unidadeId}/itens/{itemId}/entradas", status_code=201,
+          response_model=MovimentacaoEstoque)
+async def registrar_entrada(
+    request: Request, unidadeId: UUID, itemId: UUID, entrada: EntradaEstoque, chave: Chave,
+    profissional: Annotated[Ator, Depends(profissional_autenticado)],
+):
+    if profissional.unidadeId != unidadeId:
+        raise HTTPException(403, "Ator sem acesso à unidade.")
+    if not chave.strip() or "\x00" in chave:
+        raise HTTPException(422, "Chave idempotente inválida.")
+    resumo = sha256(f"{unidadeId}:{itemId}:{entrada.model_dump_json()}".encode()).hexdigest()
+    anterior = await run_in_threadpool(reobter_entrada, profissional.id, chave, resumo)
+    if anterior is not None:
+        return responder_comando(anterior)
+    await verificar_unidade_ativa(request, unidadeId)
+    resultado = await run_in_threadpool(persistir_entrada, unidadeId, itemId, entrada, profissional.id, chave, resumo)
+    return responder_comando(resultado)

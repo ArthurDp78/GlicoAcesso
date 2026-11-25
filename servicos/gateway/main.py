@@ -58,6 +58,8 @@ async def encaminhar_reserva(request: Request, reservaId: UUID | None = None) ->
 
 
 @app.get("/api/unidade/v1/painel/estoque")
+@app.get("/api/unidade/v1/painel/estoque/catalogo")
+@app.post("/api/unidade/v1/painel/estoque/{unidadeId}/itens/{itemId}/entradas", status_code=201)
 @app.get("/api/unidade/v1/painel/reservas")
 @app.get("/api/unidade/v1/painel/reservas/{reservaId}")
 @app.post("/api/unidade/v1/reservas/{reservaId}/decisao")

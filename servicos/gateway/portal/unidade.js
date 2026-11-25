@@ -32,14 +32,15 @@ async function chamar(href, opcoes = {}) {
   const corpo = await resposta.json().catch(() => ({}));
   if (resposta.status === 401) throw new Error("Token do profissional inválido.");
   if (resposta.status === 403) throw new Error("Sem acesso: o profissional precisa estar vinculado a uma unidade ativa.");
-  if (resposta.status === 404) throw new Error("Reserva não encontrada.");
+  if (resposta.status === 404) throw new Error(corpo.mensagem ?? corpo.detail ?? "Recurso não encontrado.");
   if (resposta.status === 409) {
     const motivos = {
       ESTADO_INCOMPATIVEL: "A reserva não aguarda mais decisão ou o prazo terminou.",
       EXECUCAO_CONCORRENTE: "Já existe uma confirmação em andamento para esta reserva.",
       CHAVE_IDEMPOTENTE_CONFLITANTE: "Esta ação já foi enviada com outros dados.",
+      LIMITE_ESTOQUE_EXCEDIDO: "A quantidade recebida excede o limite do saldo.",
     };
-    throw new Error(motivos[corpo.codigo] ?? "A operação conflita com o estado atual.");
+    throw Object.assign(new Error(motivos[corpo.codigo] ?? "A operação conflita com o estado atual."), {conflito: true});
   }
   if (!resposta.ok) throw new Error("Não foi possível concluir. Tente novamente.");
   return {status: resposta.status, corpo};
@@ -110,6 +111,73 @@ async function decidir(reserva, link, acoes, indicador) {
 
 const estoque = document.querySelector("#estoque");
 const mensagemEstoque = document.querySelector("#status-estoque");
+const formularioEntrada = document.querySelector("#entrada-estoque");
+const itemEntrada = document.querySelector("#item-entrada");
+const quantidadeEntrada = document.querySelector("#quantidade-entrada");
+const mensagemEntrada = document.querySelector("#status-entrada");
+let unidadeEntrada = null;
+
+function informarEntrada(texto, erro = false) {
+  mensagemEntrada.textContent = texto;
+  mensagemEntrada.classList.toggle("erro", erro);
+}
+
+async function carregarCatalogo() {
+  const token = credencial.value.trim();
+  formularioEntrada.hidden = true;
+  try {
+    const {corpo} = await chamar("/api/unidade/v1/painel/estoque/catalogo");
+    if (credencial.value.trim() !== token) return;
+    unidadeEntrada = corpo.unidadeId;
+    itemEntrada.replaceChildren(new Option("Selecione um item", ""));
+    for (const item of corpo.itens) itemEntrada.add(new Option(item.nome, item.itemId));
+    if (corpo.itens.length === 0) {
+      informarEntrada("Nenhum item no catálogo.");
+      return;
+    }
+    informarEntrada("");
+    formularioEntrada.hidden = false;
+  } catch (erro) {
+    if (credencial.value.trim() !== token) return;
+    informarEntrada(erro instanceof TypeError ? "Falha de conexão ao consultar o catálogo." : erro.message, true);
+  }
+}
+
+credencial.addEventListener("input", () => {
+  formularioEntrada.hidden = true;
+  unidadeEntrada = null;
+  informarEntrada("");
+});
+
+formularioEntrada.addEventListener("submit", async (evento) => {
+  evento.preventDefault();
+  if (!unidadeEntrada) return;
+  const botao = formularioEntrada.querySelector("button");
+  const unidadeId = unidadeEntrada;
+  const itemId = itemEntrada.value;
+  const quantidade = quantidadeEntrada.valueAsNumber;
+  const operacao = `glicoacesso:entrada:${unidadeId}:${itemId}:${quantidade}`;
+  botao.disabled = itemEntrada.disabled = quantidadeEntrada.disabled = true;
+  informarEntrada("Registrando entrada…");
+  try {
+    const chave = sessionStorage.getItem(operacao) ?? crypto.randomUUID();
+    sessionStorage.setItem(operacao, chave);
+    await chamar(`/api/unidade/v1/painel/estoque/${unidadeId}/itens/${itemId}/entradas`, {
+      method: "POST",
+      body: JSON.stringify({quantidade}),
+      headers: {"Content-Type": "application/json", "Idempotency-Key": chave},
+    });
+    sessionStorage.removeItem(operacao);
+    quantidadeEntrada.value = "";
+    informarEntrada("Entrada registrada. O estoque será atualizado em instantes.");
+    setTimeout(carregarEstoque, 2500);
+  } catch (erro) {
+    if (erro.conflito) sessionStorage.removeItem(operacao);
+    informarEntrada(erro instanceof TypeError ? "Falha de conexão. Reenvie com o mesmo item e quantidade." : erro.message, true);
+  } finally {
+    botao.disabled = itemEntrada.disabled = quantidadeEntrada.disabled = false;
+  }
+});
 
 function cartaoEstoque(item) {
   const artigo = document.createElement("article");
@@ -139,7 +207,7 @@ async function carregarEstoque() {
     estoque.replaceChildren(...corpo.map(cartaoEstoque));
     mensagemEstoque.classList.remove("erro");
     mensagemEstoque.textContent = corpo.length === 0 ? "Nenhum item com estoque projetado."
-      : "Leitura da projeção CQRS. Após uma confirmação, a atualização chega em alguns segundos.";
+      : "A disponibilidade pode levar alguns segundos para refletir alterações no estoque.";
   } catch (erro) {
     mensagemEstoque.classList.add("erro");
     mensagemEstoque.textContent = erro instanceof TypeError ? "Falha de conexão ao consultar o estoque." : erro.message;
@@ -153,6 +221,7 @@ formulario.addEventListener("submit", async (evento) => {
   lista.replaceChildren();
   informar("Carregando solicitações…");
   carregarEstoque();
+  carregarCatalogo();
   try {
     const {corpo} = await chamar("/api/unidade/v1/painel/reservas");
     lista.replaceChildren(...corpo.map(cartao));

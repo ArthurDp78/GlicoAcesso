@@ -344,7 +344,7 @@ uv run --locked uvicorn servicos.bff_unidade.main:app --host 127.0.0.1 --port 80
 
 Para atualizar um ambiente existente, aplique a migração do Orquestrador antes de reiniciar os processos. Ela reconstrói comandos de aceite pendentes gravados no formato inicial e conserva a chave idempotente de cada etapa. O script de demonstração aplica a migração e acrescenta a chave do BFF ao arquivo local de tokens, preservando os tokens já gerados.
 
-Abra [http://127.0.0.1:8000/unidade](http://127.0.0.1:8000/unidade), informe o token do profissional e clique em **Carregar solicitações**. Cada solicitação pendente mostra **Aceitar** e **Rejeitar**. Os botões vêm dos links `_links` que o BFF Unidade devolve.
+Abra [http://127.0.0.1:8000/unidade](http://127.0.0.1:8000/unidade), informe o token do profissional e clique em **Carregar painel**. Cada solicitação pendente mostra **Aceitar** e **Rejeitar**. Os botões vêm dos links `_links` que o BFF Unidade devolve.
 
 - **Rejeitar** é uma operação local de Reservas: retorna `200` e a reserva passa a `REJEITADA`.
 - **Aceitar** não muda a reserva em Reservas. Reservas devolve `409 ACEITE_ENCAMINHAR` ao BFF e grava esse destino com a chave idempotente. O BFF então encaminha o pedido ao Orquestrador com a mesma chave. O Orquestrador grava a execução (`EM_EXECUCAO`) e a primeira etapa (`ACEITAR_RESERVA`, `PENDENTE`). Só depois disso o BFF responde `202`, com `Location` apontando para `/api/unidade/v1/painel/reservas/{reservaId}`.
@@ -407,7 +407,7 @@ A tabela de decisão do executor tem uma verificação sem dependências, rodada
 
 A disponibilidade não é lida do saldo canônico. Ela vem de uma projeção atualizada por eventos:
 
-1. Ao alocar ou liberar, Estoque altera `saldos` e grava o evento na tabela `outbox`, na mesma transação. Os eventos são `estoque.alocacao-criada.v1` e `estoque.alocacao-liberada.v1`.
+1. Ao registrar entrada, alocar ou liberar, Estoque altera `saldos` e grava o evento na tabela `outbox`, na mesma transação. Os eventos são `estoque.entrada-registrada.v1`, `estoque.alocacao-criada.v1` e `estoque.alocacao-liberada.v1`.
 2. Um publicador, dentro do processo de Estoque, envia os eventos pendentes à exchange `glico.eventos` do RabbitMQ. Ele usa confirmação do broker e marca o evento como `PUBLICADO` só depois dela.
 3. O consumidor da projeção lê a fila `estoque.projecao-disponibilidade` e atualiza a tabela `disponibilidade`.
 
@@ -421,7 +421,15 @@ Para subir o RabbitMQ manualmente:
 docker run -d --name glico-rabbitmq -p 127.0.0.1:5672:5672 -p 127.0.0.1:15672:15672 -v glico-rabbitmq-data:/var/lib/rabbitmq rabbitmq:4-management
 ```
 
-Estoque usa `RABBITMQ_URL` (padrão `amqp://guest:guest@127.0.0.1:5672/%2F`). Para o painel de estoque da unidade, Estoque e BFF Unidade também precisam de `GLICO_PROFISSIONAL_TOKEN` e `GLICO_PROFISSIONAL_UNIDADE_ID`. O painel, em `/api/unidade/v1/painel/estoque`, mostra o estoque físico, o alocado, o disponível e o instante da projeção (`atualizadoEm`). O painel `/unidade` exibe esses dados abaixo das solicitações.
+Estoque usa `RABBITMQ_URL` (padrão `amqp://guest:guest@127.0.0.1:5672/%2F`). Para o painel da unidade, Estoque e BFF Unidade também precisam de `GLICO_PROFISSIONAL_TOKEN` e `GLICO_PROFISSIONAL_UNIDADE_ID`. Estoque consulta `UNIDADES_URL` (padrão `http://127.0.0.1:8002`) para confirmar que a unidade está ativa antes de uma nova entrada.
+
+#### Registrar e conferir uma entrada
+
+1. Abra `/unidade`, informe o token do profissional e clique em **Carregar painel**.
+2. Em **Estoque da unidade**, selecione um medicamento ou insumo do catálogo, informe a quantidade inteira recebida e clique em **Registrar entrada**.
+3. Após a atualização da projeção, confira o estoque físico e o disponível no painel. O cidadão também pode consultar a disponibilidade pelo item no portal.
+
+A primeira entrada de um item cria seu saldo com reservas desativadas. As próximas somam ao saldo físico e preservam a permissão vigente. Se houver perda de resposta, reenvie a mesma quantidade para o mesmo item na mesma aba. O painel reutiliza a chave daquela tentativa, mesmo após recarregar a página.
 
 ## Referências
 
