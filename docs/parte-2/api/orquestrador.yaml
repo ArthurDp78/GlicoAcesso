@@ -114,7 +114,7 @@ paths:
         '403':
           description: "Chamador ou ator sem permissão."
         '409':
-          description: "EXECUCAO_CONCORRENTE, ESTADO_INCOMPATIVEL ou CHAVE_IDEMPOTENTE_CONFLITANTE. A repetição idêntica de pedido já admitido recupera a resposta original."
+          description: "EXECUCAO_CONCORRENTE ou CHAVE_IDEMPOTENTE_CONFLITANTE. O estado da reserva é validado depois, no aceite em Reservas. A repetição idêntica de pedido já admitido recupera a resposta original."
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErroComando' }

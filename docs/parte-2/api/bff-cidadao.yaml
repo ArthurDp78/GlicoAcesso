@@ -11,6 +11,12 @@ components:
       type: http
       scheme: bearer
   parameters:
+    CorrelationId:
+      name: X-Correlation-Id
+      in: header
+      required: false
+      description: Preservado se for um UUID válido; caso contrário, um novo é gerado. Devolvido em toda resposta.
+      schema: { type: string, format: uuid }
     IdempotencyKey:
       name: Idempotency-Key
       in: header
@@ -78,6 +84,7 @@ components:
         tipo: { type: string, enum: [MEDICAMENTO, INSUMO] }
 paths:
   /itens:
+    parameters: [{ $ref: '#/components/parameters/CorrelationId' }]
     get:
       summary: Listar itens disponíveis para pesquisa
       responses:
@@ -88,7 +95,9 @@ paths:
               schema:
                 type: array
                 items: { $ref: '#/components/schemas/ItemCidadao' }
+        '503': { description: "Serviço temporariamente indisponível. Em comandos, repita com a mesma chave e conteúdo." }
   /unidades:
+    parameters: [{ $ref: '#/components/parameters/CorrelationId' }]
     get:
       summary: Listar unidades para consulta
       responses:
@@ -99,7 +108,9 @@ paths:
               schema:
                 type: array
                 items: { $ref: '#/components/schemas/UnidadeCidadao' }
+        '503': { description: "Serviço temporariamente indisponível. Em comandos, repita com a mesma chave e conteúdo." }
   /reservas:
+    parameters: [{ $ref: '#/components/parameters/CorrelationId' }]
     post:
       summary: Criar solicitação de reserva
       description: Encaminha a solicitação autenticada do cidadão ao serviço Reservas.
@@ -113,6 +124,7 @@ paths:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               required: [unidadeId, itemId, quantidade]
               properties:
                 unidadeId: { type: string, format: uuid }
@@ -130,11 +142,14 @@ paths:
               schema:
                 $ref: '#/components/schemas/ReservaCidadao'
         '422':
-          description: Unidade inexistente/inativa ou combinação unidade/item sem permissão para reserva.
+          description: Unidade inexistente/inativa ou combinação unidade/item sem permissão para reserva; ou entrada inválida.
         '409':
           description: "`Idempotency-Key` reutilizada com conteúdo diferente."
         '401': { description: Credencial do cidadão ausente ou inválida. }
+        '403': { description: "Ator sem permissão para a operação." }
+        '503': { description: "Serviço temporariamente indisponível. Em comandos, repita com a mesma chave e conteúdo." }
   /reservas/{reservaId}/cancelar:
+    parameters: [{ $ref: '#/components/parameters/CorrelationId' }]
     post:
       summary: Solicitar cancelamento da reserva pelo cidadão
       operationId: solicitarCancelamentoReserva
@@ -181,6 +196,7 @@ paths:
         '503':
           description: "Serviço temporariamente indisponível. Repita o comando com a mesma chave e conteúdo quando o resultado estiver incerto."
   /reservas/{reservaId}:
+    parameters: [{ $ref: '#/components/parameters/CorrelationId' }]
     get:
       summary: Consultar reserva agregada (Cidadão)
       security:
@@ -192,14 +208,18 @@ paths:
           schema: { type: string, format: uuid }
       responses:
         '200':
-          description: Vista segura e simplificada da reserva.
+          description: Vista segura e simplificada da reserva, com dados da unidade mesmo inativa. Dados complementares indisponíveis são omitidos.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ReservaCidadao'
         '401': { description: Credencial do cidadão ausente ou inválida. }
         '404': { description: Reserva inexistente ou sem acesso para este cidadão. }
+        '403': { description: "Ator sem permissão para a operação." }
+        '422': { description: "Parâmetro, cabeçalho ou corpo inválido, inclusive campo não previsto." }
+        '503': { description: "Serviço temporariamente indisponível. Em comandos, repita com a mesma chave e conteúdo." }
   /explorar:
+    parameters: [{ $ref: '#/components/parameters/CorrelationId' }]
     get:
       summary: Explorar disponibilidade agregada
       parameters:
@@ -229,3 +249,5 @@ paths:
                       type: string
                       format: date-time
                       description: Timestamp recebido da projeção de Estoque para o estado exibido, preservado pelo BFF sem substituição pelo horário de montagem da resposta.
+        '422': { description: "Parâmetro, cabeçalho ou corpo inválido, inclusive campo não previsto." }
+        '503': { description: "Serviço temporariamente indisponível. Em comandos, repita com a mesma chave e conteúdo." }

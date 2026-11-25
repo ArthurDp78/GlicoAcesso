@@ -225,6 +225,7 @@ paths:
           description: "`Idempotency-Key` reutilizada com conteúdo diferente."
         '401': { description: Credencial do cidadão ausente ou inválida. }
         '403': { description: Chamador ou ator sem permissão. }
+        '503': { description: "Unidades, Estoque ou banco indisponível, ou configuração de prazo inválida. Nenhuma solicitação é criada." }
   /api/cidadao/v1/reservas/{reservaId}/cancelar:
     post:
       operationId: cancelarSolicitacaoCidadao
