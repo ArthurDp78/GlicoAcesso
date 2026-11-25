@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, ConfigDict
 
 from servicos.banco import conectar
-from servicos.comandos import RASTREADO, Chave, Justificativa, responder, resumir
+from servicos.comandos import RASTREADO, Chave, Justificativa, NaoNulo, responder, resumir
 from servicos.idempotencia import gravar_resultado, resultado_anterior
 from servicos.identidade_demo import (
     Ator, ator_autenticado, ator_delegado, orquestrador_autenticado, profissional_autenticado,
@@ -49,7 +49,7 @@ class IniciarCancelamento(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     sagaId: UUID
-    justificativa: Justificativa | None = None
+    justificativa: Annotated[Justificativa | None, NaoNulo] = None
 
 
 def conflito(codigo: str, mensagem: str) -> tuple[int, dict]:

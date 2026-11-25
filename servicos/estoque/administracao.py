@@ -60,7 +60,7 @@ def configurar_permissao(profissional: Ator, unidade_id: UUID, item_id: UUID, da
         # Sem mudança de estado não há novo fato a publicar.
         if criado is not None or saldo["permite_reserva"] != dados.permiteReserva:
             saldo = conexao.execute(f"""
-                UPDATE saldos SET permite_reserva = %s, estoque_version = estoque_version + 1, updated_at = now()
+                UPDATE saldos SET permite_reserva = %s, estoque_version = estoque_version + 1, updated_at = clock_timestamp()
                 WHERE unidade_id = %s AND item_id = %s RETURNING {CAMPOS_SALDO}
             """, (dados.permiteReserva, unidade_id, item_id)).fetchone()
             registrar_evento(conexao, "estoque.permissao-reserva-alterada.v1", "SaldoEstoque",

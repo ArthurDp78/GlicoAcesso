@@ -422,7 +422,13 @@ Os testes de integração usam um PostgreSQL e um RabbitMQ **descartáveis**. El
 ```bash
 export GLICO_TESTE_PG='postgresql://postgres:teste@127.0.0.1:55432/postgres'
 export GLICO_TESTE_RABBIT='amqp://guest:guest@127.0.0.1:55672/%2F'
-uv run --locked python -m unittest tests.test_unidades tests.test_estoque tests.test_reservas tests.test_retiradas tests.test_saga
+uv run --locked python -m unittest tests.test_unidades tests.test_estoque tests.test_reservas tests.test_retiradas tests.test_saga tests.test_revisao
+```
+
+Para validar também status, corpos e cabeçalhos contra os OpenAPI, execute os testes com `GLICO_TESTE_TROCAS=/tmp/trocas.jsonl` e depois:
+
+```bash
+uv run --no-project --with pyyaml --with jsonschema python -m tests.contratos /tmp/trocas.jsonl
 ```
 
 ## Referências

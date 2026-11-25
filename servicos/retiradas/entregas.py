@@ -10,7 +10,7 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, ValidationError
 from servicos.banco import conectar
 from servicos.comandos import Chave, Correlacao, responder, resumir
 from servicos.contratos_reserva import EstadoReserva
-from servicos.http import consultar
+from servicos.http import consultar, falha_de_configuracao
 from servicos.idempotencia import gravar_resultado, reobter_resultado, resultado_anterior
 from servicos.identidade_demo import Ator, exigir_unidade, profissional_autenticado
 from servicos.mensageria import RETIRADA_CONCLUIDA, gravar_outbox
@@ -70,6 +70,8 @@ async def estado_da_reserva(request: Request, reserva_id: UUID, correlacao: UUID
             request.app.state.http, f"{reservas}/internal/v1/reservas/{reserva_id}/estado",
             headers={"Authorization": f"Bearer {token}", "X-Correlation-Id": str(correlacao)},
         )
+        if falha_de_configuracao(resposta):
+            raise HTTPException(503)
         if resposta.status_code == 404:
             return None
         if resposta.status_code != 200:

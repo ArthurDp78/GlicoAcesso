@@ -37,6 +37,14 @@ class Horario(Entrada):
     horarioInicial: time
     horarioFinal: time
 
+    @field_validator("horarioInicial", "horarioFinal", mode="before")
+    @classmethod
+    def em_texto(cls, valor):
+        # O Pydantic aceitaria números como segundos; o contrato só admite texto.
+        if not isinstance(valor, str):
+            raise ValueError("horário deve ser texto")
+        return valor
+
     @field_validator("horarioInicial", "horarioFinal")
     @classmethod
     def sem_fuso(cls, valor: time) -> time:

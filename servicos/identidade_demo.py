@@ -26,6 +26,7 @@ def exigir_credencial(credencial: HTTPAuthorizationCredentials | None) -> bytes:
     return credencial.credentials.encode()
 
 
+CHAMADOR_NAO_AUTORIZADO = "CHAMADOR_NAO_AUTORIZADO"
 VARIAVEIS_DE_TOKEN = (
     "GLICO_CIDADAO_TOKEN", "GLICO_PROFISSIONAL_TOKEN", "GLICO_RESERVAS_SERVICE_TOKEN",
     "GLICO_ORQUESTRADOR_SERVICE_TOKEN", "GLICO_RETIRADAS_SERVICE_TOKEN", "GLICO_ADMIN_SERVICE_TOKEN",
@@ -41,7 +42,7 @@ def validar_token(credencial: HTTPAuthorizationCredentials | None, variavel: str
         # Identidade conhecida, mas sem permissão para esta operação.
         conhecidos = (os.environ.get(outra, "") for outra in VARIAVEIS_DE_TOKEN)
         if any([len(token) >= 32 and compare_digest(recebido, token.encode()) for token in conhecidos]):
-            raise HTTPException(403, "Operação restrita a outro chamador.")
+            raise HTTPException(403, {"codigo": CHAMADOR_NAO_AUTORIZADO, "mensagem": "Operação restrita a outro chamador."})
         raise HTTPException(401, "Credencial inválida.", headers=NAO_AUTENTICADO)
 
 

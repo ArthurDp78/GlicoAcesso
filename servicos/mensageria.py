@@ -62,43 +62,52 @@ def gravar_outbox(conexao, tipo: str, agregado_tipo: str, agregado_id, correlaca
     """, (uuid4(), tipo, agregado_tipo, str(agregado_id), correlacao or uuid4(), causacao, ocorrido_em, Jsonb(payload)))
 
 
-def publicar_pendentes(banco: str, canal) -> int:
+def reservar_pendente(banco: str):
+    """Registra o início da tentativa e adia a próxima antes de publicar; uma queda deixa o evento recuperável."""
     with conectar(banco) as conexao:
-        eventos = conexao.execute("""
-            SELECT event_id, event_type, event_version, aggregate_type, aggregate_id, correlation_id,
-                   causation_id, occurred_at, payload, attempts
-            FROM outbox WHERE status = 'PENDENTE' AND next_retry_at <= now()
-            ORDER BY created_at LIMIT 50
-            FOR UPDATE SKIP LOCKED
-        """).fetchall()
-        for evento in eventos:
-            envelope = {
-                "eventId": str(evento["event_id"]), "eventType": evento["event_type"],
-                "eventVersion": evento["event_version"], "occurredAt": evento["occurred_at"].isoformat(),
-                "aggregateType": evento["aggregate_type"], "aggregateId": evento["aggregate_id"],
-                "correlationId": str(evento["correlation_id"]),
-                "causationId": str(evento["causation_id"]) if evento["causation_id"] else None,
-                "payload": evento["payload"],
-            }
-            propriedades = pika.BasicProperties(content_type="application/json", delivery_mode=2,
-                                                message_id=envelope["eventId"])
-            try:
-                # mandatory + publisher confirms: sem rota ou sem confirmação, o evento continua pendente.
-                canal.basic_publish(EXCHANGE, evento["event_type"], json.dumps(envelope).encode(),
-                                    propriedades, mandatory=True)
-            except (UnroutableError, NackError) as erro:
-                conexao.execute("""
-                    UPDATE outbox SET attempts = attempts + 1, last_error = %s,
-                        next_retry_at = now() + make_interval(secs => %s)
-                    WHERE event_id = %s
-                """, (type(erro).__name__, min(2 ** min(evento["attempts"], 5), 30), evento["event_id"]))
+        return conexao.execute("""
+            UPDATE outbox SET attempts = attempts + 1,
+                next_retry_at = now() + make_interval(secs => least(power(2, least(attempts, 5)), 30))
+            WHERE event_id = (
+                SELECT event_id FROM outbox WHERE status = 'PENDENTE' AND next_retry_at <= now()
+                ORDER BY created_at LIMIT 1 FOR UPDATE SKIP LOCKED
+            )
+            RETURNING event_id, event_type, event_version, aggregate_type, aggregate_id, correlation_id,
+                causation_id, occurred_at, payload
+        """).fetchone()
+
+
+def publicar_pendentes(banco: str, canal, limite: int = 50) -> int:
+    tentados = 0
+    while tentados < limite and (evento := reservar_pendente(banco)) is not None:
+        tentados += 1
+        envelope = {
+            "eventId": str(evento["event_id"]), "eventType": evento["event_type"],
+            "eventVersion": evento["event_version"], "occurredAt": evento["occurred_at"].isoformat(),
+            "aggregateType": evento["aggregate_type"], "aggregateId": evento["aggregate_id"],
+            "correlationId": str(evento["correlation_id"]),
+            "causationId": str(evento["causation_id"]) if evento["causation_id"] else None,
+            "payload": evento["payload"],
+        }
+        propriedades = pika.BasicProperties(content_type="application/json", delivery_mode=2,
+                                            message_id=envelope["eventId"])
+        try:
+            # mandatory + publisher confirms: sem rota ou sem confirmação, o evento continua pendente.
+            canal.basic_publish(EXCHANGE, evento["event_type"], json.dumps(envelope).encode(),
+                                propriedades, mandatory=True)
+        except (AMQPError, OSError) as erro:
+            with conectar(banco) as conexao:
+                conexao.execute("UPDATE outbox SET last_error = %s WHERE event_id = %s",
+                                (type(erro).__name__, evento["event_id"]))
+            if isinstance(erro, (UnroutableError, NackError)):
                 continue
+            raise  # Conexão perdida: o laço reconecta e o evento já está adiado.
+        with conectar(banco) as conexao:
             conexao.execute("""
-                UPDATE outbox SET status = 'PUBLICADO', published_at = now(), attempts = attempts + 1,
-                    last_error = NULL
-                WHERE event_id = %s
+                UPDATE outbox SET status = 'PUBLICADO', published_at = now(), last_error = NULL
+                WHERE event_id = %s AND status = 'PENDENTE'
             """, (evento["event_id"],))
-        return len(eventos)
+    return tentados
 
 
 def publicador(banco: str):

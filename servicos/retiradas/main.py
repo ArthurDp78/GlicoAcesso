@@ -77,9 +77,10 @@ def preparar(pedido: PedidoAutorizacao, chave: str, correlacao: UUID | None):
     with conectar(BANCO) as conexao:
         if (anterior := resultado_anterior(conexao, "preparar-autorizacao", PRINCIPAL, chave, resumo)) is not None:
             return anterior
+        incompativel = 409, {"codigo": "AUTORIZACAO_INCOMPATIVEL", "mensagem": "A reserva já tem autorização."}
         existente = conexao.execute("SELECT 1 FROM autorizacoes WHERE reserva_id = %s", (pedido.reservaId,)).fetchone()
         if existente is not None:
-            resultado = 409, {"codigo": "AUTORIZACAO_INCOMPATIVEL", "mensagem": "A reserva já tem autorização."}
+            resultado = incompativel
         elif os.environ.get("GLICO_FALHA_PREPARAR_AUTORIZACAO") == "1":
             # Falha de negócio provocada para demonstrar a compensação da SAGA.
             resultado = 422, {"codigo": "AUTORIZACAO_NAO_CRIADA", "mensagem": "Preparação recusada (falha simulada)."}
@@ -88,10 +89,12 @@ def preparar(pedido: PedidoAutorizacao, chave: str, correlacao: UUID | None):
                 INSERT INTO autorizacoes (autorizacao_id, reserva_id, saga_id, unidade_id, item_id, quantidade,
                     idempotency_key, correlation_id)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (reserva_id) DO NOTHING
                 RETURNING {CAMPOS}
             """, (uuid4(), pedido.reservaId, pedido.sagaId, pedido.unidadeId, pedido.itemId,
-                  pedido.quantidade, chave, correlacao)).fetchone()
-            resultado = 201, json_autorizacao(linha)
+                  pedido.quantidade, chave, correlacao or uuid4())).fetchone()
+            # Outra preparação da mesma reserva pode ter vencido depois da leitura.
+            resultado = incompativel if linha is None else (201, json_autorizacao(linha))
         return gravar_resultado(conexao, "preparar-autorizacao", PRINCIPAL, chave, resumo, resultado)
 
 

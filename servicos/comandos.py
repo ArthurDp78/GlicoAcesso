@@ -6,14 +6,30 @@ from uuid import UUID
 
 from fastapi import Depends, Header, Request
 from fastapi.responses import JSONResponse
-from pydantic import StringConstraints
+from pydantic import AfterValidator, BeforeValidator, StringConstraints
 
 
 INTEIRO_MAXIMO = 2147483647  # Limite do tipo integer do PostgreSQL.
 Chave = Annotated[str, Header(alias="Idempotency-Key", min_length=1, max_length=128, pattern=r"\S")]
 Correlacao = Annotated[UUID | None, Header(alias="X-Correlation-Id")]
-Texto = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
-Justificativa = Annotated[str, StringConstraints(strip_whitespace=True, min_length=5)]
+
+
+def sem_nulo(valor: str) -> str:
+    if "\x00" in valor:
+        raise ValueError("o texto contém caractere nulo, que o banco não armazena")
+    return valor
+
+
+def recusar_nulo(valor):
+    if valor is None:
+        raise ValueError("omita o campo em vez de enviar null")
+    return valor
+
+
+NaoNulo = BeforeValidator(recusar_nulo)  # Para campos opcionais: o padrão None não passa pelo validador.
+TextoLivre = Annotated[str, AfterValidator(sem_nulo)]
+Texto = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1), AfterValidator(sem_nulo)]
+Justificativa = Annotated[str, StringConstraints(strip_whitespace=True, min_length=5), AfterValidator(sem_nulo)]
 
 log = logging.getLogger("uvicorn.error")
 

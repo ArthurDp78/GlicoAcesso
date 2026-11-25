@@ -15,7 +15,7 @@ from servicos.banco import BancoIndisponivel, conectar
 from servicos.comandos import RASTREADO
 from servicos.contratos_reserva import PedidoReserva, ReservaInterna
 from servicos.erros import entrada_invalida_400
-from servicos.http import cliente_http, consultar
+from servicos.http import cliente_http, consultar, falha_de_configuracao
 from servicos.idempotencia import reobter_resultado
 from servicos.identidade_demo import (
     Ator, AtorAutenticado, ator_delegado, cidadao_autenticado, orquestrador_autenticado, profissional_autenticado,
@@ -94,15 +94,18 @@ def reobter_antes_da_validacao(cidadao: str, chave: str, resumo: str) -> Reserva
 
 
 async def verificar_dependencia(cliente, url: str, token: str, modelo):
-    resposta = await consultar(cliente, url, headers={"Authorization": f"Bearer {token}"})
-    if resposta.status_code == 404:
+    try:
+        resposta = await consultar(cliente, url, headers={"Authorization": f"Bearer {token}"})
+    except HTTPException as erro:
+        raise HTTPException(503, "Não foi possível validar a unidade ou a permissão de reserva.") from erro
+    if resposta.status_code == 404 and not falha_de_configuracao(resposta):
         return None
     if resposta.status_code != 200:
         raise HTTPException(503, "Não foi possível validar a unidade ou a permissão de reserva.")
     try:
         return modelo.model_validate_json(resposta.content)
     except ValidationError as erro:
-        raise HTTPException(502, "A validação retornou dados incompatíveis.") from erro
+        raise HTTPException(503, "A validação retornou dados incompatíveis.") from erro
 
 
 def token_interno() -> str:

@@ -1,5 +1,6 @@
 """Recepção e consulta de pedidos de cancelamento distribuído."""
 import os
+from typing import Annotated
 from uuid import UUID, uuid4
 
 import httpx
@@ -9,7 +10,8 @@ from psycopg.errors import UniqueViolation
 from pydantic import BaseModel, ConfigDict
 
 from servicos.banco import conectar
-from servicos.comandos import RASTREADO, Chave, Correlacao, Justificativa, resumir
+from servicos.comandos import RASTREADO, Chave, Correlacao, Justificativa, NaoNulo, resumir
+from servicos.http import falha_de_configuracao
 from servicos.idempotencia import gravar_resultado, reobter_resultado, resultado_anterior
 from servicos.identidade_demo import Ator, AtorAutenticado
 from servicos.orquestrador.cancelamento import iniciar_execucao
@@ -23,7 +25,7 @@ OPERACAO = "solicitar-cancelamento"
 class PedidoCancelamento(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    justificativa: Justificativa | None = None
+    justificativa: Annotated[Justificativa | None, NaoNulo] = None
 
 
 def erro(status: int, codigo: str, mensagem: str) -> JSONResponse:
@@ -50,6 +52,8 @@ def consultar_permissao(reserva_id: UUID, ator: Ator, correlacao: UUID) -> str:
             f"{url}/internal/v1/reservas/{reserva_id}/permissao-cancelamento", timeout=3.0, trust_env=False, headers={
                 "Authorization": "Bearer " + os.environ.get("GLICO_ORQUESTRADOR_SERVICE_TOKEN", ""),
                 "X-Correlation-Id": str(correlacao), **cabecalhos_do_ator(ator.papel, ator.id, ator.unidadeId)})
+        if falha_de_configuracao(resposta):
+            raise HTTPException(503, "Não foi possível verificar a permissão em Reservas.")
         if resposta.status_code == 403:
             raise HTTPException(403, "Ator sem acesso à reserva.")
         if resposta.status_code == 404:

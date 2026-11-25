@@ -10,6 +10,7 @@ import threading
 
 import httpx
 from servicos.banco import conectar
+from servicos.http import falha_de_configuracao
 from servicos.orquestrador.cancelamento import (
     INICIAR, ativar_pedido, avancar_cancelamento, interpor, pedido_pendente, resolver_interposta,
 )
@@ -95,7 +96,10 @@ def avancar(conexao, etapa, status: int, corpo: dict, pedido=None) -> bool:
             compensar("CANCELAR_AUTORIZACAO")  # A autorização pode existir: revogar antes de liberar.
         case "CONFIRMAR_RESERVA", 200, _:
             mudar_estado(conexao, saga, "CONCLUIDA", encerrar=True)
-        case ("CANCELAR_AUTORIZACAO", 200, _) | ("CANCELAR_AUTORIZACAO", 404, "AUTORIZACAO_NAO_ENCONTRADA"):
+        case "CANCELAR_AUTORIZACAO", 200, _:
+            etapas["LIBERAR_ALOCACAO"]()
+        case "CANCELAR_AUTORIZACAO", 404, "AUTORIZACAO_NAO_ENCONTRADA" if not etapa.get("autorizacao_criada"):
+            # Só prova que nunca existiu quando a preparação já reconciliada também não a criou.
             etapas["LIBERAR_ALOCACAO"]()
         case "LIBERAR_ALOCACAO", 204, _:
             etapas["FALHAR_CONFIRMACAO"]()
@@ -120,7 +124,7 @@ def chamar(cliente: httpx.Client, etapa) -> tuple[int | None, dict, str | None]:
                                    json=comando["corpo"], headers=cabecalhos)
     except httpx.HTTPError as erro:
         return None, {}, f"{type(erro).__name__}: resultado incerto"
-    if resposta.status_code >= 500 or resposta.status_code == 401:
+    if resposta.status_code >= 500 or falha_de_configuracao(resposta):
         return None, {}, f"HTTP {resposta.status_code}"
     try:
         corpo = resposta.json() if resposta.content else {}
@@ -133,7 +137,9 @@ def executar_uma(cliente: httpx.Client) -> bool:
     with conectar(BANCO) as conexao:
         etapa = conexao.execute("""
             SELECT e.saga_id, e.etapa_id, e.destino, e.idempotency_key, e.dados_comando, e.tentativas,
-                   s.reserva_id, s.correlation_id, s.estado, s.tipo, s.resultado AS dados_execucao
+                   s.reserva_id, s.correlation_id, s.estado, s.tipo, s.resultado AS dados_execucao,
+                   EXISTS (SELECT 1 FROM saga_etapas p WHERE p.saga_id = s.saga_id AND p.etapa_id = 'PREPARAR_AUTORIZACAO'
+                           AND p.estado_tecnico = 'CONCLUIDA') AS autorizacao_criada
             FROM saga_etapas e JOIN saga_execucoes s USING (saga_id)
             WHERE e.estado_tecnico = 'PENDENTE' AND e.proximo_retry_em <= now() AND s.encerrada_em IS NULL
             ORDER BY e.proximo_retry_em
@@ -151,7 +157,7 @@ def executar_uma(cliente: httpx.Client) -> bool:
                 tratado = status is not None and avancar(conexao, etapa, status, corpo, pedido)
         except Exception as falha:
             log.exception("SAGA %s: erro ao processar %s", etapa["saga_id"], etapa["etapa_id"])
-            status, corpo, erro, tratado = None, {}, f"{type(falha).__name__}: {falha}", False
+            status, corpo, erro, tratado = None, {}, f"{type(falha).__name__} ao processar o resultado", False
         if tratado:
             concluir_etapa(conexao, etapa["saga_id"], etapa["etapa_id"], status, corpo)
             conexao.execute("""
@@ -180,7 +186,8 @@ def laco(parar: threading.Event) -> None:
     with httpx.Client(timeout=4.0, trust_env=False) as cliente:
         while not parar.is_set():
             try:
-                trabalhou = executar_uma(cliente) or ativar_pedido()
+                etapa, pedido = executar_uma(cliente), ativar_pedido()
+                trabalhou = etapa or pedido
             except Exception:  # O laço não pode morrer: a etapa continua pendente e será retomada.
                 log.exception("Falha no executor da SAGA")
                 trabalhou = False

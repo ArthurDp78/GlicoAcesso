@@ -4,6 +4,7 @@ Requer GLICO_TESTE_PG (DSN administrativo de um PostgreSQL descartável) e GLICO
 de um broker descartável). Os bancos `teste_*` são apagados e recriados. Sem as variáveis, os testes são pulados.
 """
 import atexit
+import json
 import os
 import socket
 import subprocess
@@ -88,6 +89,17 @@ def limpar_filas() -> None:
     conexao.close()
 
 
+def registrar(nome: str, resposta: httpx.Response) -> None:
+    """Grava a troca para `tests.contratos`, se GLICO_TESTE_TROCAS indicar um arquivo."""
+    if destino := os.environ.get("GLICO_TESTE_TROCAS"):
+        pedido = resposta.request
+        linha = {"servico": nome, "metodo": pedido.method, "caminho": pedido.url.path, "status": resposta.status_code,
+                 "entrada": pedido.content.decode(errors="replace"), "saida": resposta.text,
+                 "cabecalhos": dict(resposta.headers), "chave": "idempotency-key" in pedido.headers}
+        with open(destino, "a", encoding="utf-8") as arquivo:
+            arquivo.write(json.dumps(linha) + "\n")
+
+
 class Proxy:
     """Fica entre o Orquestrador (ou Retiradas) e um participante e injeta falhas por trecho de caminho."""
 
@@ -111,6 +123,7 @@ class Proxy:
                                       timeout=10, trust_env=False)
                 except httpx.HTTPError:
                     return self.enviar(502, b"{}", "application/json")
+                registrar(proxy.alvo, r)
                 for trecho, portao in list(proxy.portoes.items()):
                     if trecho in self.path:
                         portao.wait(15)
@@ -208,7 +221,9 @@ def chamar(nome: str, metodo: str, caminho: str, token: str | None = None, chave
         cabecalhos["Authorization"] = f"Bearer {TOKENS.get(token, token)}"
     if chave:
         cabecalhos["Idempotency-Key"] = chave
-    return cliente.request(metodo, url(nome) + caminho, headers=cabecalhos, **opcoes)
+    resposta = cliente.request(metodo, url(nome) + caminho, headers=cabecalhos, **opcoes)
+    registrar(nome, resposta)
+    return resposta
 
 
 def nova_chave() -> str:

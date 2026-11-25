@@ -12,7 +12,7 @@ from servicos.banco import BancoIndisponivel, conectar
 from servicos.erros import entrada_invalida_400
 from servicos.estoque import administracao
 from servicos.estoque.eventos import iniciar
-from servicos.estoque.saldos import registrar_evento
+from servicos.estoque.saldos import registrar_evento, variar_saldo
 from servicos.idempotencia import gravar_resultado, resultado_anterior
 from servicos.identidade_demo import Ator, orquestrador_autenticado, profissional_autenticado, servico_reservas_autenticado
 
@@ -131,6 +131,8 @@ class PedidoAlocacao(BaseModel):
 
 def alocar(pedido: PedidoAlocacao, chave: str, correlacao: UUID | None):
     resumo = sha256(pedido.model_dump_json().encode()).hexdigest()
+    correlacao = correlacao or uuid4()
+    incompativel = 409, {"codigo": "ALOCACAO_INCOMPATIVEL", "mensagem": "A reserva já tem alocação."}
     with conectar(BANCO) as conexao:
         if (anterior := resultado_anterior(conexao, "alocar-estoque", PRINCIPAL, chave, resumo)) is not None:
             return anterior
@@ -142,29 +144,28 @@ def alocar(pedido: PedidoAlocacao, chave: str, correlacao: UUID | None):
         if saldo is None:
             resultado = 404, {"codigo": "SALDO_NAO_ENCONTRADO", "mensagem": "Item ou saldo da unidade não encontrado."}
         elif existente is not None:
-            resultado = 409, {"codigo": "ALOCACAO_INCOMPATIVEL", "mensagem": "A reserva já tem alocação."}
+            resultado = incompativel
         elif not saldo["permite_reserva"]:
             resultado = 409, {"codigo": "RESERVA_NAO_PERMITIDA", "mensagem": "A unidade não permite reservar o item."}
         elif saldo["livre"] < pedido.quantidade:
             resultado = 409, {"codigo": "SALDO_INSUFICIENTE", "mensagem": f"Disponível: {saldo['livre']}."}
         else:
             alocacao_id = uuid4()
-            conexao.execute("""
+            criada = conexao.execute("""
                 INSERT INTO alocacoes (alocacao_id, reserva_id, saga_id, unidade_id, item_id, quantidade,
                     idempotency_key, correlation_id)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (reserva_id) DO NOTHING RETURNING alocacao_id
             """, (alocacao_id, pedido.reservaId, pedido.sagaId, pedido.unidadeId, pedido.itemId,
-                  pedido.quantidade, chave, correlacao))
-            saldo = conexao.execute("""
-                UPDATE saldos SET quantidade_alocada = quantidade_alocada + %s,
-                    estoque_version = estoque_version + 1, updated_at = now()
-                WHERE unidade_id = %s AND item_id = %s
-                RETURNING unidade_id, item_id, estoque_fisico_atual, quantidade_alocada, permite_reserva,
-                    estoque_version, updated_at
-            """, (pedido.quantidade, pedido.unidadeId, pedido.itemId)).fetchone()
-            registrar_evento(conexao, "estoque.alocacao-criada.v1", "AlocacaoEstoque", alocacao_id, correlacao, saldo, {
-                "alocacaoId": str(alocacao_id), "reservaId": str(pedido.reservaId), "quantidade": pedido.quantidade})
-            resultado = 201, {"alocacaoId": str(alocacao_id), **pedido.model_dump(mode="json")}
+                  pedido.quantidade, chave, correlacao)).fetchone()
+            if criada is None:
+                # Outra alocação da mesma reserva, em outro saldo, venceu depois da leitura.
+                resultado = incompativel
+            else:
+                saldo = variar_saldo(conexao, pedido.unidadeId, pedido.itemId, alocado=pedido.quantidade)
+                registrar_evento(conexao, "estoque.alocacao-criada.v1", "AlocacaoEstoque", alocacao_id, correlacao, saldo, {
+                    "alocacaoId": str(alocacao_id), "reservaId": str(pedido.reservaId), "quantidade": pedido.quantidade})
+                resultado = 201, {"alocacaoId": str(alocacao_id), **pedido.model_dump(mode="json")}
         return gravar_resultado(conexao, "alocar-estoque", PRINCIPAL, chave, resumo, resultado)
 
 
@@ -183,13 +184,7 @@ def liberar(reserva_id: UUID, saga_id: UUID, chave: str, correlacao: UUID | None
             if alocacao is not None and alocacao["liberada_em"] is None:
                 conexao.execute("UPDATE alocacoes SET liberada_em = now(), updated_at = now() WHERE reserva_id = %s",
                                 (reserva_id,))
-                saldo = conexao.execute("""
-                    UPDATE saldos SET quantidade_alocada = quantidade_alocada - %s,
-                        estoque_version = estoque_version + 1, updated_at = now()
-                    WHERE unidade_id = %s AND item_id = %s
-                    RETURNING unidade_id, item_id, estoque_fisico_atual, quantidade_alocada, permite_reserva,
-                    estoque_version, updated_at
-                """, (alocacao["quantidade"], alocacao["unidade_id"], alocacao["item_id"])).fetchone()
+                saldo = variar_saldo(conexao, alocacao["unidade_id"], alocacao["item_id"], alocado=-alocacao["quantidade"])
                 registrar_evento(conexao, "estoque.alocacao-liberada.v1", "AlocacaoEstoque", alocacao["alocacao_id"],
                                  correlacao, saldo, {"alocacaoId": str(alocacao["alocacao_id"]),
                                                      "reservaId": str(reserva_id), "quantidade": alocacao["quantidade"]})

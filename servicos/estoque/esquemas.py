@@ -3,7 +3,7 @@ from uuid import UUID
 
 from pydantic import AfterValidator, AwareDatetime, BaseModel, ConfigDict, Field
 
-from servicos.comandos import INTEIRO_MAXIMO, Texto
+from servicos.comandos import INTEIRO_MAXIMO, NaoNulo, Texto, TextoLivre
 
 
 class Entrada(BaseModel):
@@ -13,7 +13,7 @@ class Entrada(BaseModel):
 class ItemInput(Entrada):
     nome: Texto
     tipo: Literal["MEDICAMENTO", "INSUMO"]
-    descricao: str | None = None
+    descricao: Annotated[TextoLivre | None, NaoNulo] = None
 
 
 class PermissaoInput(Entrada):

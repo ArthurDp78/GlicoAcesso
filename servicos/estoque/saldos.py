@@ -26,11 +26,14 @@ def travar_saldo(conexao, unidade_id: UUID, item_id: UUID):
 
 
 def variar_saldo(conexao, unidade_id: UUID, item_id: UUID, fisico: int = 0, alocado: int = 0):
-    """Aplica variações ao saldo e incrementa a versão; as constraints protegem as invariantes."""
+    """Aplica variações ao saldo e incrementa a versão; as constraints protegem as invariantes.
+
+    O instante é o da alteração, com a linha travada: acompanha a ordem de estoque_version.
+    """
     return conexao.execute(f"""
         UPDATE saldos SET estoque_fisico_atual = estoque_fisico_atual + %s,
             quantidade_alocada = quantidade_alocada + %s,
-            estoque_version = estoque_version + 1, updated_at = now()
+            estoque_version = estoque_version + 1, updated_at = clock_timestamp()
         WHERE unidade_id = %s AND item_id = %s
         RETURNING {CAMPOS_SALDO}
     """, (fisico, alocado, unidade_id, item_id)).fetchone()
