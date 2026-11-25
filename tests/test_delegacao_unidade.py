@@ -6,7 +6,10 @@ from uuid import UUID
 from fastapi import HTTPException
 from fastapi.security import HTTPAuthorizationCredentials
 
-from servicos.delegacao_unidade import VALIDADE_SEGUNDOS, emitir_credencial, profissional_delegado
+from servicos.delegacao_unidade import (
+    VALIDADE_SEGUNDOS, ator_cancelamento_delegado, emitir_credencial, emitir_credencial_cidadao,
+    profissional_delegado,
+)
 from servicos.identidade_demo import Ator
 
 
@@ -51,6 +54,30 @@ class TestDelegacaoUnidade(unittest.TestCase):
         token = emitir_credencial(self.ator)
         with patch.dict(os.environ, {"GLICO_BFF_UNIDADE_SIGNING_KEY": ""}):
             self.rejeitar(token, 503)
+
+
+class TestDelegacaoCancelamento(unittest.TestCase):
+    def setUp(self):
+        self.enterContext(patch.dict(os.environ, {
+            "GLICO_BFF_CIDADAO_SIGNING_KEY": "chave-cidadao-de-teste-exclusiva",
+            "GLICO_BFF_UNIDADE_SIGNING_KEY": "chave-unidade-de-teste-exclusiva",
+        }))
+        self.relogio = self.enterContext(patch("servicos.delegacao_unidade.time", return_value=1000))
+
+    def test_cidadao_assinado_e_restrito_ao_cancelamento(self):
+        token = emitir_credencial_cidadao("cidadao-demo")
+        credencial = HTTPAuthorizationCredentials(scheme="Bearer", credentials=token)
+        self.assertEqual(ator_cancelamento_delegado(credencial), Ator("CIDADAO", "cidadao-demo"))
+        with self.assertRaises(HTTPException) as erro:
+            profissional_delegado(credencial)
+        self.assertEqual(erro.exception.status_code, 401)
+
+    def test_credencial_do_cidadao_expira(self):
+        token = emitir_credencial_cidadao("cidadao-demo")
+        self.relogio.return_value += VALIDADE_SEGUNDOS
+        with self.assertRaises(HTTPException) as erro:
+            ator_cancelamento_delegado(HTTPAuthorizationCredentials(scheme="Bearer", credentials=token))
+        self.assertEqual(erro.exception.status_code, 401)
 
 
 if __name__ == "__main__":
