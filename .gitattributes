@@ -1,0 +1,2 @@
+# Scripts Bash precisam de LF mesmo em clones feitos no Windows.
+*.sh text eol=lf

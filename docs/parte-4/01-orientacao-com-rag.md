@@ -104,6 +104,8 @@ Execute os testes da ferramenta e da chain com `uv run --locked --group orientac
 
 ## Executar a orientação no portal
 
+A execução padrão, `.\iniciar.ps1` na raiz do repositório (ou `./iniciar.sh` no Linux), gera as credenciais, pede a chave, indexa a base e sobe o perfil de orientação. Os comandos abaixo são o equivalente manual.
+
 No `.env` do projeto, configure `ORIENTACAO_DB_PASSWORD` e `GLICO_ORIENTACAO_SERVICE_TOKEN` com valores hexadecimais distintos. A credencial interna precisa ter pelo menos 32 caracteres. Configure a chave do provedor, indexe a base com o comando acima e suba o sistema com o perfil de orientação usando a mesma combinação de arquivos Compose. Assim, a indexação e o serviço usam o mesmo volume.
 
 ```powershell

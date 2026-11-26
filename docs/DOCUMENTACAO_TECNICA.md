@@ -233,6 +233,8 @@ A configuração dos serviços fica em [`docker-compose.yml`](../docker-compose.
 
 ### Executar do zero
 
+No Windows, `.\iniciar.ps1` na raiz executa toda a sequência, inclusive a orientação com RAG, e `.\parar.ps1` a encerra preservando os volumes. No Linux, `./iniciar.sh` e `./parar.sh` fazem o mesmo. Veja o [README](../README.md#como-executar).
+
 Pré-requisitos da execução local incluem Git, Docker com daemon acessível, Compose, acesso aos registros das imagens e navegador. O bloco usa Bash e Python 3 para preparar o `.env`. Ele sobe o ambiente principal. O [roteiro técnico do vídeo](#roteiro-técnico-do-vídeo) inclui a subida com RAG.
 
 ```bash
@@ -248,7 +250,7 @@ curl --fail-with-body http://127.0.0.1:8000/api/cidadao/v1/itens
 
 Ajuste a porta dos comandos se usar outro valor em `GLICO_GATEWAY_PORTA`. [`scripts/configurar-compose.py`](../scripts/configurar-compose.py) · [`docker-compose.yml`](../docker-compose.yml) · [`servicos/gateway/main.py`](../servicos/gateway/main.py)
 
-Abra `http://127.0.0.1:8000/cidadao` e `http://127.0.0.1:8000/unidade`, ajustando a porta quando necessário. O catálogo e a busca são públicos. Para reservar, informe no portal o valor local de `GLICO_CIDADAO_TOKEN`. Para operar a unidade, informe `GLICO_PROFISSIONAL_TOKEN` no painel. Comece com “Tiras reagentes para glicemia”, o item de exemplo indicado no README. Uma unidade ativa aparece na busca quando existe projeção para a combinação consultada. No ambiente sem demonstração, cadastre uma unidade, vincule o perfil local, registre estoque e habilite reservas. [Sequência de cadastro via CLI e exemplo de JSON](../README.md#cadastrar-uma-unidade-pelo-comando-administrativo)
+Abra `http://127.0.0.1:8000/cidadao` e `http://127.0.0.1:8000/unidade`, ajustando a porta quando necessário. O catálogo e a busca são públicos. Para reservar, informe no portal o valor local de `GLICO_CIDADAO_TOKEN`. Para operar a unidade, informe `GLICO_PROFISSIONAL_TOKEN` no painel. Comece com “Tiras reagentes para glicemia”, o item de exemplo indicado no README. Uma unidade ativa aparece na busca quando existe projeção para a combinação consultada. No ambiente sem demonstração, cadastre uma unidade, vincule o perfil local, registre estoque e habilite reservas. [Sequência de cadastro via CLI e exemplo de JSON](execucao-manual.md#cadastrar-uma-unidade-pelo-comando-administrativo)
 
 ```bash
 # Após criar unidade.json no diretório atual

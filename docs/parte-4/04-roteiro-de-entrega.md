@@ -22,7 +22,7 @@ Use `-Porta 18081` se a porta 18080 estiver ocupada. O roteiro cadastra uma unid
 
 ## Preparar a demonstração visual
 
-Crie o `.env` conforme o [README](../../README.md#subir-o-sistema-completo-com-docker-compose). Em uma instalação existente, confira especialmente `ORIENTACAO_DB_PASSWORD`, `GLICO_ORIENTACAO_SERVICE_TOKEN`, `GLICO_RETIRADAS_SERVICE_TOKEN` e `GLICO_BFF_CIDADAO_SIGNING_KEY`. Defina valores aleatórios distintos, mantendo as senhas dos bancos que já tenham volume. Configure `GOOGLE_API_KEY` com uma chave criada no Google AI Studio e confirme que os modelos selecionados estão disponíveis para ela.
+Para a demonstração com o projeto padrão, `.\iniciar.ps1` (ou `./iniciar.sh` no Linux) na raiz faz toda a preparação abaixo, inclusive a indexação; veja o [README](../../README.md#como-executar). Para um projeto separado, crie o `.env` conforme a [execução manual](../execucao-manual.md#subir-o-sistema-completo-com-docker-compose). Em uma instalação existente, confira especialmente `ORIENTACAO_DB_PASSWORD`, `GLICO_ORIENTACAO_SERVICE_TOKEN`, `GLICO_RETIRADAS_SERVICE_TOKEN` e `GLICO_BFF_CIDADAO_SIGNING_KEY`. Defina valores aleatórios distintos, mantendo as senhas dos bancos que já tenham volume. Configure `GOOGLE_API_KEY` com uma chave criada no Google AI Studio e confirme que os modelos selecionados estão disponíveis para ela.
 
 ```powershell
 $env:GOOGLE_API_KEY = Read-Host -MaskInput 'Chave da API Google AI Studio'
