@@ -1,0 +1,159 @@
+"""Registro da entrega presencial: serializa com a revogação na linha da autorização."""
+import os
+from hashlib import sha256
+from typing import Literal
+from uuid import UUID, uuid4
+
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.concurrency import run_in_threadpool
+from pydantic import AwareDatetime, BaseModel, ConfigDict, ValidationError
+
+from servicos.banco import conectar
+from servicos.comandos import Chave, Correlacao, responder, resumir
+from servicos.contratos_reserva import EstadoReserva
+from servicos.contratos_retirada import PedidoRetirada
+from servicos.http import consultar, falha_de_configuracao
+from servicos.idempotencia import gravar_resultado, resultado_anterior
+from servicos.identidade_demo import Ator, ProfissionalDelegado, exigir_unidade
+from servicos.mensageria import RETIRADA_CONCLUIDA, gravar_outbox
+
+
+rotas = APIRouter()
+BANCO = "RETIRADAS_DATABASE_URL"
+OPERACAO = "registrar-retirada"
+Profissional = ProfissionalDelegado
+
+
+class RetiradaRegistrada(BaseModel):
+    retiradaId: UUID
+    autorizacaoId: UUID
+    realizadaEm: AwareDatetime
+
+
+class EstadoCanonico(BaseModel):
+    reservaId: UUID
+    status: EstadoReserva
+
+
+class Autorizacao(BaseModel):
+    autorizacaoId: UUID
+    reservaId: UUID
+    sagaId: UUID
+    unidadeId: UUID
+    itemId: UUID
+    quantidade: int
+    status: Literal["ATIVA", "CANCELADA", "UTILIZADA"]
+
+
+def conflito(codigo: str, mensagem: str) -> tuple[int, dict]:
+    return 409, {"codigo": codigo, "mensagem": mensagem}
+
+
+def preparar_registro(profissional: Ator, autorizacao_id: UUID, chave: str, resumo: str, *,
+                      persistir=False, correlacao: UUID | None = None):
+    """Verifica o vínculo também nos replays e serializa a entrega com a revogação."""
+    legado = sha256(f"{profissional.unidadeId}:{autorizacao_id}".encode()).hexdigest()
+    with conectar(BANCO) as conexao:
+        anterior = resultado_anterior(conexao, OPERACAO, profissional.id, chave, resumo, resumo_legado=legado)
+        if anterior is not None and anterior[1].get("codigo") == "CHAVE_IDEMPOTENTE_CONFLITANTE":
+            return None, anterior
+        trava = " FOR UPDATE" if persistir and anterior is None else ""
+        autorizacao = conexao.execute("""
+            SELECT reserva_id, unidade_id, item_id, quantidade, cancelada_em
+            FROM autorizacoes WHERE autorizacao_id = %s
+        """ + trava, (autorizacao_id,)).fetchone()
+        if autorizacao is None:
+            return None, conflito("AUTORIZACAO_INEXISTENTE", "A autorização não existe.")
+        exigir_unidade(profissional, autorizacao["unidade_id"])
+        if anterior is not None or not persistir:
+            return autorizacao, anterior
+        resultado = gravar_entrega(conexao, profissional, autorizacao_id, autorizacao, correlacao)
+        return None, gravar_resultado(conexao, OPERACAO, profissional.id, chave, resumo, resultado)
+
+
+async def estado_da_reserva(request: Request, reserva_id: UUID, correlacao: UUID) -> str | None:
+    """Estado canônico em Reservas; None se a reserva não existir e 503 se o resultado for inconclusivo."""
+    token = os.environ.get("GLICO_RETIRADAS_SERVICE_TOKEN", "")
+    if len(token) < 32:
+        raise HTTPException(503, "Credencial interna de Retiradas não configurada.")
+    reservas = os.environ.get("RESERVAS_URL", "http://127.0.0.1:8004").rstrip("/")
+    try:
+        resposta = await consultar(
+            request.app.state.http, f"{reservas}/internal/v1/reservas/{reserva_id}/estado",
+            headers={"Authorization": f"Bearer {token}", "X-Correlation-Id": str(correlacao)},
+        )
+        if falha_de_configuracao(resposta):
+            raise HTTPException(503)
+        if resposta.status_code == 404:
+            return None
+        if resposta.status_code != 200:
+            raise HTTPException(503)
+        estado = EstadoCanonico.model_validate_json(resposta.content)
+        if estado.reservaId != reserva_id:
+            raise HTTPException(503)
+        return estado.status
+    except (HTTPException, ValidationError) as erro:
+        raise HTTPException(503, "Não foi possível confirmar o estado da reserva; nenhuma entrega foi registrada.") from erro
+
+
+def gravar_entrega(conexao, profissional: Ator, autorizacao_id: UUID, autorizacao, correlacao: UUID):
+    usada = conexao.execute("SELECT 1 FROM retiradas WHERE autorizacao_id = %s", (autorizacao_id,)).fetchone()
+    if usada is not None:
+        return conflito("AUTORIZACAO_UTILIZADA", "A entrega desta autorização já foi registrada.")
+    if autorizacao["cancelada_em"] is not None:
+        return conflito("AUTORIZACAO_CANCELADA", "A autorização foi cancelada.")
+
+    entrega = conexao.execute("""
+        INSERT INTO retiradas (retirada_id, autorizacao_id, realizada_em, ator_id, correlation_id)
+        VALUES (%s, %s, clock_timestamp(), %s, %s) RETURNING retirada_id, realizada_em
+    """, (uuid4(), autorizacao_id, profissional.id, correlacao)).fetchone()
+    gravar_outbox(conexao, RETIRADA_CONCLUIDA, "Retirada", entrega["retirada_id"], correlacao,
+                  entrega["realizada_em"], {
+                      "retiradaId": str(entrega["retirada_id"]), "reservaId": str(autorizacao["reserva_id"]),
+                      "unidadeId": str(autorizacao["unidade_id"]), "itemId": str(autorizacao["item_id"]),
+                      "quantidade": autorizacao["quantidade"]})
+    return 201, RetiradaRegistrada(
+        retiradaId=entrega["retirada_id"], autorizacaoId=autorizacao_id, realizadaEm=entrega["realizada_em"],
+    ).model_dump(mode="json")
+
+
+@rotas.post("/api/unidade/v1/retiradas", status_code=201, response_model=RetiradaRegistrada)
+async def registrar_retirada(request: Request, pedido: PedidoRetirada, profissional: Profissional, chave: Chave,
+                             correlacao: Correlacao = None):
+    correlacao = correlacao or uuid4()
+    resumo = resumir(pedido.autorizacaoId)
+    argumentos = (profissional, pedido.autorizacaoId, chave, resumo)
+    autorizacao, anterior = await run_in_threadpool(preparar_registro, *argumentos)
+    if anterior is not None:
+        return responder(anterior)
+    try:
+        estado = await estado_da_reserva(request, autorizacao["reserva_id"], correlacao)
+    except HTTPException:
+        _, anterior = await run_in_threadpool(preparar_registro, *argumentos)
+        if anterior is not None:
+            return responder(anterior)
+        raise
+    if estado != "CONFIRMADA":
+        _, anterior = await run_in_threadpool(preparar_registro, *argumentos)
+        if anterior is not None:
+            return responder(anterior)
+        return responder(conflito("ESTADO_INCOMPATIVEL", f"A reserva está {estado or 'inexistente'}."))
+    _, resultado = await run_in_threadpool(preparar_registro, *argumentos, persistir=True, correlacao=correlacao)
+    return responder(resultado)
+
+
+
+@rotas.get("/internal/v1/autorizacoes/{reservaId}", response_model=Autorizacao)
+def consultar_autorizacao(reservaId: UUID, profissional: Profissional):
+    with conectar(BANCO) as conexao:
+        linha = conexao.execute("""
+            SELECT a.autorizacao_id AS "autorizacaoId", a.reserva_id AS "reservaId", a.saga_id AS "sagaId",
+                   a.unidade_id AS "unidadeId", a.item_id AS "itemId", a.quantidade,
+                   CASE WHEN r.retirada_id IS NOT NULL THEN 'UTILIZADA'
+                        WHEN a.cancelada_em IS NOT NULL THEN 'CANCELADA' ELSE 'ATIVA' END AS status
+            FROM autorizacoes a LEFT JOIN retiradas r USING (autorizacao_id) WHERE a.reserva_id = %s
+        """, (reservaId,)).fetchone()
+    if linha is None:
+        raise HTTPException(404, "Não existe autorização para a reserva.")
+    exigir_unidade(profissional, linha["unidadeId"])
+    return linha

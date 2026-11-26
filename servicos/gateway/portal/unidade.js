@@ -3,8 +3,30 @@ const credencial = document.querySelector("#credencial");
 const mensagem = document.querySelector("#status");
 const lista = document.querySelector("#lista");
 const formatoData = new Intl.DateTimeFormat("pt-BR", {dateStyle: "short", timeStyle: "short"});
-// Uma chave por reserva e decisão: repetir após falha de rede reaproveita a mesma chave.
-const chaves = new Map();
+async function hashNavegador(valor) {
+  const resumo = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(valor));
+  return Array.from(new Uint8Array(resumo), byte => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function erroHttp(mensagem, status) {
+  const erro = new Error(mensagem);
+  erro.httpStatus = status;
+  return erro;
+}
+
+async function comandoPendente(identificador, corpo, bloquearAlteracao = false) {
+  const ator = await hashNavegador(credencial.value.trim());
+  const storageKey = "glico:unidade:" + ator + ":" + await hashNavegador(identificador);
+  const anterior = JSON.parse(sessionStorage.getItem(storageKey) ?? "null");
+  const serializado = JSON.stringify(corpo);
+  if (anterior?.corpo === serializado && anterior.chave) return {...anterior, storageKey};
+  if (bloquearAlteracao && anterior?.chave) {
+    throw new Error("Repita a ação com o mesmo conteúdo para verificar o resultado da tentativa anterior.");
+  }
+  const comando = {corpo: serializado, chave: crypto.randomUUID(), storageKey};
+  sessionStorage.setItem(storageKey, JSON.stringify({corpo: serializado, chave: comando.chave}));
+  return comando;
+}
 
 function informar(texto, erro = false) {
   mensagem.textContent = texto;
@@ -30,23 +52,34 @@ async function chamar(href, opcoes = {}) {
   }
   const resposta = await fetch(href, {...opcoes, headers: {...opcoes.headers, Authorization: "Bearer " + token}});
   const corpo = await resposta.json().catch(() => ({}));
-  if (resposta.status === 401) throw new Error("Token do profissional inválido.");
-  if (resposta.status === 403) throw new Error("Sem acesso: o profissional precisa estar vinculado a uma unidade ativa.");
-  if (resposta.status === 404) throw new Error(corpo.mensagem ?? corpo.detail ?? "Recurso não encontrado.");
+  if (resposta.status === 401) throw erroHttp("Token do profissional inválido.", resposta.status);
+  if (resposta.status === 403) {
+    const codigo = corpo.codigo ?? corpo.detail?.codigo;
+    const mensagens = {
+      PAPEL_INCOMPATIVEL: "Esta operação não está disponível para o seu perfil.",
+      VINCULO_UNIDADE_AUSENTE: "Não há vínculo ativo com uma unidade.",
+      ACESSO_NEGADO: "Você não tem autorização para esta operação.",
+    };
+    throw erroHttp(mensagens[codigo] ?? "Acesso negado. Verifique suas permissões ou contate o administrador.", resposta.status);
+  }
+  if (resposta.status === 404) throw erroHttp("Reserva não encontrada.", resposta.status);
   if (resposta.status === 409) {
     const motivos = {
       ESTADO_INCOMPATIVEL: "A reserva não aguarda mais decisão ou o prazo terminou.",
       EXECUCAO_CONCORRENTE: "Já existe uma confirmação em andamento para esta reserva.",
       CHAVE_IDEMPOTENTE_CONFLITANTE: "Esta ação já foi enviada com outros dados.",
       ENTREGA_JA_REGISTRADA: "A entrega já foi registrada.",
+      AUTORIZACAO_UTILIZADA: "A autorização de retirada já foi utilizada.",
       CANCELAMENTO_EM_ANDAMENTO: "Já existe um cancelamento em andamento.",
       AUTORIZACAO_CANCELADA: "A autorização foi revogada.",
       RESERVA_NAO_CONFIRMADA: "A reserva precisa estar confirmada.",
-      LIMITE_ESTOQUE_EXCEDIDO: "A quantidade recebida excede o limite do saldo.",
+      LIMITE_ESTOQUE_EXCEDIDO: "A quantidade excede o limite do estoque.",
     };
-    throw Object.assign(new Error(motivos[corpo.codigo] ?? "A operação conflita com o estado atual."), {conflito: true});
+    const erro = erroHttp(motivos[corpo.codigo] ?? "A operação conflita com o estado atual.", resposta.status);
+    erro.conflito = true;
+    throw erro;
   }
-  if (!resposta.ok) throw new Error("Não foi possível concluir. Tente novamente.");
+  if (!resposta.ok) throw erroHttp("Não foi possível concluir. Tente novamente.", resposta.status);
   return {status: resposta.status, corpo};
 }
 
@@ -87,16 +120,18 @@ function cartao(reserva) {
 
 async function decidir(reserva, link, acoes, indicador) {
   const identificador = reserva.reservaId + ":" + link.body.decisao;
-  if (!chaves.has(identificador)) chaves.set(identificador, crypto.randomUUID());
   const botoes = acoes.querySelectorAll("button");
+  let comando;
   botoes.forEach(botao => { botao.disabled = true; });
   informar("Registrando decisão…");
   try {
+    comando = await comandoPendente(identificador, link.body);
     const {status} = await chamar(link.href, {
       method: link.method,
       body: JSON.stringify(link.body),
-      headers: {"Content-Type": "application/json", "Idempotency-Key": chaves.get(identificador)},
+      headers: {"Content-Type": "application/json", "Idempotency-Key": comando.chave},
     });
+    sessionStorage.removeItem(comando.storageKey);
     if (status === 202) {
       indicador.textContent = "Confirmação em processamento";
       informar("Aceite registrado. A confirmação da reserva foi iniciada.");
@@ -109,6 +144,9 @@ async function decidir(reserva, link, acoes, indicador) {
     }
     acoes.remove();
   } catch (erro) {
+    if (Number.isInteger(erro.httpStatus) && erro.httpStatus < 500 && comando) {
+      sessionStorage.removeItem(comando.storageKey);
+    }
     botoes.forEach(botao => { botao.disabled = false; });
     informar(erro instanceof TypeError ? "Falha de conexão. Tente novamente." : erro.message, true);
   }
@@ -148,13 +186,7 @@ async function carregarCatalogo() {
   }
 }
 
-credencial.addEventListener("input", () => {
-  formularioEntrada.hidden = true;
-  unidadeEntrada = null;
-  informarEntrada("");
-});
-
-formularioEntrada.addEventListener("submit", async (evento) => {
+formularioEntrada.addEventListener("submit", async evento => {
   evento.preventDefault();
   if (!unidadeEntrada) return;
   const botao = formularioEntrada.querySelector("button");
@@ -168,8 +200,7 @@ formularioEntrada.addEventListener("submit", async (evento) => {
     const chave = sessionStorage.getItem(operacao) ?? crypto.randomUUID();
     sessionStorage.setItem(operacao, chave);
     await chamar(`/api/unidade/v1/painel/estoque/${unidadeId}/itens/${itemId}/entradas`, {
-      method: "POST",
-      body: JSON.stringify({quantidade}),
+      method: "POST", body: JSON.stringify({quantidade, motivo: "Entrada de estoque"}),
       headers: {"Content-Type": "application/json", "Idempotency-Key": chave},
     });
     sessionStorage.removeItem(operacao);
@@ -202,10 +233,11 @@ function cartaoEstoque(item) {
     campo.append(texto("dt", rotulo), texto("dd", valor));
     dados.append(campo);
   }
+  artigo.append(cabecalho, dados);
   const acao = texto("button", item.permiteReserva ? "Desabilitar reservas" : "Habilitar reservas");
   acao.type = "button";
   acao.addEventListener("click", () => configurarPermissao(item, acao));
-  artigo.append(cabecalho, dados, acao);
+  artigo.append(acao);
   return artigo;
 }
 
@@ -218,8 +250,7 @@ async function configurarPermissao(item, botao) {
     const chave = sessionStorage.getItem(operacao) ?? crypto.randomUUID();
     sessionStorage.setItem(operacao, chave);
     await chamar(`/api/unidade/v1/painel/estoque/${unidadeId}/itens/${itemId}/permissao`, {
-      method: "PUT",
-      body: JSON.stringify({permiteReserva}),
+      method: "PUT", body: JSON.stringify({permiteReserva}),
       headers: {"Content-Type": "application/json", "Idempotency-Key": chave},
     });
     sessionStorage.removeItem(operacao);
@@ -235,41 +266,6 @@ async function configurarPermissao(item, botao) {
   }
 }
 
-async function carregarEstoque() {
-  try {
-    const {corpo} = await chamar("/api/unidade/v1/painel/estoque");
-    estoque.replaceChildren(...corpo.map(cartaoEstoque));
-    mensagemEstoque.classList.remove("erro");
-    mensagemEstoque.textContent = corpo.length === 0 ? "Nenhum item com estoque projetado."
-      : "A disponibilidade pode levar alguns segundos para refletir alterações no estoque.";
-  } catch (erro) {
-    mensagemEstoque.classList.add("erro");
-    mensagemEstoque.textContent = erro instanceof TypeError ? "Falha de conexão ao consultar o estoque." : erro.message;
-  }
-}
-
-formulario.addEventListener("submit", async (evento) => {
-  evento.preventDefault();
-  const botao = evento.submitter;
-  botao.disabled = true;
-  lista.replaceChildren();
-  informar("Carregando solicitações…");
-  carregarEstoque();
-  carregarCatalogo();
-  try {
-    const {corpo} = await chamar("/api/unidade/v1/painel/reservas");
-    lista.replaceChildren(...corpo.map(cartao));
-    informar(corpo.length === 0 ? "Nenhuma solicitação aguardando decisão."
-      : corpo.length === 1 ? "1 solicitação aguardando decisão."
-      : corpo.length + " solicitações aguardando decisão.");
-  } catch (erro) {
-    informar(erro instanceof TypeError ? "Falha de conexão. Tente novamente." : erro.message, true);
-  } finally {
-    botao.disabled = false;
-  }
-});
-
-
 const consultaRetirada = document.querySelector("#consultar-retirada");
 const codigoRetirada = document.querySelector("#codigo-retirada");
 const statusRetirada = document.querySelector("#status-retirada");
@@ -281,23 +277,25 @@ function informarRetirada(mensagem, erro = false) {
 }
 
 async function entregar(link, botao, artigo) {
-  const operacao = "glicoacesso:retirada:" + link.body.autorizacaoId;
+  const identificador = "retirada:" + link.body.autorizacaoId;
+  let comando;
   botao.disabled = true;
   informarRetirada("Registrando entrega…");
   try {
-    const chave = sessionStorage.getItem(operacao) ?? crypto.randomUUID();
-    sessionStorage.setItem(operacao, chave);
+    comando = await comandoPendente(identificador, link.body);
     const {corpo} = await chamar(link.href, {
       method: link.method,
       body: JSON.stringify(link.body),
-      headers: {"Content-Type": "application/json", "Idempotency-Key": chave},
+      headers: {"Content-Type": "application/json", "Idempotency-Key": comando.chave},
     });
-    sessionStorage.removeItem(operacao);
+    sessionStorage.removeItem(comando.storageKey);
     botao.remove();
     artigo.append(texto("p", "Entrega registrada em " + data(corpo.realizadaEm) + "."));
     informarRetirada("Código da retirada: " + corpo.retiradaId);
   } catch (erro) {
-    if (erro.conflito) sessionStorage.removeItem(operacao);
+    if (Number.isInteger(erro.httpStatus) && erro.httpStatus < 500 && comando) {
+      sessionStorage.removeItem(comando.storageKey);
+    }
     informarRetirada(erro instanceof TypeError ? "Falha de conexão. Repita a mesma ação." : erro.message, true);
     botao.disabled = false;
   }
@@ -344,15 +342,20 @@ consultaRetirada.addEventListener("submit", async evento => {
 });
 
 credencial.addEventListener("input", () => {
+  lista.replaceChildren();
+  estoque.replaceChildren();
   resultadoRetirada.replaceChildren();
+  formularioEntrada.hidden = true;
+  unidadeEntrada = null;
+  informar("Informe o token para ver as solicitações.");
+  informarEntrada("");
   informarRetirada("");
 });
-
 
 function adicionarCancelamento(reserva, artigo, feedback) {
   const link = reserva._links?.cancelar;
   if (!link) return;
-  const formulario = document.createElement("form");
+  const formularioCancelamento = document.createElement("form");
   const campo = texto("label", "Justificativa do cancelamento");
   const justificativa = document.createElement("textarea");
   justificativa.required = true;
@@ -361,41 +364,72 @@ function adicionarCancelamento(reserva, artigo, feedback) {
   const botao = texto("button", "Cancelar reserva");
   botao.type = "submit";
   botao.className = "perigo";
-  formulario.append(campo, botao);
-  artigo.append(formulario);
-  formulario.addEventListener("submit", async evento => {
+  formularioCancelamento.append(campo, botao);
+  artigo.append(formularioCancelamento);
+  formularioCancelamento.addEventListener("submit", async evento => {
     evento.preventDefault();
     const motivo = justificativa.value.trim();
     if (motivo.length < 5) {
       feedback("Informe pelo menos cinco caracteres na justificativa.", true);
       return;
     }
-    const operacao = "glicoacesso:cancelar-unidade:" + reserva.reservaId;
-    const tentativa = JSON.parse(sessionStorage.getItem(operacao) ?? "null");
-    if (tentativa && tentativa.motivo !== motivo) {
-      feedback("Repita com a mesma justificativa para verificar o resultado da tentativa anterior.", true);
-      return;
-    }
-    const chave = tentativa?.chave ?? crypto.randomUUID();
-    sessionStorage.setItem(operacao, JSON.stringify({chave, motivo}));
+    let comando;
     botao.disabled = justificativa.disabled = true;
     try {
+      comando = await comandoPendente("cancelamento:" + reserva.reservaId, {justificativa: motivo}, true);
       const {status} = await chamar(link.href, {
         method: link.method,
         body: JSON.stringify({justificativa: motivo}),
-        headers: {"Content-Type": "application/json", "Idempotency-Key": chave},
+        headers: {"Content-Type": "application/json", "Idempotency-Key": comando.chave},
       });
-      if (status === 200) sessionStorage.removeItem(operacao);
+      if (status === 200) sessionStorage.removeItem(comando.storageKey);
       artigo.querySelectorAll("button").forEach(outro => { outro.disabled = true; });
-      formulario.remove();
-      feedback(status === 202 ? "Cancelamento em processamento. Consulte novamente pelo código." : "Reserva cancelada.");
+      formularioCancelamento.remove();
+      feedback(status === 202 ? "Cancelamento em processamento. Consulte novamente pelo código."
+        : "Reserva cancelada.");
     } catch (erro) {
-      if (erro.conflito) {
-        sessionStorage.removeItem(operacao);
-        formulario.remove();
+      if (Number.isInteger(erro.httpStatus) && erro.httpStatus < 500 && comando) {
+        sessionStorage.removeItem(comando.storageKey);
       }
       feedback(erro instanceof TypeError ? "Falha de conexão. Repita o cancelamento." : erro.message, true);
       botao.disabled = justificativa.disabled = false;
     }
   });
 }
+
+async function carregarEstoque() {
+  const token = credencial.value.trim();
+  try {
+    const {corpo} = await chamar("/api/unidade/v1/painel/estoque");
+    if (credencial.value.trim() !== token) return;
+    estoque.replaceChildren(...corpo.map(cartaoEstoque));
+    mensagemEstoque.classList.remove("erro");
+    mensagemEstoque.textContent = corpo.length === 0 ? "Nenhum item com estoque projetado."
+      : "Leitura da projeção CQRS. Após uma confirmação, a atualização chega em alguns segundos.";
+  } catch (erro) {
+    if (credencial.value.trim() !== token) return;
+    mensagemEstoque.classList.add("erro");
+    mensagemEstoque.textContent = erro instanceof TypeError ? "Falha de conexão ao consultar o estoque." : erro.message;
+  }
+}
+
+formulario.addEventListener("submit", async (evento) => {
+  evento.preventDefault();
+  const botao = evento.submitter;
+  botao.disabled = true;
+  lista.replaceChildren();
+  informar("Carregando solicitações…");
+  carregarEstoque();
+  carregarCatalogo();
+  try {
+    const {corpo} = await chamar("/api/unidade/v1/painel/reservas");
+    lista.replaceChildren(...corpo.map(cartao));
+    informar(corpo.length === 0 ? "Nenhuma solicitação aguardando decisão."
+      : corpo.length === 1 ? "1 solicitação aguardando decisão."
+      : corpo.length + " solicitações aguardando decisão.");
+  } catch (erro) {
+    informar(erro instanceof TypeError ? "Falha de conexão. Tente novamente." : erro.message, true);
+  } finally {
+    botao.disabled = false;
+  }
+});

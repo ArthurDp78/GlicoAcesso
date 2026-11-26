@@ -3,18 +3,29 @@ import os
 from typing import Annotated, Literal
 from uuid import UUID
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
+from fastapi import Depends, HTTPException, Request, Response
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
-from servicos.cancelamento_bff import cancelar_pelo_bff
-from servicos.contratos_reserva import ESTADOS_CANCELAVEIS, DadosReserva, LinkReserva, PedidoReserva, ReservaPublica
-from servicos.delegacao_unidade import emitir_credencial_cidadao
-from servicos.identidade_demo import cidadao_autenticado
-from servicos.http import cliente_http, consultar, correlacionar, requisitar
+from servicos.bff import INDISPONIVEL, RESPOSTA_PROCESSAMENTO, RespostaRecusada, Servicos, criar_app, encaminhar
+from servicos.comandos import Chave
+from servicos.contratos_reserva import CANCELAVEIS, DadosReserva, LinkReserva, PedidoReserva, ReservaPublica
+from servicos.erros import entrada_invalida_400
+from servicos.identidade_demo import TOKEN_BFF_CIDADAO, TOKEN_CIDADAO, Ator, ator_autenticado
+from servicos.http import falha_de_configuracao, requisitar
 
 
-app = FastAPI(title="GlicoAcesso — BFF Cidadão", lifespan=cliente_http)
-app.middleware("http")(correlacionar)
+app = criar_app("GlicoAcesso — BFF Cidadão", TOKEN_CIDADAO, TOKEN_BFF_CIDADAO)
+API = "/api/cidadao/v1"
+entrada_invalida_400(app, API + "/reservas/{reservaId}/cancelar")
+
+
+def cidadao(ator: Annotated[Ator, Depends(ator_autenticado)]) -> Ator:
+    if ator.papel != "CIDADAO":
+        raise HTTPException(403, "Operação exclusiva do cidadão.")
+    return ator
+
+
+Cidadao = Annotated[Ator, Depends(cidadao)]
 
 
 class Unidade(BaseModel):
@@ -50,24 +61,15 @@ class UnidadeDisponivel(BaseModel):
 
 ITENS = TypeAdapter(list[Item])
 UNIDADES = TypeAdapter(list[Unidade])
+UNIDADE = TypeAdapter(Unidade)
+DISPONIBILIDADE = TypeAdapter(Disponibilidade)
 
 
-def decodificar(resposta, validar):
-    if resposta.status_code != 200:
-        status = 503 if resposta.status_code == 503 else 502
-        raise HTTPException(status, "Não foi possível consultar os dados neste momento.")
-    try:
-        return validar(resposta.content)
-    except ValidationError as erro:
-        raise HTTPException(502, "O serviço retornou dados de consulta inválidos.") from erro
+def servicos_do_bff(request: Request) -> Servicos:
+    return Servicos(request, TOKEN_BFF_CIDADAO)
 
 
-def origem_unidades() -> str:
-    return os.environ.get("UNIDADES_URL", "http://127.0.0.1:8002").rstrip("/")
-
-
-def origem_estoque() -> str:
-    return os.environ.get("ESTOQUE_URL", "http://127.0.0.1:8003").rstrip("/")
+DoBff = Annotated[Servicos, Depends(servicos_do_bff)]
 
 
 @app.get("/health")
@@ -75,33 +77,30 @@ def verificar_saude() -> dict[str, str]:
     return {"servico": "bff-cidadao", "status": "ok"}
 
 
-@app.get("/api/cidadao/v1/itens", response_model=list[Item])
-async def listar_itens(request: Request):
-    resposta = await consultar(request.app.state.http, origem_estoque() + "/api/cidadao/v1/estoque/itens")
-    return decodificar(resposta, ITENS.validate_json)
+@app.get(API + "/itens", response_model=list[Item])
+async def listar_itens(servicos: DoBff):
+    return await servicos.obter("estoque", API + "/estoque/itens", ITENS, publico=True)
 
 
-@app.get("/api/cidadao/v1/unidades", response_model=list[Unidade])
-async def listar_unidades(request: Request):
-    resposta = await consultar(request.app.state.http, origem_unidades() + "/api/cidadao/v1/unidades")
-    return decodificar(resposta, UNIDADES.validate_json)
+@app.get(API + "/unidades", response_model=list[Unidade])
+async def listar_unidades(servicos: DoBff):
+    return await servicos.obter("unidades", API + "/unidades", UNIDADES, publico=True)
 
 
-@app.get("/api/cidadao/v1/explorar", response_model=list[UnidadeDisponivel])
-async def explorar(request: Request, itemId: UUID):
-    unidades = await listar_unidades(request)
-    destino = origem_estoque() + "/api/cidadao/v1/estoque/disponibilidade"
+@app.get(API + "/explorar", response_model=list[UnidadeDisponivel])
+async def explorar(servicos: DoBff, itemId: UUID):
+    unidades = await listar_unidades(servicos)
     limite = asyncio.Semaphore(12)
 
     async def combinar(unidade: Unidade) -> UnidadeDisponivel | None:
-        async with limite:
-            resposta = await consultar(
-                request.app.state.http, destino,
-                params={"unidadeId": str(unidade.unidadeId), "itemId": str(itemId)},
-            )
-        if resposta.status_code == 404:
-            return None
-        dado = decodificar(resposta, Disponibilidade.model_validate_json)
+        try:
+            async with limite:
+                dado = await servicos.obter("estoque", API + "/estoque/disponibilidade", DISPONIBILIDADE, publico=True,
+                                            params={"unidadeId": str(unidade.unidadeId), "itemId": str(itemId)})
+        except RespostaRecusada as erro:
+            if erro.resposta.status_code == 404 and not falha_de_configuracao(erro.resposta):
+                return None  # Combinação sem projeção; rota inexistente continua sendo erro de integração.
+            raise
         return UnidadeDisponivel(
             unidadeId=unidade.unidadeId,
             nomeUnidade=unidade.nome,
@@ -116,71 +115,62 @@ async def explorar(request: Request, itemId: UUID):
     resultados = await asyncio.gather(*(combinar(unidade) for unidade in unidades))
     return [resultado for resultado in resultados if resultado is not None]
 
-def origem_reservas() -> str:
-    return os.environ.get("RESERVAS_URL", "http://127.0.0.1:8004").rstrip("/")
+
+# --- Reservas do cidadão ---
+
+DADOS_RESERVA = TypeAdapter(DadosReserva)
 
 
-def cabecalhos_autenticados(request: Request) -> dict[str, str]:
-    return {
-        nome: request.headers[nome]
-        for nome in ("authorization", "idempotency-key")
-        if nome in request.headers
-    }
-
-
-def apresentar_reserva(resposta, status_esperado: int, saida: Response):
-    if resposta.status_code != status_esperado:
-        if resposta.status_code not in (401, 403, 404, 409, 422, 502, 503, 504):
-            raise HTTPException(502, "Não foi possível concluir a consulta de Reservas.")
-        headers = {"Cache-Control": "no-store"}
-        if "www-authenticate" in resposta.headers:
-            headers["WWW-Authenticate"] = resposta.headers["www-authenticate"]
-        return Response(resposta.content, status_code=resposta.status_code,
-                        media_type="application/json", headers=headers)
+def apresentar(conteudo: bytes, **complementos) -> ReservaPublica:
     try:
-        dados = DadosReserva.model_validate_json(resposta.content, extra="ignore")
+        dados = DADOS_RESERVA.validate_json(conteudo, extra="ignore")
     except ValidationError as erro:
-        raise HTTPException(502, "Reservas retornou dados incompatíveis.") from erro
-    href = f"/api/cidadao/v1/reservas/{dados.reservaId}"
-    saida.headers["Cache-Control"] = "no-store"
-    if status_esperado == 201:
-        saida.headers["Location"] = href
+        raise HTTPException(503, INDISPONIVEL) from erro
+    href = f"{API}/reservas/{dados.reservaId}"
     links = {"self": LinkReserva(href=href, method="GET")}
-    if dados.status in ESTADOS_CANCELAVEIS:
+    if dados.status in CANCELAVEIS:
         links["cancelar"] = LinkReserva(href=href + "/cancelar", method="POST")
-    return ReservaPublica(**dados.model_dump(), links=links)
+    return ReservaPublica(**dados.model_dump(), **complementos, links=links)
 
 
-@app.post("/api/cidadao/v1/reservas", status_code=201, response_model=ReservaPublica)
-async def criar_reserva(
-    request: Request, response: Response, pedido: PedidoReserva,
-    idempotency_key: str = Header(alias="Idempotency-Key", min_length=1, max_length=128),
-):
-    resposta = await requisitar(
-        request.app.state.http, "POST", origem_reservas() + "/api/cidadao/v1/reservas",
-        headers={**cabecalhos_autenticados(request), "Idempotency-Key": idempotency_key},
-        json=pedido.model_dump(mode="json"),
+async def dados_da_reserva(servicos: Servicos, metodo: str, caminho: str, esperado: int, corpo: bytes | None = None) -> bytes:
+    resposta = await servicos.chamar("reservas", metodo, caminho, corpo=corpo)
+    if resposta.status_code != esperado:
+        raise RespostaRecusada(resposta)
+    return resposta.content
+
+
+@app.post(API + "/reservas", status_code=201, response_model=ReservaPublica, response_model_exclude_none=True)
+async def criar_reserva(request: Request, response: Response, pedido: PedidoReserva, cidadao: Cidadao, chave: Chave):
+    servicos = Servicos(request, TOKEN_BFF_CIDADAO, cidadao, chave)
+    reserva = apresentar(await dados_da_reserva(servicos, "POST", API + "/reservas", 201, pedido.model_dump_json().encode()))
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Location"] = reserva.links["self"].href
+    return reserva
+
+
+@app.get(API + "/reservas/{reservaId}", response_model=ReservaPublica, response_model_exclude_none=True)
+async def consultar_reserva(request: Request, response: Response, reservaId: UUID, cidadao: Cidadao, do_bff: DoBff):
+    response.headers["Cache-Control"] = "no-store"
+    servicos = Servicos(request, TOKEN_BFF_CIDADAO, cidadao)
+    # Reservas verifica a propriedade antes de qualquer dado complementar ser consultado.
+    conteudo = await dados_da_reserva(servicos, "GET", f"/internal/v1/reservas/{reservaId}", 200)
+    dados = apresentar(conteudo)
+    # A credencial própria alcança também unidades inativas; Unidades devolve só os campos públicos.
+    unidade, itens = await asyncio.gather(
+        do_bff.complementar("unidades", f"/internal/v1/unidades/{dados.unidadeId}", UNIDADE),
+        do_bff.complementar("estoque", API + "/estoque/itens", ITENS, publico=True),
     )
-    return apresentar_reserva(resposta, 201, response)
+    complementos = {"itemNome": next((item.nome for item in itens or [] if item.itemId == dados.itemId), None)}
+    if unidade is not None:
+        complementos |= {"unidadeNome": unidade.nome, "enderecoLocal": unidade.endereco,
+                         "orientacoesRetirada": unidade.orientacoesRetirada}
+    return apresentar(conteudo, **complementos)
 
 
-@app.get("/api/cidadao/v1/reservas/{reservaId}", response_model=ReservaPublica)
-async def consultar_reserva(request: Request, response: Response, reservaId: UUID):
-    resposta = await consultar(
-        request.app.state.http, origem_reservas() + f"/internal/v1/reservas/{reservaId}",
-        headers=cabecalhos_autenticados(request),
-    )
-    return apresentar_reserva(resposta, 200, response)
-
-
-@app.post("/api/cidadao/v1/reservas/{reservaId}/cancelar")
-async def cancelar_reserva(
-    request: Request, reservaId: UUID,
-    cidadao: Annotated[str, Depends(cidadao_autenticado)],
-    chave: Annotated[str, Header(alias="Idempotency-Key", min_length=1, max_length=128)],
-):
-    rota = f"/api/cidadao/v1/reservas/{reservaId}"
-    return await cancelar_pelo_bff(
-        request, origem_reservas(), os.getenv("ORQUESTRADOR_URL", "http://127.0.0.1:8006").rstrip("/"),
-        rota + "/cancelar", rota, reservaId, chave, lambda: emitir_credencial_cidadao(cidadao),
+@app.post(API + "/reservas/{reservaId}/cancelar", responses=RESPOSTA_PROCESSAMENTO)
+async def cancelar_reserva(request: Request, reservaId: UUID, cidadao: Cidadao, chave: Chave):
+    return await encaminhar(
+        Servicos(request, TOKEN_BFF_CIDADAO, cidadao, chave), reservaId, f"{API}/reservas/{reservaId}/cancelar",
+        "CANCELAMENTO_DISTRIBUIDO", "cancelamentos", f"{API}/reservas/{reservaId}",
     )

@@ -113,6 +113,29 @@ const acoesReserva = document.querySelector("#acoes-reserva");
 let selecaoReserva;
 let ultimaTentativa;
 
+async function hashNavegador(valor) {
+  const entrada = new TextEncoder().encode(valor);
+  const resumo = await crypto.subtle.digest("SHA-256", entrada);
+  return Array.from(new Uint8Array(resumo), byte => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function tentativaPersistida(body) {
+  const ator = await hashNavegador(credencial.value.trim());
+  const fingerprint = await hashNavegador(body);
+  const storageKey = "glico:reserva:" + ator + ":" + fingerprint;
+  const anterior = JSON.parse(sessionStorage.getItem(storageKey) ?? "null");
+  if (anterior?.body === body && anterior.chave) return {...anterior, storageKey};
+  const tentativa = {body, chave: crypto.randomUUID(), storageKey};
+  sessionStorage.setItem(storageKey, JSON.stringify({body, chave: tentativa.chave}));
+  return tentativa;
+}
+
+function erroHttp(mensagem, status) {
+  const erro = new Error(mensagem);
+  erro.httpStatus = status;
+  return erro;
+}
+
 function informarReserva(mensagem, erro = false) {
   mensagemReserva.textContent = mensagem;
   mensagemReserva.classList.toggle("erro", erro);
@@ -136,14 +159,11 @@ async function requisitarReserva(recurso, opcoes = {}) {
     ...opcoes,
     headers: {...opcoes.headers, Authorization: "Bearer " + token},
   });
-  if (resposta.status === 401) throw new Error("Token do cidadão inválido.");
-  if (resposta.status === 404) throw new Error("Reserva não encontrada para este cidadão.");
-  if (resposta.status === 422) throw new Error("Confira os dados. A unidade ou o item pode não aceitar reservas.");
-  if (resposta.status === 409) {
-    const erro = await resposta.json().catch(() => ({}));
-    throw Object.assign(new Error(erro.mensagem ?? "A reserva mudou. Consulte novamente."), {conflito: true});
-  }
-  if (!resposta.ok) throw new Error("Não foi possível concluir. Tente novamente.");
+  if (resposta.status === 401) throw erroHttp("Token do cidadão inválido.", resposta.status);
+  if (resposta.status === 404) throw erroHttp("Reserva não encontrada para este cidadão.", resposta.status);
+  if (resposta.status === 422) throw erroHttp("Confira os dados. A unidade ou o item pode não aceitar reservas.", resposta.status);
+  if (resposta.status === 409) throw erroHttp("A chave deste pedido já foi usada com outros dados.", resposta.status);
+  if (!resposta.ok) throw erroHttp("Não foi possível concluir. Tente novamente.", resposta.status);
   return resposta.json();
 }
 
@@ -152,21 +172,32 @@ formularioReserva.addEventListener("submit", async (evento) => {
   if (!selecaoReserva) return;
   const botao = evento.submitter;
   const body = JSON.stringify({...selecaoReserva, quantidade: Number(document.querySelector("#quantidade").value)});
-  if (ultimaTentativa?.body !== body) ultimaTentativa = {body, chave: crypto.randomUUID()};
+  if (!credencial.value.trim()) {
+    credencial.focus();
+    informarReserva("Informe o token do cidadão de demonstração.", true);
+    return;
+  }
+  if (ultimaTentativa?.body !== body) ultimaTentativa = undefined;
   botao.disabled = true;
   informarReserva("Enviando solicitação…");
   try {
+    ultimaTentativa = await tentativaPersistida(body);
     const reserva = await requisitarReserva("/reservas", {
       method: "POST", body,
       headers: {"Content-Type": "application/json", "Idempotency-Key": ultimaTentativa.chave},
     });
     codigoReserva.value = reserva.reservaId;
+    sessionStorage.removeItem(ultimaTentativa.storageKey);
     ultimaTentativa = undefined;
     informarReserva("Solicitação registrada. Estado: " + reserva.status + ".");
     mostrarCancelamento(reserva);
     formularioReserva.hidden = true;
     codigoReserva.focus();
   } catch (erro) {
+    if (Number.isInteger(erro.httpStatus) && erro.httpStatus < 500 && ultimaTentativa) {
+      sessionStorage.removeItem(ultimaTentativa.storageKey);
+      ultimaTentativa = undefined;
+    }
     informarReserva(erro instanceof TypeError ? "Falha de conexão. Tente enviar novamente." : erro.message, true);
   } finally {
     botao.disabled = false;
@@ -177,7 +208,6 @@ formularioAcompanhamento.addEventListener("submit", async (evento) => {
   evento.preventDefault();
   const botao = evento.submitter;
   botao.disabled = true;
-  acoesReserva.replaceChildren();
   informarReserva("Consultando reserva…");
   try {
     const reserva = await requisitarReserva("/reservas/" + encodeURIComponent(codigoReserva.value.trim()));
@@ -189,8 +219,6 @@ formularioAcompanhamento.addEventListener("submit", async (evento) => {
     botao.disabled = false;
   }
 });
-carregarCatalogo();
-
 
 function mostrarCancelamento(reserva) {
   acoesReserva.replaceChildren();
@@ -201,25 +229,23 @@ function mostrarCancelamento(reserva) {
   botao.textContent = "Cancelar reserva";
   botao.addEventListener("click", async () => {
     if (!window.confirm("Cancelar esta reserva?")) return;
-    const operacao = "glicoacesso:cancelar-cidadao:" + reserva.reservaId;
-    const chave = sessionStorage.getItem(operacao) ?? crypto.randomUUID();
-    sessionStorage.setItem(operacao, chave);
+    let tentativa;
     botao.disabled = true;
     try {
+      tentativa = await tentativaPersistida("cancelar:" + reserva.reservaId);
       const resultado = await requisitarReserva(link.href.slice(api.length), {
-        method: link.method, headers: {"Idempotency-Key": chave},
+        method: link.method, headers: {"Idempotency-Key": tentativa.chave},
       });
-      acoesReserva.replaceChildren();
       if (resultado.status === "CANCELADA") {
-        sessionStorage.removeItem(operacao);
+        sessionStorage.removeItem(tentativa.storageKey);
         informarReserva("Reserva cancelada.");
       } else {
         informarReserva("Cancelamento em processamento. Consulte pelo código da reserva.");
       }
+      acoesReserva.replaceChildren();
     } catch (erro) {
-      if (erro.conflito) {
-        sessionStorage.removeItem(operacao);
-        acoesReserva.replaceChildren();
+      if (Number.isInteger(erro.httpStatus) && erro.httpStatus < 500 && tentativa) {
+        sessionStorage.removeItem(tentativa.storageKey);
       }
       informarReserva(erro instanceof TypeError ? "Falha de conexão. Repita o cancelamento." : erro.message, true);
       botao.disabled = false;
@@ -230,3 +256,4 @@ function mostrarCancelamento(reserva) {
 
 codigoReserva.addEventListener("input", () => acoesReserva.replaceChildren());
 credencial.addEventListener("input", () => acoesReserva.replaceChildren());
+carregarCatalogo();

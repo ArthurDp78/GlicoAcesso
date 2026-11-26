@@ -1,39 +1,44 @@
-import os
 import threading
 from contextlib import asynccontextmanager
 from hashlib import sha256
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID, uuid4
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
-from fastapi.concurrency import run_in_threadpool
+from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.responses import JSONResponse, Response
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
 from servicos.banco import BancoIndisponivel, conectar
-from servicos.contratos_estoque import AjusteEstoque, ConfigurarReserva, EntradaEstoque, Item, LIMITE_ESTOQUE, MovimentacaoEstoque
-from servicos.estoque.eventos import iniciar, registrar_evento
-from servicos.estoque.retiradas import FILA, aplicar_retirada
-from servicos.mensageria import declarar_retiradas, iniciar_consumidor
-from servicos.http import cliente_http, consultar, correlacionar, correlacao
+from servicos.erros import entrada_invalida_400
+from servicos.estoque import administracao
+from servicos.estoque.eventos import iniciar
+from servicos.estoque.saldos import registrar_evento, variar_saldo
 from servicos.idempotencia import gravar_resultado, resultado_anterior
-from servicos.identidade_demo import Ator, orquestrador_autenticado, profissional_autenticado, servico_reservas_autenticado
+from servicos.identidade_demo import (
+    TOKEN_ADMIN, TOKEN_BFF_UNIDADE, TOKEN_ORQUESTRADOR, TOKEN_RESERVAS, ProfissionalDelegado, exigir_credenciais,
+    exigir_papel, exigir_unidade, orquestrador_autenticado, servico_reservas_autenticado,
+)
 
 
 @asynccontextmanager
 async def ciclo(_app: FastAPI):
+    exigir_credenciais(TOKEN_ORQUESTRADOR, TOKEN_RESERVAS, TOKEN_BFF_UNIDADE, TOKEN_ADMIN)
     parar = threading.Event()
-    async with cliente_http(_app):
-        iniciar(parar)
-        iniciar_consumidor(FILA, declarar_retiradas, aplicar_retirada, parar)
-        try:
-            yield
-        finally:
-            parar.set()
+    iniciar(parar)  # Publicador da Outbox, projeção e baixa de retiradas, em segundo plano.
+    yield
+    parar.set()
 
 
 app = FastAPI(title="GlicoAcesso — Estoque", lifespan=ciclo)
-app.middleware("http")(correlacionar)
+app.include_router(administracao.rotas)
+entrada_invalida_400(app, "/internal/v1/alocacoes", "/internal/v1/alocacoes/{reservaId}")
+
+
+class Item(BaseModel):
+    itemId: UUID
+    nome: str
+    tipo: Literal["MEDICAMENTO", "INSUMO"]
+    descricao: str | None = None
 
 
 class DisponibilidadeItem(BaseModel):
@@ -54,6 +59,10 @@ def verificar_saude() -> dict[str, str]:
     return {"servico": "estoque", "status": "ok"}
 
 
+@app.get(
+    "/api/unidade/v1/estoque/itens", response_model=list[Item], response_model_exclude_none=True,
+    dependencies=[Depends(exigir_papel("PROFISSIONAL"))],
+)
 @app.get("/api/cidadao/v1/estoque/itens", response_model=list[Item], response_model_exclude_none=True)
 def listar_itens():
     with conectar("ESTOQUE_DATABASE_URL") as conexao:
@@ -126,6 +135,8 @@ class PedidoAlocacao(BaseModel):
 
 def alocar(pedido: PedidoAlocacao, chave: str, correlacao: UUID | None):
     resumo = sha256(pedido.model_dump_json().encode()).hexdigest()
+    correlacao = correlacao or uuid4()
+    incompativel = 409, {"codigo": "ALOCACAO_INCOMPATIVEL", "mensagem": "A reserva já tem alocação."}
     with conectar(BANCO) as conexao:
         if (anterior := resultado_anterior(conexao, "alocar-estoque", PRINCIPAL, chave, resumo)) is not None:
             return anterior
@@ -137,29 +148,28 @@ def alocar(pedido: PedidoAlocacao, chave: str, correlacao: UUID | None):
         if saldo is None:
             resultado = 404, {"codigo": "SALDO_NAO_ENCONTRADO", "mensagem": "Item ou saldo da unidade não encontrado."}
         elif existente is not None:
-            resultado = 409, {"codigo": "ALOCACAO_INCOMPATIVEL", "mensagem": "A reserva já tem alocação."}
+            resultado = incompativel
         elif not saldo["permite_reserva"]:
             resultado = 409, {"codigo": "RESERVA_NAO_PERMITIDA", "mensagem": "A unidade não permite reservar o item."}
         elif saldo["livre"] < pedido.quantidade:
             resultado = 409, {"codigo": "SALDO_INSUFICIENTE", "mensagem": f"Disponível: {saldo['livre']}."}
         else:
             alocacao_id = uuid4()
-            conexao.execute("""
+            criada = conexao.execute("""
                 INSERT INTO alocacoes (alocacao_id, reserva_id, saga_id, unidade_id, item_id, quantidade,
                     idempotency_key, correlation_id)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (reserva_id) DO NOTHING RETURNING alocacao_id
             """, (alocacao_id, pedido.reservaId, pedido.sagaId, pedido.unidadeId, pedido.itemId,
-                  pedido.quantidade, chave, correlacao))
-            saldo = conexao.execute("""
-                UPDATE saldos SET quantidade_alocada = quantidade_alocada + %s,
-                    estoque_version = estoque_version + 1, updated_at = now()
-                WHERE unidade_id = %s AND item_id = %s
-                RETURNING unidade_id, item_id, estoque_fisico_atual, quantidade_alocada, permite_reserva,
-                    estoque_version, updated_at
-            """, (pedido.quantidade, pedido.unidadeId, pedido.itemId)).fetchone()
-            registrar_evento(conexao, "estoque.alocacao-criada.v1", "AlocacaoEstoque", alocacao_id, correlacao, saldo, {
-                "alocacaoId": str(alocacao_id), "reservaId": str(pedido.reservaId), "quantidade": pedido.quantidade})
-            resultado = 201, {"alocacaoId": str(alocacao_id), **pedido.model_dump(mode="json")}
+                  pedido.quantidade, chave, correlacao)).fetchone()
+            if criada is None:
+                # Outra alocação da mesma reserva, em outro saldo, venceu depois da leitura.
+                resultado = incompativel
+            else:
+                saldo = variar_saldo(conexao, pedido.unidadeId, pedido.itemId, alocado=pedido.quantidade)
+                registrar_evento(conexao, "estoque.alocacao-criada.v1", "AlocacaoEstoque", alocacao_id, correlacao, saldo, {
+                    "alocacaoId": str(alocacao_id), "reservaId": str(pedido.reservaId), "quantidade": pedido.quantidade})
+                resultado = 201, {"alocacaoId": str(alocacao_id), **pedido.model_dump(mode="json")}
         return gravar_resultado(conexao, "alocar-estoque", PRINCIPAL, chave, resumo, resultado)
 
 
@@ -178,13 +188,7 @@ def liberar(reserva_id: UUID, saga_id: UUID, chave: str, correlacao: UUID | None
             if alocacao is not None and alocacao["liberada_em"] is None:
                 conexao.execute("UPDATE alocacoes SET liberada_em = now(), updated_at = now() WHERE reserva_id = %s",
                                 (reserva_id,))
-                saldo = conexao.execute("""
-                    UPDATE saldos SET quantidade_alocada = quantidade_alocada - %s,
-                        estoque_version = estoque_version + 1, updated_at = now()
-                    WHERE unidade_id = %s AND item_id = %s
-                    RETURNING unidade_id, item_id, estoque_fisico_atual, quantidade_alocada, permite_reserva,
-                    estoque_version, updated_at
-                """, (alocacao["quantidade"], alocacao["unidade_id"], alocacao["item_id"])).fetchone()
+                saldo = variar_saldo(conexao, alocacao["unidade_id"], alocacao["item_id"], alocado=-alocacao["quantidade"])
                 registrar_evento(conexao, "estoque.alocacao-liberada.v1", "AlocacaoEstoque", alocacao["alocacao_id"],
                                  correlacao, saldo, {"alocacaoId": str(alocacao["alocacao_id"]),
                                                      "reservaId": str(reserva_id), "quantidade": alocacao["quantidade"]})
@@ -229,10 +233,9 @@ class EstoqueUnidadeItem(BaseModel):
 
 
 @app.get("/api/unidade/v1/estoque/{unidadeId}/itens", response_model=list[EstoqueUnidadeItem])
-def listar_estoque_da_unidade(unidadeId: UUID, profissional: Annotated[Ator, Depends(profissional_autenticado)]):
-    # shortcut: confere só o vínculo do token; a checagem de unidade ativa fica em Reservas.
-    if unidadeId != profissional.unidadeId:
-        raise HTTPException(403, "Ator sem acesso à unidade.")
+def listar_estoque_da_unidade(unidadeId: UUID, profissional: ProfissionalDelegado):
+    # O vínculo vem da identidade delegada; Estoque não é dono do cadastro de unidades.
+    exigir_unidade(profissional, unidadeId)
     with conectar(BANCO) as conexao:
         return conexao.execute("""
             SELECT d.item_id AS "itemId", d.unidade_id AS "unidadeId", i.nome AS "itemNome",
@@ -243,183 +246,3 @@ def listar_estoque_da_unidade(unidadeId: UUID, profissional: Annotated[Ator, Dep
             WHERE d.unidade_id = %s
             ORDER BY i.nome, d.item_id
         """, (unidadeId,)).fetchall()
-
-
-class UnidadeAtiva(BaseModel):
-    unidadeId: UUID
-
-
-UNIDADES_ATIVAS = TypeAdapter(list[UnidadeAtiva])
-OPERACAO_ENTRADA = "registrar-entrada"
-
-
-async def verificar_unidade_ativa(request: Request, unidade_id: UUID):
-    unidades = os.environ.get("UNIDADES_URL", "http://127.0.0.1:8002").rstrip("/")
-    resposta = await consultar(request.app.state.http, f"{unidades}/api/cidadao/v1/unidades")
-    if resposta.status_code != 200:
-        raise HTTPException(503, "Não foi possível validar a unidade.")
-    try:
-        ativas = UNIDADES_ATIVAS.validate_json(resposta.content)
-    except ValidationError as erro:
-        raise HTTPException(502, "Unidades retornou dados incompatíveis.") from erro
-    if all(unidade.unidadeId != unidade_id for unidade in ativas):
-        raise HTTPException(404, "Unidade ativa não encontrada.")
-
-
-def reobter_comando(operacao: str, ator: str, chave: str, resumo: str):
-    with conectar(BANCO) as conexao:
-        return resultado_anterior(conexao, operacao, ator, chave, resumo)
-
-
-def persistir_entrada(unidade_id: UUID, item_id: UUID, entrada: EntradaEstoque, ator: str, chave: str, resumo: str):
-    with conectar(BANCO) as conexao:
-        anterior = resultado_anterior(conexao, OPERACAO_ENTRADA, ator, chave, resumo)
-        if anterior is not None:
-            return anterior
-        item = conexao.execute("SELECT 1 FROM itens WHERE item_id = %s", (item_id,)).fetchone()
-        if item is None:
-            resultado = 404, {"codigo": "ITEM_NAO_ENCONTRADO", "mensagem": "Item não encontrado no catálogo."}
-        else:
-            saldo = conexao.execute("""
-                INSERT INTO saldos (unidade_id, item_id, estoque_fisico_atual, permite_reserva, estoque_version)
-                VALUES (%s, %s, %s, false, 1)
-                ON CONFLICT (unidade_id, item_id) DO UPDATE SET
-                    estoque_fisico_atual = saldos.estoque_fisico_atual + EXCLUDED.estoque_fisico_atual,
-                    estoque_version = saldos.estoque_version + 1, updated_at = clock_timestamp()
-                WHERE saldos.estoque_fisico_atual::bigint + EXCLUDED.estoque_fisico_atual <= %s
-                RETURNING unidade_id, item_id, estoque_fisico_atual, quantidade_alocada, permite_reserva,
-                          estoque_version, updated_at
-            """, (unidade_id, item_id, entrada.quantidade, LIMITE_ESTOQUE)).fetchone()
-            if saldo is None:
-                resultado = 409, {"codigo": "LIMITE_ESTOQUE_EXCEDIDO", "mensagem": "A entrada excede o limite do saldo."}
-            else:
-                movimento_id = uuid4()
-                conexao.execute("""
-                    INSERT INTO movimentacoes (movimentacao_id, unidade_id, item_id, variacao_fisica, estoque_version,
-                                              ocorrida_em, ator_id, motivo)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                """, (movimento_id, unidade_id, item_id, entrada.quantidade, saldo["estoque_version"],
-                      saldo["updated_at"], ator, entrada.motivo))
-                registrar_evento(conexao, "estoque.entrada-registrada.v1", "MovimentacaoEstoque", movimento_id, correlacao.get(),
-                                 saldo, {"movimentacaoId": str(movimento_id), "variacaoFisica": entrada.quantidade})
-                corpo = MovimentacaoEstoque(
-                    movimentacaoId=movimento_id, unidadeId=unidade_id, itemId=item_id,
-                    variacaoFisica=entrada.quantidade, ocorridaEm=saldo["updated_at"],
-                    estoqueVersion=saldo["estoque_version"],
-                )
-                resultado = 201, corpo.model_dump(mode="json")
-        return gravar_resultado(conexao, OPERACAO_ENTRADA, ator, chave, resumo, resultado)
-
-
-@app.post("/api/unidade/v1/estoque/{unidadeId}/itens/{itemId}/entradas", status_code=201,
-          response_model=MovimentacaoEstoque)
-async def registrar_entrada(
-    request: Request, unidadeId: UUID, itemId: UUID, entrada: EntradaEstoque, chave: Chave,
-    profissional: Annotated[Ator, Depends(profissional_autenticado)],
-):
-    if profissional.unidadeId != unidadeId:
-        raise HTTPException(403, "Ator sem acesso à unidade.")
-    if not chave.strip() or "\x00" in chave:
-        raise HTTPException(422, "Chave idempotente inválida.")
-    resumo = sha256(f"{unidadeId}:{itemId}:{entrada.model_dump_json()}".encode()).hexdigest()
-    anterior = await run_in_threadpool(reobter_comando, OPERACAO_ENTRADA, profissional.id, chave, resumo)
-    if anterior is not None:
-        return responder_comando(anterior)
-    await verificar_unidade_ativa(request, unidadeId)
-    resultado = await run_in_threadpool(persistir_entrada, unidadeId, itemId, entrada, profissional.id, chave, resumo)
-    return responder_comando(resultado)
-
-
-Profissional = Annotated[Ator, Depends(profissional_autenticado)]
-RETORNO_SALDO = """
-    RETURNING unidade_id, item_id, estoque_fisico_atual, quantidade_alocada,
-              permite_reserva, estoque_version, updated_at
-"""
-
-
-@app.get("/api/unidade/v1/estoque/itens", response_model=list[Item], response_model_exclude_none=True)
-def catalogo_profissional(_profissional: Profissional):
-    return listar_itens()
-
-
-def alterar_saldo(conexao, unidade_id: UUID, item_id: UUID, pedido, ator: str):
-    if isinstance(pedido, ConfigurarReserva):
-        saldo = conexao.execute("""
-            INSERT INTO saldos (unidade_id, item_id, estoque_fisico_atual, permite_reserva, estoque_version)
-            SELECT %s, item_id, 0, %s, 1 FROM itens WHERE item_id = %s
-            ON CONFLICT (unidade_id, item_id) DO UPDATE SET
-                permite_reserva = EXCLUDED.permite_reserva,
-                estoque_version = saldos.estoque_version + 1, updated_at = clock_timestamp()
-        """ + RETORNO_SALDO, (unidade_id, pedido.permiteReserva, item_id)).fetchone()
-        if saldo is None:
-            return 404, {"codigo": "ITEM_NAO_ENCONTRADO", "mensagem": "Item não encontrado no catálogo."}
-        registrar_evento(conexao, "estoque.permissao-alterada.v1", "Saldo", f"{unidade_id}:{item_id}",
-                         correlacao.get(), saldo, {})
-        return 200, pedido.model_dump()
-
-    saldo = conexao.execute("""
-        SELECT estoque_fisico_atual, quantidade_alocada FROM saldos
-        WHERE unidade_id = %s AND item_id = %s FOR UPDATE
-    """, (unidade_id, item_id)).fetchone()
-    if saldo is None:
-        return 404, {"codigo": "SALDO_NAO_ENCONTRADO", "mensagem": "Registre a entrada inicial do item."}
-    fisico = saldo["estoque_fisico_atual"] + pedido.variacaoFisica
-    if not saldo["quantidade_alocada"] <= fisico <= LIMITE_ESTOQUE:
-        return 409, {"codigo": "AJUSTE_INCOMPATIVEL", "mensagem": "Ajuste fora dos limites do saldo alocado e físico."}
-    atualizado = conexao.execute("""
-        UPDATE saldos SET estoque_fisico_atual = %s, estoque_version = estoque_version + 1,
-                          updated_at = clock_timestamp()
-        WHERE unidade_id = %s AND item_id = %s
-    """ + RETORNO_SALDO, (fisico, unidade_id, item_id)).fetchone()
-    movimento = MovimentacaoEstoque(
-        movimentacaoId=uuid4(), unidadeId=unidade_id, itemId=item_id, variacaoFisica=pedido.variacaoFisica,
-        ocorridaEm=atualizado["updated_at"], estoqueVersion=atualizado["estoque_version"],
-    )
-    conexao.execute("""
-        INSERT INTO movimentacoes (movimentacao_id, unidade_id, item_id, variacao_fisica,
-                                    estoque_version, ocorrida_em, ator_id, motivo)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-    """, (movimento.movimentacaoId, unidade_id, item_id, movimento.variacaoFisica,
-          movimento.estoqueVersion, movimento.ocorridaEm, ator, pedido.motivo))
-    registrar_evento(conexao, "estoque.ajuste-registrado.v1", "MovimentacaoEstoque", movimento.movimentacaoId,
-                     correlacao.get(), atualizado, {"movimentacaoId": str(movimento.movimentacaoId),
-                                                     "variacaoFisica": movimento.variacaoFisica})
-    return 201, movimento.model_dump(mode="json")
-
-
-def persistir_alteracao(operacao, unidade_id, item_id, pedido, ator, chave, resumo):
-    with conectar(BANCO) as conexao:
-        anterior = resultado_anterior(conexao, operacao, ator, chave, resumo)
-        if anterior is not None:
-            return anterior
-        resultado = alterar_saldo(conexao, unidade_id, item_id, pedido, ator)
-        return gravar_resultado(conexao, operacao, ator, chave, resumo, resultado)
-
-
-async def executar_alteracao(request, unidade_id, item_id, pedido, profissional, chave, operacao):
-    if profissional.unidadeId != unidade_id:
-        raise HTTPException(403, "Ator sem acesso à unidade.")
-    if not chave.strip() or "\x00" in chave:
-        raise HTTPException(422, "Chave idempotente inválida.")
-    resumo = sha256(f"{unidade_id}:{item_id}:{pedido.model_dump_json()}".encode()).hexdigest()
-    anterior = await run_in_threadpool(reobter_comando, operacao, profissional.id, chave, resumo)
-    if anterior is not None:
-        return responder_comando(anterior)
-    await verificar_unidade_ativa(request, unidade_id)
-    resultado = await run_in_threadpool(
-        persistir_alteracao, operacao, unidade_id, item_id, pedido, profissional.id, chave, resumo,
-    )
-    return responder_comando(resultado)
-
-
-@app.put("/api/unidade/v1/estoque/{unidadeId}/itens/{itemId}/permissao", response_model=ConfigurarReserva)
-async def configurar_reserva(request: Request, unidadeId: UUID, itemId: UUID, pedido: ConfigurarReserva,
-                             profissional: Profissional, chave: Chave):
-    return await executar_alteracao(request, unidadeId, itemId, pedido, profissional, chave, "configurar-reserva")
-
-
-@app.post("/api/unidade/v1/estoque/{unidadeId}/itens/{itemId}/ajustes", status_code=201,
-          response_model=MovimentacaoEstoque)
-async def ajustar_estoque(request: Request, unidadeId: UUID, itemId: UUID, pedido: AjusteEstoque,
-                          profissional: Profissional, chave: Chave):
-    return await executar_alteracao(request, unidadeId, itemId, pedido, profissional, chave, "ajustar-estoque")

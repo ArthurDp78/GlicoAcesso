@@ -1,8 +1,9 @@
-CREATE TABLE entregas (
+CREATE TABLE retiradas (
     retirada_id uuid PRIMARY KEY,
     autorizacao_id uuid NOT NULL UNIQUE REFERENCES autorizacoes (autorizacao_id),
-    realizada_em timestamptz NOT NULL DEFAULT clock_timestamp(),
-    profissional_id text NOT NULL
+    realizada_em timestamptz NOT NULL,
+    ator_id text NOT NULL,
+    correlation_id uuid NOT NULL
 );
 
 CREATE TABLE outbox (
@@ -17,10 +18,10 @@ CREATE TABLE outbox (
     payload jsonb NOT NULL,
     status text NOT NULL DEFAULT 'PENDENTE' CHECK (status IN ('PENDENTE', 'PUBLICADO')),
     created_at timestamptz NOT NULL DEFAULT now(),
-    attempts integer NOT NULL DEFAULT 0 CHECK (attempts >= 0),
     published_at timestamptz,
-    last_error text,
+    attempts integer NOT NULL DEFAULT 0 CHECK (attempts >= 0),
     next_retry_at timestamptz NOT NULL DEFAULT now(),
+    last_error text,
     CHECK ((status = 'PUBLICADO') = (published_at IS NOT NULL))
 );
 

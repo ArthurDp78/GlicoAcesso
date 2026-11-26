@@ -7,36 +7,49 @@ servers:
   - url: /
 components:
   securitySchemes:
-    bearerAuth:
+    serviceAuth:
       type: http
       scheme: bearer
-      bearerFormat: JWT
-    gestorRedeAuth:
+      description: >-
+        Credencial própria do serviço ou BFF chamador, verificada pelo destinatário.
+        A identidade do ator só é aceita nos cabeçalhos X-Ator-* acompanhados da
+        credencial de um chamador autorizado a delegá-la: o BFF Cidadão delega
+        somente CIDADAO, o BFF Unidade somente PROFISSIONAL e o Orquestrador os
+        atores dos pedidos que persistiu. O token do usuário não é aceito aqui.
+    atorPapel:
+      type: apiKey
+      in: header
+      name: X-Ator-Papel
+      description: CIDADAO ou PROFISSIONAL. Nunca aceito diretamente do cliente.
+    atorId:
+      type: apiKey
+      in: header
+      name: X-Ator-Id
+      description: Identificador estável do ator autenticado pelo BFF.
+    atorUnidade:
+      type: apiKey
+      in: header
+      name: X-Ator-Unidade-Id
+      description: Unidade vinculada ao profissional. Obrigatório para PROFISSIONAL.
+    adminAuth:
       type: http
       scheme: bearer
-      description: Credencial exclusiva do gestor da rede, usada pelo comando administrativo na rede interna.
+      description: Credencial interna da autoridade administrativa, sem rota nos BFFs.
   parameters:
     IdempotencyKey:
       name: Idempotency-Key
       in: header
       required: true
       description: Chave estável para repetir o mesmo comando com o mesmo resultado.
-      schema: { type: string, minLength: 1 }
-    CadastroIdempotencyKey:
-      name: Idempotency-Key
-      in: header
-      required: true
-      description: Chave opaca do cadastro. Reutilize-a com o mesmo conteúdo ao repetir a operação.
       schema: { type: string, minLength: 1, maxLength: 128 }
   schemas:
-    ErroCadastro:
-      type: object
-      required: [codigo, mensagem]
-      properties:
-        codigo: { type: string, enum: [CHAVE_IDEMPOTENTE_CONFLITANTE, CADASTRO_DUPLICADO] }
-        mensagem: { type: string }
     Horario:
       type: object
+      additionalProperties: false
+      description: >-
+        Período de atendimento em horário local, sem fuso. horarioInicial deve
+        ser estritamente anterior a horarioFinal no mesmo dia. Duração nula e
+        períodos que atravessem ou terminem à meia-noite são inválidos.
       required: [diaSemana, horarioInicial, horarioFinal]
       properties:
         diaSemana: { type: integer, minimum: 1, maximum: 7 }
@@ -75,6 +88,7 @@ components:
         orientacoesRetirada: { type: string, minLength: 1 }
     UnidadeInput:
       type: object
+      additionalProperties: false
       required: [nome, logradouro, numero, bairro, cidade, estado, cep, orientacoesRetirada, contatos, horarios, prazoAnaliseHoras]
       properties:
         nome: { type: string, minLength: 1 }
@@ -89,12 +103,14 @@ components:
           type: array
           items:
             type: object
+            additionalProperties: false
             required: [tipo, valor]
             properties:
               tipo: { type: string, minLength: 1 }
               valor: { type: string, minLength: 1 }
         horarios:
           type: array
+          description: Períodos do mesmo dia não podem se sobrepor nem se repetir. Períodos consecutivos e horários iguais em dias diferentes são permitidos.
           items: { $ref: '#/components/schemas/Horario' }
         prazoAnaliseHoras: { type: integer, minimum: 1, maximum: 720 }
 paths:
@@ -112,75 +128,50 @@ paths:
   /internal/v1/unidades:
     post:
       summary: Cadastrar unidade
-      description: >-
-        Operação exclusiva do gestor da rede. Cadastra a unidade ativa junto
-        com horários e contatos. A combinação de nome, logradouro, número,
-        bairro, cidade, estado e CEP identifica duplicidades, inclusive de
-        unidades inativas. A comparação ignora caixa e espaços nas bordas
-        dos campos. O CEP aceita oito dígitos com hífen opcional antes dos
-        últimos três. Cada horário termina depois de começar no mesmo dia.
-      security: [{ gestorRedeAuth: [] }]
-      parameters: [{ $ref: '#/components/parameters/CadastroIdempotencyKey' }]
+      security: [{ adminAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
       requestBody:
         required: true
         content:
           application/json:
-            schema:
-              allOf:
-                - { $ref: '#/components/schemas/UnidadeInput' }
-                - type: object
-                  properties:
-                    nome: { type: string, maxLength: 120 }
-                    logradouro: { type: string, maxLength: 120 }
-                    numero: { type: string, maxLength: 40 }
-                    bairro: { type: string, maxLength: 120 }
-                    cidade: { type: string, maxLength: 120 }
-                    estado: { type: string, maxLength: 40 }
-                    cep: { type: string, pattern: '^[0-9]{5}-?[0-9]{3}$' }
-                    prazoAnaliseHoras: { type: integer, minimum: 1, maximum: 720 }
-                    contatos:
-                      type: array
-                      uniqueItems: true
-                      items:
-                        type: object
-                        properties:
-                          tipo: { type: string, maxLength: 40 }
-                          valor: { type: string, maxLength: 400 }
-                    horarios: { type: array, uniqueItems: true }
+            schema: { $ref: '#/components/schemas/UnidadeInput' }
       responses:
         '201':
           description: Unidade cadastrada; a repetição idêntica reproduz a resposta original.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Unidade' }
-        '401': { description: Credencial do gestor ausente ou inválida. }
-        '409':
-          description: CHAVE_IDEMPOTENTE_CONFLITANTE indica conteúdo diferente para a mesma chave. CADASTRO_DUPLICADO indica que o cadastro já existe.
-          content:
-            application/json:
-              schema: { $ref: '#/components/schemas/ErroCadastro' }
-        '422': { description: Dados de cadastro inválidos ou chave idempotente ausente ou inválida. }
-        '503': { description: Credencial do gestor sem configuração ou banco indisponível. }
+        '409': { description: Chave idempotente reutilizada com conteúdo diferente (CHAVE_IDEMPOTENTE_CONFLITANTE) ou unidade com mesmo nome e endereço (CADASTRO_CONFLITANTE). }
+        '422': { description: "Dados inválidos, inclusive período de atendimento inválido ou sobreposto. Nenhuma alteração é persistida." }
+        '401': { description: Credencial ausente ou inválida. }
+        '403': { description: Chamador ou ator sem permissão. }
   /internal/v1/unidades/{unidadeId}:
     get:
       summary: Consultar cadastro completo da unidade
-      security: [{ bearerAuth: [] }]
+      security: [{ serviceAuth: [] }, { serviceAuth: [], atorPapel: [], atorId: [], atorUnidade: [] }]
       parameters:
         - name: unidadeId
           in: path
           required: true
           schema: { type: string, format: uuid }
       responses:
-        '422': { description: Entrada ou cabeçalho inválido. }
         '200':
-          description: Cadastro, contatos, horários e prazo vigente.
+          description: >-
+            Cadastro completo para Reservas e para o profissional da unidade. O BFF
+            Cidadão recebe somente os campos públicos, inclusive de unidade inativa.
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/Unidade' }
+              schema:
+                anyOf:
+                  - { $ref: '#/components/schemas/Unidade' }
+                  - { $ref: '#/components/schemas/UnidadeResumo' }
         '404': { description: Unidade não encontrada. }
+        '401': { description: Credencial ausente ou inválida. }
+        '403': { description: Chamador ou ator sem permissão. }
+        '422': { description: "Parâmetro, cabeçalho ou corpo inválido." }
     put:
       summary: Atualizar cadastro e informações de atendimento da unidade
-      security: [{ bearerAuth: [] }]
+      security: [{ serviceAuth: [], atorPapel: [], atorId: [], atorUnidade: [] }]
       parameters:
         - name: unidadeId
           in: path
@@ -193,14 +184,16 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/UnidadeInput' }
       responses:
-        '422': { description: Entrada ou cabeçalho inválido. }
         '200': { description: Cadastro atualizado. }
         '404': { description: Unidade não encontrada. }
-        '409': { description: Chave idempotente reutilizada com conteúdo diferente. }
+        '409': { description: Chave idempotente reutilizada com conteúdo diferente (CHAVE_IDEMPOTENTE_CONFLITANTE) ou unidade com mesmo nome e endereço (CADASTRO_CONFLITANTE). }
+        '422': { description: "Dados inválidos, inclusive período de atendimento inválido ou sobreposto. Nenhuma alteração é persistida." }
+        '401': { description: Credencial ausente ou inválida. }
+        '403': { description: Chamador ou ator sem permissão. }
   /internal/v1/unidades/{unidadeId}/horarios:
     put:
       summary: Substituir horários de atendimento da unidade
-      security: [{ bearerAuth: [] }]
+      security: [{ serviceAuth: [], atorPapel: [], atorId: [], atorUnidade: [] }]
       parameters:
         - name: unidadeId
           in: path
@@ -213,20 +206,24 @@ paths:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               required: [horarios]
               properties:
                 horarios:
                   type: array
+                  description: Períodos do mesmo dia não podem se sobrepor nem se repetir. Períodos consecutivos e horários iguais em dias diferentes são permitidos.
                   items: { $ref: '#/components/schemas/Horario' }
       responses:
-        '422': { description: Entrada ou cabeçalho inválido. }
         '200': { description: Horários substituídos. }
         '404': { description: Unidade não encontrada. }
         '409': { description: Chave idempotente reutilizada com conteúdo diferente. }
+        '422': { description: "Dados inválidos, inclusive período de atendimento inválido ou sobreposto. Nenhuma alteração é persistida." }
+        '401': { description: Credencial ausente ou inválida. }
+        '403': { description: Chamador ou ator sem permissão. }
   /internal/v1/unidades/{unidadeId}/status:
     patch:
       summary: Ativar ou desativar a unidade
-      security: [{ bearerAuth: [] }]
+      security: [{ serviceAuth: [], atorPapel: [], atorId: [], atorUnidade: [] }]
       parameters:
         - name: unidadeId
           in: path
@@ -239,25 +236,27 @@ paths:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               required: [ativa]
               properties:
                 ativa: { type: boolean }
       responses:
-        '422': { description: Entrada ou cabeçalho inválido. }
         '200': { description: Situação operacional atualizada; cadastro e referências históricas são preservados. }
         '404': { description: Unidade não encontrada. }
         '409': { description: Chave idempotente reutilizada com conteúdo diferente. }
+        '401': { description: Credencial ausente ou inválida. }
+        '403': { description: Chamador ou ator sem permissão. }
+        '422': { description: "Parâmetro, cabeçalho ou corpo inválido." }
   /internal/v1/unidades/{unidadeId}/prazo-analise:
     get:
       summary: Obter prazo de análise para Reservas
-      security: [{ bearerAuth: [] }]
+      security: [{ serviceAuth: [] }]
       parameters:
         - name: unidadeId
           in: path
           required: true
           schema: { type: string, format: uuid }
       responses:
-        '422': { description: Prazo legado acima de 720 horas. Atualize o cadastro. }
         '200':
           description: Prazo vigente.
           content:
@@ -266,11 +265,14 @@ paths:
                 type: object
                 required: [prazoAnaliseHoras]
                 properties:
-                  prazoAnaliseHoras: { type: integer, minimum: 1, maximum: 720 }
+                  prazoAnaliseHoras: { type: integer, minimum: 1 }
         '404': { description: Unidade não encontrada ou inativa. }
+        '401': { description: Credencial ausente ou inválida. }
+        '403': { description: Chamador ou ator sem permissão. }
+        '422': { description: "Parâmetro, cabeçalho ou corpo inválido." }
     put:
       summary: Configurar prazo de análise
-      security: [{ bearerAuth: [] }]
+      security: [{ serviceAuth: [], atorPapel: [], atorId: [], atorUnidade: [] }]
       parameters:
         - name: unidadeId
           in: path
@@ -283,11 +285,14 @@ paths:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               required: [prazoAnaliseHoras]
               properties:
                 prazoAnaliseHoras: { type: integer, minimum: 1, maximum: 720 }
       responses:
-        '422': { description: Entrada ou cabeçalho inválido. }
         '200': { description: Prazo atualizado; reservas existentes mantêm o prazo já aplicado. }
         '404': { description: Unidade não encontrada. }
         '409': { description: Chave idempotente reutilizada com conteúdo diferente. }
+        '401': { description: Credencial ausente ou inválida. }
+        '403': { description: Chamador ou ator sem permissão. }
+        '422': { description: "Parâmetro, cabeçalho ou corpo inválido." }

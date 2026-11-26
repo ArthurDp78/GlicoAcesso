@@ -6,7 +6,7 @@
 
 ## 1. Papel na arquitetura
 
-O API Gateway é o ponto único de entrada HTTP para os clientes externos e encaminha cada rota publicada ao BFF correspondente. Este documento descreve o desenho da Parte 2 e identifica a cobertura da versão executável da Parte 3.
+O API Gateway é o ponto único de entrada HTTP para os clientes externos. Ele recebe as chamadas, aplica a proteção de borda prevista para cada operação e encaminha a requisição ao BFF correspondente, conforme os documentos 00 e 02.
 
 ```mermaid
 flowchart LR
@@ -38,7 +38,6 @@ Os contratos dos BFFs usam os prefixos `/api/cidadao/v1` e `/api/unidade/v1` em 
 | Unidade | `GET /api/unidade/v1/painel/reservas/{reservaId}` | BFF Unidade. |
 | Unidade | `GET /api/unidade/v1/painel/reservas` | BFF Unidade. Lista solicitações pendentes para decisão. |
 | Unidade | `GET /api/unidade/v1/painel/estoque` | BFF Unidade. |
-| Unidade | `GET /api/unidade/v1/painel/estoque/catalogo` | BFF Unidade. Identifica a unidade vinculada ao profissional e lista os itens para entrada. |
 | Unidade | `GET /api/unidade/v1/unidade` | BFF Unidade. Consulta cadastro da unidade vinculada ao profissional. |
 | Unidade | `PUT /api/unidade/v1/unidade` | BFF Unidade. Atualiza cadastro e informações de atendimento da unidade autenticada. |
 | Unidade | `PUT /api/unidade/v1/unidade/horarios` | BFF Unidade. Atualiza horários da unidade autenticada. |
@@ -61,7 +60,6 @@ Os endpoints sob `/internal/v1` pertencem à comunicação entre serviços e nã
 
 | Comunicação | Operação ou rota interna |
 |---|---|
-| CLI do gestor → Unidades | `POST /internal/v1/unidades` na rede administrativa, com Bearer exclusivo do gestor. |
 | BFF Unidade → Orquestrador | `POST /internal/v1/reservas/{reservaId}/confirmacoes` para iniciar a confirmação. |
 | BFFs → Orquestrador | `POST /internal/v1/reservas/{reservaId}/cancelamentos` para solicitar reversão de efeitos distribuídos. |
 | Orquestrador → Reservas | Comandos de aceite, finalização, falha e cancelamento sob `/internal/v1/reservas/{reservaId}`, no contrato de Reservas. |
@@ -74,8 +72,7 @@ Os endpoints sob `/internal/v1` pertencem à comunicação entre serviços e nã
 | BFFs → Unidades | `GET /api/cidadao/v1/unidades` para listagem pública e `GET /internal/v1/unidades/{unidadeId}` para compor detalhes autorizados. |
 | BFF Cidadão → Estoque | `GET /api/cidadao/v1/estoque/itens` para listar itens pesquisáveis. |
 | BFF Unidade → Retiradas | `GET /internal/v1/autorizacoes/{reservaId}` para agregar a situação operacional da autorização. O registro da entrega também segue diretamente a Retiradas. |
-| BFF Unidade → Estoque | `GET /api/cidadao/v1/estoque/itens` para a seleção no catálogo, `GET /api/unidade/v1/estoque/{unidadeId}/itens` para os saldos projetados e `POST /api/unidade/v1/estoque/{unidadeId}/itens/{itemId}/entradas` para registrar a entrada. |
-| Estoque → Unidades | `GET /api/cidadao/v1/unidades` para verificar se a unidade está ativa antes de uma nova entrada. |
+| BFF Unidade → Estoque | `GET /api/unidade/v1/estoque/{unidadeId}/itens` para compor o painel e os dados do item da reserva. |
 
 Os [contratos do Orquestrador](./api/orquestrador.yaml) e de [Reservas](./api/reserva.yaml) detalham esses comandos. Os caminhos públicos da seção 2 continuam sendo o ponto de entrada para os clientes. Os serviços publicam e consomem eventos pelo RabbitMQ.
 
@@ -87,7 +84,7 @@ Os YAMLs utilizam o esquema HTTP Bearer `bearerAuth`. Ele é exigido nas operaç
 
 A autorização de negócio continua no serviço responsável, com os BFFs apresentando apenas os dados e ações adequados ao ator. Por exemplo, Reservas valida a propriedade da solicitação ou o vínculo do profissional com a unidade. Na confirmação ou no cancelamento distribuído, o BFF propaga o contexto autenticado do ator para que o Orquestrador solicite a validação de negócio em Reservas, conforme o documento 00.
 
-O Gateway valida o Bearer e o papel nas rotas protegidas, então encaminha o cabeçalho `Authorization` ao BFF correspondente. Reservas verifica a titularidade da reserva. Unidades e Estoque verificam o vínculo do profissional com a unidade. No aceite, o BFF Unidade emite uma credencial assinada para o Orquestrador.
+Os BFFs autenticam o token do usuário e chamam os serviços com credencial própria e a identidade delegada nos cabeçalhos `X-Ator-*`, conforme o documento 00, seção 5.1. O Gateway recusa com `401` a ausência de credencial Bearer nas operações autenticadas, e o BFF valida o token. O Gateway encaminha somente `Authorization`, `Idempotency-Key`, `Content-Type` e `X-Correlation-Id`; cabeçalhos `X-Ator-*` recebidos do cliente são descartados. Identificadores de caminho que não sejam UUID são recusados na borda. Os documentos não fixam um provedor de identidade.
 
 ## 5. Responsabilidades transversais
 
@@ -99,16 +96,9 @@ O Gateway valida o Bearer e o papel nas rotas protegidas, então encaminha o cab
 | Convenções HTTP | Preservar métodos, parâmetros, corpos, respostas e `Idempotency-Key` definidos nos contratos, incluindo JSON UTF-8 e o versionamento dos caminhos. |
 | Separação das APIs | Impedir a exposição pública dos endpoints internos dos serviços. |
 
-Na versão da Parte 3, o Gateway usa FastAPI e encaminha as rotas de negócio registradas na aplicação aos destinos abaixo, definidos no [Docker Compose](../../docker-compose.yml).
+`X-Correlation-Id` é opcional. O Gateway preserva um UUID válido ou gera outro, propaga-o ao BFF, que o envia em todas as chamadas, e o devolve na resposta. Falha ou demora de um BFF ou serviço é devolvida como `503`.
 
-| API | Variável | Destino no Compose |
-|---|---|---|
-| Cidadão | `BFF_CIDADAO_URL` | `http://bff-cidadao:8001` |
-| Unidade | `BFF_UNIDADE_URL` | `http://bff-unidade:8005` |
-
-O Compose publica somente a porta do Gateway, no endereço `127.0.0.1`. As tabelas de rotas deste documento descrevem o desenho da Parte 2. As rotas de manutenção da unidade e do estoque, o registro de retirada e o cancelamento local e distribuído estão disponíveis na API.
-
-O Gateway preserva um UUID válido recebido em `X-Correlation-Id` ou gera outro quando o cabeçalho está ausente ou inválido. A resposta devolve o identificador. Os BFFs propagam o cabeçalho às chamadas internas. O Orquestrador guarda o identificador na execução da SAGA e o repassa aos participantes. Estoque também o registra nos eventos da Outbox.
+**Configuração futura do Docker Compose.** Cada serviço e BFF deve receber somente as credenciais de que precisa, todas distintas e fornecidas por segredos ou arquivo de ambiente fora do Git, nunca na imagem nem no arquivo do Compose. Apenas o Gateway deve publicar porta; BFFs, serviços, bancos e RabbitMQ ficam na rede interna, com senhas próprias por banco. A verificação de tokens repetidos na inicialização alcança somente as variáveis de cada processo, por isso a geração deve garantir valores distintos no conjunto.
 
 ## 6. O que não pertence ao Gateway
 
@@ -129,7 +119,7 @@ O Gateway permanece um componente de entrada, sem se tornar proprietário de dad
 Exemplo: `GET /api/cidadao/v1/explorar?itemId={itemId}`.
 
 1. O cliente envia a consulta ao Gateway.
-2. O Gateway encaminha a chamada ao BFF Cidadão e preserva o parâmetro `itemId` e o identificador de correlação.
+2. O Gateway aplica as responsabilidades de borda pertinentes e encaminha a chamada ao BFF Cidadão, preservando o parâmetro e a correlação do fluxo.
 3. O BFF consulta as informações necessárias de Unidades e da projeção de disponibilidade de Estoque, conforme o documento 05.
 4. O BFF compõe os itens da resposta com identificação, endereço, horário e orientações da unidade, além de `disponivel`, `permiteReserva` e `atualizadoEm`, conforme seu contrato. `disponivel` deriva de quantidade projetada maior que zero; `permiteReserva` é uma regra independente. O timestamp é o recebido da projeção, não o horário de montagem da resposta.
 5. O Gateway devolve a resposta do BFF ao cliente, preservando seu status e sua representação HTTP.

@@ -55,6 +55,8 @@ O BFF Unidade consulta a autorização por `GET /internal/v1/autorizacoes/{reser
     *   `autorizacao-retirada`: Link (POST) para registrar a entrega pela rota do BFF Unidade `/api/unidade/v1/retiradas`, enviando no corpo o `autorizacaoId` apresentado na visão operacional. Retiradas consulta Reservas e revalida a autorização antes de registrar a entrega.
     *   `cancelar`: `POST /api/unidade/v1/reservas/{reservaId}/cancelar`, com `justificativa` no corpo.
 
+`autorizacao-retirada` só é oferecido com a autorização local `ATIVA`. Em uma unidade inativa, `aceitar` não é oferecido, e as demais ações seguem o estado da reserva. Se o cadastro não puder ser consultado, o link é oferecido e Reservas decide.
+
 ### 2.4. Estados em Transição e Terminais
 Para os estados `CANCELAMENTO_EM_ANDAMENTO`, `RETIRADA`, `REJEITADA`, `CANCELADA`, `EXPIRADA` e `FALHA_CONFIRMACAO`, **nenhuma ação adicional é oferecida** além da própria consulta.
 *   **Links (Comuns):**

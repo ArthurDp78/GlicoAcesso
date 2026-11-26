@@ -1,10 +1,3 @@
-CREATE UNIQUE INDEX unidades_cadastro_unico
-    ON unidades (
-        lower(btrim(nome)), lower(btrim(logradouro)), lower(btrim(numero)),
-        lower(btrim(bairro)), lower(btrim(cidade)), lower(btrim(estado)),
-        replace(btrim(cep), '-', '')
-    );
-
 CREATE TABLE idempotencia_comandos (
     operacao text NOT NULL,
     principal_id text NOT NULL,

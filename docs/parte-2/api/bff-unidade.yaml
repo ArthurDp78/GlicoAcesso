@@ -11,12 +11,18 @@ components:
       type: http
       scheme: bearer
   parameters:
+    CorrelationId:
+      name: X-Correlation-Id
+      in: header
+      required: false
+      description: Preservado se for um UUID válido; caso contrário, um novo é gerado. Devolvido em toda resposta.
+      schema: { type: string, format: uuid }
     IdempotencyKey:
       name: Idempotency-Key
       in: header
       required: true
       description: Reutilize a mesma chave ao repetir a mesma ação.
-      schema: { type: string, minLength: 1 }
+      schema: { type: string, minLength: 1, maxLength: 128 }
   schemas:
     ErroComando:
       type: object
@@ -126,6 +132,7 @@ components:
         realizadaEm: { type: string, format: date-time }
 paths:
   /unidade:
+    parameters: [{ $ref: '#/components/parameters/CorrelationId' }]
     get:
       summary: Consultar cadastro e informações da unidade autenticada
       security: [{ bearerAuth: [] }]
@@ -136,6 +143,9 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/UnidadeOperacional' }
         '403': { description: Ator sem unidade vinculada. }
+        '401': { description: "Credencial do usuário ausente ou inválida." }
+        '404': { description: "Recurso não encontrado." }
+        '503': { description: "Serviço temporariamente indisponível. Em comandos, repita com a mesma chave e conteúdo." }
     put:
       summary: Atualizar cadastro e informações de atendimento da unidade autenticada
       security: [{ bearerAuth: [] }]
@@ -147,6 +157,7 @@ paths:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               required: [nome, logradouro, numero, bairro, cidade, estado, cep, orientacoesRetirada, contatos, horarios, prazoAnaliseHoras]
               properties:
                 nome: { type: string, minLength: 1 }
@@ -161,14 +172,17 @@ paths:
                   type: array
                   items:
                     type: object
+                    additionalProperties: false
                     required: [tipo, valor]
                     properties:
                       tipo: { type: string, minLength: 1 }
                       valor: { type: string, minLength: 1 }
                 horarios:
                   type: array
+                  description: Períodos do mesmo dia não podem se sobrepor nem se repetir. Início estritamente anterior ao fim, sem atravessar nem terminar à meia-noite. Períodos consecutivos e horários iguais em dias diferentes são permitidos.
                   items:
                     type: object
+                    additionalProperties: false
                     required: [diaSemana, horarioInicial, horarioFinal]
                     properties:
                       diaSemana: { type: integer, minimum: 1, maximum: 7 }
@@ -176,11 +190,19 @@ paths:
                       horarioFinal: { type: string, format: time }
                 prazoAnaliseHoras: { type: integer, minimum: 1, maximum: 720 }
       responses:
-        '422': { description: Entrada ou cabeçalho inválido. }
-        '200': { description: Cadastro atualizado. }
+        '200':
+          description: Cadastro atualizado.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UnidadeOperacional' }
         '403': { description: Ator não pertence à unidade correspondente. }
-        '409': { description: "`Idempotency-Key` reutilizada com conteúdo diferente." }
+        '409': { description: "`Idempotency-Key` reutilizada com conteúdo diferente ou unidade com mesmo nome e endereço (CADASTRO_CONFLITANTE)." }
+        '401': { description: "Credencial do usuário ausente ou inválida." }
+        '404': { description: "Recurso não encontrado." }
+        '422': { description: "Parâmetro, cabeçalho ou corpo inválido, inclusive campo não previsto." }
+        '503': { description: "Serviço temporariamente indisponível. Em comandos, repita com a mesma chave e conteúdo." }
   /unidade/horarios:
+    parameters: [{ $ref: '#/components/parameters/CorrelationId' }]
     put:
       summary: Atualizar horários da unidade autenticada
       security: [{ bearerAuth: [] }]
@@ -192,23 +214,34 @@ paths:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               required: [horarios]
               properties:
                 horarios:
                   type: array
+                  description: Períodos do mesmo dia não podem se sobrepor nem se repetir. Início estritamente anterior ao fim, sem atravessar nem terminar à meia-noite. Períodos consecutivos e horários iguais em dias diferentes são permitidos.
                   items:
                     type: object
+                    additionalProperties: false
                     required: [diaSemana, horarioInicial, horarioFinal]
                     properties:
                       diaSemana: { type: integer, minimum: 1, maximum: 7 }
                       horarioInicial: { type: string, format: time }
                       horarioFinal: { type: string, format: time }
       responses:
-        '422': { description: Entrada ou cabeçalho inválido. }
-        '200': { description: Horários atualizados. }
+        '200':
+          description: Horários atualizados.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UnidadeOperacional' }
         '403': { description: Ator não pertence à unidade correspondente. }
         '409': { description: "`Idempotency-Key` reutilizada com conteúdo diferente." }
+        '401': { description: "Credencial do usuário ausente ou inválida." }
+        '404': { description: "Recurso não encontrado." }
+        '422': { description: "Parâmetro, cabeçalho ou corpo inválido, inclusive campo não previsto." }
+        '503': { description: "Serviço temporariamente indisponível. Em comandos, repita com a mesma chave e conteúdo." }
   /unidade/status:
+    parameters: [{ $ref: '#/components/parameters/CorrelationId' }]
     patch:
       summary: Ativar ou desativar a unidade autenticada
       security: [{ bearerAuth: [] }]
@@ -220,15 +253,24 @@ paths:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               required: [ativa]
               properties:
                 ativa: { type: boolean }
       responses:
-        '422': { description: Entrada ou cabeçalho inválido. }
-        '200': { description: Situação operacional atualizada. }
+        '200':
+          description: Situação operacional atualizada.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UnidadeOperacional' }
         '403': { description: Ator não pertence à unidade correspondente. }
         '409': { description: "`Idempotency-Key` reutilizada com conteúdo diferente." }
+        '401': { description: "Credencial do usuário ausente ou inválida." }
+        '404': { description: "Recurso não encontrado." }
+        '422': { description: "Parâmetro, cabeçalho ou corpo inválido, inclusive campo não previsto." }
+        '503': { description: "Serviço temporariamente indisponível. Em comandos, repita com a mesma chave e conteúdo." }
   /unidade/prazo-analise:
+    parameters: [{ $ref: '#/components/parameters/CorrelationId' }]
     put:
       summary: Atualizar prazo de análise da unidade autenticada
       security: [{ bearerAuth: [] }]
@@ -240,15 +282,24 @@ paths:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               required: [prazoAnaliseHoras]
               properties:
                 prazoAnaliseHoras: { type: integer, minimum: 1, maximum: 720 }
       responses:
-        '422': { description: Entrada ou cabeçalho inválido. }
-        '200': { description: Prazo atualizado; reservas existentes mantêm o prazo aplicado. }
+        '200':
+          description: Prazo atualizado; reservas existentes mantêm o prazo aplicado.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UnidadeOperacional' }
         '403': { description: Ator não pertence à unidade correspondente. }
         '409': { description: "`Idempotency-Key` reutilizada com conteúdo diferente." }
+        '401': { description: "Credencial do usuário ausente ou inválida." }
+        '404': { description: "Recurso não encontrado." }
+        '422': { description: "Parâmetro, cabeçalho ou corpo inválido, inclusive campo não previsto." }
+        '503': { description: "Serviço temporariamente indisponível. Em comandos, repita com a mesma chave e conteúdo." }
   /painel/estoque/{unidadeId}/itens/{itemId}/permissao:
+    parameters: [{ $ref: '#/components/parameters/CorrelationId' }]
     put:
       summary: Configurar se o item permite reserva
       description: Encaminha ao Estoque; quando a relação unidade/item ainda não existe, inicializa saldo físico e alocado em zero.
@@ -269,46 +320,22 @@ paths:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               required: [permiteReserva]
               properties:
                 permiteReserva: { type: boolean }
       responses:
-        '422': { description: Entrada ou cabeçalho inválido. }
         '200': { description: Configuração atualizada. }
         '403': { description: Ator sem permissão para a unidade. }
-        '404': { description: Item ou saldo não encontrado. }
+        '404': { description: Item não encontrado. }
         '409': { description: "`Idempotency-Key` reutilizada com conteúdo diferente." }
-  /painel/estoque/catalogo:
-    get:
-      summary: Listar catálogo para entrada de estoque
-      description: Identifica a unidade vinculada ao profissional e lista os itens do catálogo, inclusive os que ainda não têm saldo na unidade.
-      security: [{ bearerAuth: [] }]
-      responses:
-        '200':
-          description: Unidade vinculada e itens disponíveis para seleção.
-          content:
-            application/json:
-              schema:
-                type: object
-                required: [unidadeId, itens]
-                properties:
-                  unidadeId: { type: string, format: uuid }
-                  itens:
-                    type: array
-                    items:
-                      type: object
-                      required: [itemId, nome, tipo]
-                      properties:
-                        itemId: { type: string, format: uuid }
-                        nome: { type: string }
-                        tipo: { type: string, enum: [MEDICAMENTO, INSUMO] }
-                        descricao: { type: string }
-        '401': { description: Credencial ausente ou inválida. }
-        '403': { description: Operação exclusiva de profissional da unidade. }
+        '401': { description: "Credencial do usuário ausente ou inválida." }
+        '422': { description: "Parâmetro, cabeçalho ou corpo inválido, inclusive campo não previsto." }
+        '503': { description: "Serviço temporariamente indisponível. Em comandos, repita com a mesma chave e conteúdo." }
   /painel/estoque/{unidadeId}/itens/{itemId}/entradas:
+    parameters: [{ $ref: '#/components/parameters/CorrelationId' }]
     post:
       summary: Registrar entrada de estoque
-      description: O profissional vinculado à unidade seleciona um item do catálogo e informa a quantidade recebida. A entrada pode criar o primeiro saldo do item na unidade.
       security: [{ bearerAuth: [] }]
       parameters:
         - name: unidadeId
@@ -326,23 +353,25 @@ paths:
           application/json:
             schema:
               type: object
-              required: [quantidade]
+              additionalProperties: false
+              required: [quantidade, motivo]
               properties:
-                quantidade: { type: integer, minimum: 1, maximum: 2147483647 }
-                motivo: { type: string, minLength: 1, default: Entrada de estoque }
+                quantidade: { type: integer, minimum: 1 }
+                motivo: { type: string, minLength: 1 }
       responses:
         '201':
           description: Entrada registrada.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/MovimentacaoResumo' }
-        '401': { description: Credencial ausente ou inválida. }
         '403': { description: Ator sem permissão para a unidade. }
-        '404': { description: Unidade ativa ou item do catálogo não encontrado. }
-        '409': { description: CHAVE_IDEMPOTENTE_CONFLITANTE ou LIMITE_ESTOQUE_EXCEDIDO. }
-        '422': { description: Quantidade ou chave idempotente inválida. }
-        '503': { description: Banco de Estoque indisponível ou validação de unidade indisponível. }
+        '409': { description: "`Idempotency-Key` reutilizada com conteúdo diferente." }
+        '401': { description: "Credencial do usuário ausente ou inválida." }
+        '404': { description: "Recurso não encontrado." }
+        '422': { description: "Parâmetro, cabeçalho ou corpo inválido, inclusive campo não previsto." }
+        '503': { description: "Serviço temporariamente indisponível. Em comandos, repita com a mesma chave e conteúdo." }
   /painel/estoque/{unidadeId}/itens/{itemId}/ajustes:
+    parameters: [{ $ref: '#/components/parameters/CorrelationId' }]
     post:
       summary: Ajustar saldo físico
       security: [{ bearerAuth: [] }]
@@ -362,6 +391,7 @@ paths:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               required: [variacaoFisica, motivo]
               properties:
                 variacaoFisica:
@@ -370,7 +400,6 @@ paths:
                     - { type: integer, minimum: 1 }
                 motivo: { type: string, minLength: 1 }
       responses:
-        '422': { description: Entrada ou cabeçalho inválido. }
         '201':
           description: Ajuste registrado.
           content:
@@ -378,7 +407,12 @@ paths:
               schema: { $ref: '#/components/schemas/MovimentacaoResumo' }
         '403': { description: Ator sem permissão para a unidade. }
         '409': { description: Ajuste reduz o físico abaixo das alocações ativas ou chave idempotente conflitante. }
+        '401': { description: "Credencial do usuário ausente ou inválida." }
+        '404': { description: "Recurso não encontrado." }
+        '422': { description: "Parâmetro, cabeçalho ou corpo inválido, inclusive campo não previsto." }
+        '503': { description: "Serviço temporariamente indisponível. Em comandos, repita com a mesma chave e conteúdo." }
   /reservas/{reservaId}/decisao:
+    parameters: [{ $ref: '#/components/parameters/CorrelationId' }]
     post:
       summary: Aceitar ou rejeitar uma solicitação
       operationId: decidirSolicitacao
@@ -402,6 +436,7 @@ paths:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               required: [decisao]
               properties:
                 decisao: { type: string, enum: [ACEITAR, REJEITAR] }
@@ -417,7 +452,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/PedidoEmProcessamento' }
-        '422':
+        '400':
           description: "Entrada inválida ou cabeçalho obrigatório ausente."
         '401':
           description: "Credencial ausente ou inválida."
@@ -433,6 +468,7 @@ paths:
         '503':
           description: "Serviço temporariamente indisponível. Repita o comando com a mesma chave e conteúdo quando o resultado estiver incerto."
   /reservas/{reservaId}/cancelar:
+    parameters: [{ $ref: '#/components/parameters/CorrelationId' }]
     post:
       summary: Solicitar cancelamento da reserva pela unidade
       operationId: solicitarCancelamentoReserva
@@ -456,6 +492,7 @@ paths:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               required: [justificativa]
               properties:
                 justificativa: { type: string, minLength: 5 }
@@ -471,7 +508,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/PedidoEmProcessamento' }
-        '422':
+        '400':
           description: "Entrada inválida ou cabeçalho obrigatório ausente."
         '401':
           description: "Credencial ausente ou inválida."
@@ -487,6 +524,7 @@ paths:
         '503':
           description: "Serviço temporariamente indisponível. Repita o comando com a mesma chave e conteúdo quando o resultado estiver incerto."
   /retiradas:
+    parameters: [{ $ref: '#/components/parameters/CorrelationId' }]
     post:
       summary: Registrar entrega presencial
       description: Encaminha o registro ao serviço Retiradas, que valida a reserva canônica e revalida a autorização.
@@ -499,6 +537,7 @@ paths:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               required: [autorizacaoId]
               properties:
                 autorizacaoId: { type: string, format: uuid }
@@ -508,12 +547,13 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/RetiradaRegistrada' }
-        '401': { description: Credencial do profissional ausente ou inválida. }
-        '403': { description: Autorização de outra unidade ou papel sem acesso. }
-        '422': { description: Corpo inválido ou chave idempotente ausente ou inválida. }
         '409': { description: "Autorização inexistente, cancelada ou já utilizada, reserva sem estado CONFIRMADA ou `Idempotency-Key` reutilizada com conteúdo diferente." }
         '503': { description: Não foi possível consultar o estado canônico; nenhuma nova entrega foi registrada. }
+        '401': { description: "Credencial do usuário ausente ou inválida." }
+        '403': { description: "Ator sem permissão para a operação." }
+        '422': { description: "Parâmetro, cabeçalho ou corpo inválido, inclusive campo não previsto." }
   /painel/reservas:
+    parameters: [{ $ref: '#/components/parameters/CorrelationId' }]
     get:
       summary: Listar solicitações pendentes da unidade autenticada
       security: [{ bearerAuth: [] }]
@@ -526,7 +566,10 @@ paths:
                 type: array
                 items: { $ref: '#/components/schemas/ReservaPainel' }
         '403': { description: Profissional sem unidade vinculada. }
+        '401': { description: "Credencial do usuário ausente ou inválida." }
+        '503': { description: "Serviço temporariamente indisponível. Em comandos, repita com a mesma chave e conteúdo." }
   /painel/reservas/{reservaId}:
+    parameters: [{ $ref: '#/components/parameters/CorrelationId' }]
     get:
       summary: Consultar reserva agregada para a unidade
       security: [{ bearerAuth: [] }]
@@ -536,15 +579,18 @@ paths:
           required: true
           schema: { type: string, format: uuid }
       responses:
-        '422': { description: Entrada ou cabeçalho inválido. }
         '200':
-          description: Vista operacional composta com dados da reserva, estoque e autorização.
+          description: Vista operacional composta com dados da reserva, estoque e autorização. Dados complementares indisponíveis são omitidos.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ReservaPainel' }
         '403': { description: Profissional sem acesso à unidade da reserva. }
         '404': { description: Reserva não encontrada. }
+        '401': { description: "Credencial do usuário ausente ou inválida." }
+        '422': { description: "Parâmetro, cabeçalho ou corpo inválido, inclusive campo não previsto." }
+        '503': { description: "Serviço temporariamente indisponível. Em comandos, repita com a mesma chave e conteúdo." }
   /painel/estoque:
+    parameters: [{ $ref: '#/components/parameters/CorrelationId' }]
     get:
       summary: Consultar estoque operacional da unidade
       security: [{ bearerAuth: [] }]
@@ -556,3 +602,37 @@ paths:
               schema:
                 type: array
                 items: { $ref: '#/components/schemas/EstoquePainelItem' }
+        '401': { description: "Credencial do usuário ausente ou inválida." }
+        '403': { description: "Ator sem permissão para a operação." }
+        '503': { description: "Serviço temporariamente indisponível. Em comandos, repita com a mesma chave e conteúdo." }
+  /painel/estoque/catalogo:
+    parameters: [{ $ref: '#/components/parameters/CorrelationId' }]
+    get:
+      summary: Listar catálogo para entrada de estoque
+      description: Identifica a unidade do profissional autenticado e lista itens do catálogo, inclusive os que ainda não têm saldo na unidade.
+      security: [{ bearerAuth: [] }]
+      responses:
+        '200':
+          description: Unidade vinculada e itens disponíveis para seleção.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [unidadeId, itens]
+                properties:
+                  unidadeId: { type: string, format: uuid }
+                  itens:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: false
+                      required: [itemId, nome, tipo]
+                      properties:
+                        itemId: { type: string, format: uuid }
+                        nome: { type: string }
+                        tipo: { type: string, enum: [MEDICAMENTO, INSUMO] }
+                        descricao: { type: string }
+        '401': { description: Credencial ausente ou inválida. }
+        '403': { description: Operação exclusiva de profissional da unidade. }
+        '503': { description: Serviço de Estoque indisponível ou resposta incompatível. }
