@@ -23,7 +23,6 @@
   - [Segurança e operação](#segurança-e-operação)
   - [Testes e evidências](#testes-e-evidências)
 - [Matriz de atendimento aos requisitos](#matriz-de-atendimento-aos-requisitos)
-- [Histórico de evolução e contribuições](#histórico-de-evolução-e-contribuições)
 - [Pendências e limitações](#pendências-e-limitações)
 - [Referências](#referências)
 
@@ -42,7 +41,6 @@ O público inclui pessoas com diabetes, familiares, cuidadores, profissionais de
 | 3 · Infraestrutura | 17/11/2026 | A última revisão de `main` até a data era [`1ca8bef`](https://github.com/ArthurDp78/GlicoAcesso/tree/1ca8bef). O executável e o Compose entraram nos dias 24 e 25/11. |
 | 4 · Integração e IA | Demonstração em 26/11/2026 | [Versão da main](https://github.com/ArthurDp78/GlicoAcesso/tree/a2628ab) · [Roteiro técnico do vídeo](#roteiro-técnico-do-vídeo) |
 
-A reconstrução usa a primeira linha de ancestralidade de `main` para os cortes de entrega e as referências locais e remotas disponíveis para as contribuições. Esses cortes identificam o conteúdo versionado naquela data. Registros de apresentação, avaliações e materiais fora do repositório dependem de evidência própria.
 
 ## Etapa 1 — Concepção e fundamentação
 
@@ -402,6 +400,14 @@ O [roteiro de entrega da Etapa 4](parte-4/04-roteiro-de-entrega.md) inclui os co
 
 ### Arquitetura e dados atuais
 
+#### Arquitetura do fluxo de reservas e retiradas
+
+![Arquitetura do GlicoAcesso com Gateway, BFFs, SAGA, bancos e RabbitMQ](assets/glicoacesso-arquitetura.svg)
+
+O diagrama detalha a comunicação entre os serviços de negócio, a coordenação da confirmação e do cancelamento da reserva e a distribuição do evento de retirada até os consumidores. [SVG em tamanho original](assets/glicoacesso-arquitetura.svg) · [Consumidor do Orquestrador](../servicos/orquestrador/eventos.py)
+
+#### Arquitetura integrada com orientação
+
 ![Arquitetura do GlicoAcesso com portais, domínios, SAGA, mensageria e RAG](arquitetura-glicoacesso.svg)
 
 O diagrama reúne a borda HTTP, a confirmação e o cancelamento por SAGA, os bancos por serviço, a publicação de eventos e a orientação com pgvector e Gemini. [`docs/arquitetura-glicoacesso.svg`](arquitetura-glicoacesso.svg) · [`docker-compose.yml`](../docker-compose.yml) · [`compose.orientacao.yml`](../compose.orientacao.yml)
@@ -602,7 +608,6 @@ As classificações da Etapa 2 se referem ao projeto no congelamento de outubro.
 | 1 | Impacto e indicadores | Documentado/projetado | Indicadores de acesso e organização propostos para avaliação. | [Escopo e impacto esperado](#escopo-e-impacto-esperado) |
 | 1 | Esboço da solução | Documentado/projetado | Consulta, análise, reserva, atendimento presencial e atualização de dados. | [Pitch de setembro](https://github.com/ArthurDp78/GlicoAcesso/blob/422b9ce/docs/parte-1-concepcao-e-pitch.md) |
 | 1 | Repositório público e README inicial | Implementado | README inicial e revisão no dia da apresentação. | [Primeiro commit](https://github.com/ArthurDp78/GlicoAcesso/commit/60e5032) · [README em setembro](https://github.com/ArthurDp78/GlicoAcesso/blob/422b9ce/README.md) |
-| 1 | Quatro integrantes e contribuições | Implementado | Integrantes listados e contribuições rastreáveis por Git. | [Histórico de evolução e contribuições](#histórico-de-evolução-e-contribuições) |
 | 2 | Pelo menos quatro domínios, fronteiras e responsabilidades | Documentado/projetado | Unidades, Estoque, Reservas e Retiradas no congelamento. | [Desenho de outubro](https://github.com/ArthurDp78/GlicoAcesso/blob/b059d68/docs/parte-2/01-microsservicos.md) |
 | 2 | Diagramas de componentes e comunicação | Documentado/projetado | Gateway, BFFs, domínios, REST, RabbitMQ e bancos. | [Diagrama de outubro](https://github.com/ArthurDp78/GlicoAcesso/blob/b059d68/docs/parte-2/02-diagrama-arquitetura.md) |
 | 2 | Contratos REST, verbos e códigos | Documentado/projetado | Seis arquivos OpenAPI e comandos de domínio. A configuração física permaneceu em aberto. | [OpenAPI congelado](https://github.com/ArthurDp78/GlicoAcesso/tree/b059d68/docs/parte-2/api) |
@@ -632,32 +637,8 @@ As classificações da Etapa 2 se referem ao projeto no congelamento de outubro.
 | 4 | Dois mecanismos de resiliência de IA | Implementado | Prazo total e por etapa, retries seletivos com backoff e fallback de orientação básica. | [`servicos/orientacao/resiliencia.py`](../servicos/orientacao/resiliencia.py) · [`servicos/orientacao/rag.py`](../servicos/orientacao/rag.py) |
 | 4 | Latência, custo por operação e projeção de escala | Documentado com resultados | Amostras por etapa e pela rota de orientação, com estimativas por volume e hipóteses registradas. | [Desempenho e custo](parte-4/03-desempenho-e-custo.md) |
 | Geral | Repositório público e único, README e /docs | Implementado | Um repositório público de referência com README, decisões, diagramas e contratos. | [Repositório](https://github.com/ArthurDp78/GlicoAcesso) · [README](../README.md) |
-| Geral | Quatro autores, configuração de autoria e coautoria | Implementado | Commits dos quatro integrantes, variantes de nome e trailers de coautoria em commits de novembro. | [Histórico de evolução e contribuições](#histórico-de-evolução-e-contribuições) |
-| Geral | Desenvolvimento em branches e histórico distribuído | Implementado | Entregas em setembro, outubro e novembro, com os merges de backend e RAG em 26/11. | [Histórico de evolução e contribuições](#histórico-de-evolução-e-contribuições) |
-| Geral | Pull requests e revisões | Implementado parcialmente | Seis PRs integrados no histórico analisado e revisões de código ou conteúdo registradas em commits. | [Pull requests](https://github.com/ArthurDp78/GlicoAcesso/pulls?q=is%3Apr) |
 | Geral | Execução por terceiro a partir do zero | Implementado | Instruções, Compose, modelo de variáveis e script isolado disponíveis. | [Executar do zero](#executar-do-zero) |
-| Geral | Incorporação de correções do professor | Não identificado | Ajustes arquiteturais e de contratos são rastreáveis. O histórico não registra quais corresponderam a pareceres do professor. | [PR #3](https://github.com/ArthurDp78/GlicoAcesso/pull/3) · [Revisão de novembro](https://github.com/ArthurDp78/GlicoAcesso/commit/3ecb975) |
 | Geral | Demonstração funcional dos padrões | Implementado parcialmente | Domínio e orientação têm evidências de execução em processos locais, além do roteiro para repetir a demonstração via Compose. | [Testes e evidências](#testes-e-evidências) |
-
-## Histórico de evolução e contribuições
-
-| Data | Mudança verificável | Evidência |
-| --- | --- | --- |
-| 07 a 17/09 | Início do repositório, fundamentação, revisão de pitch e README, marca e primeiros domínios. | [Histórico até 17/09](https://github.com/ArthurDp78/GlicoAcesso/compare/60e5032...422b9ce) |
-| 09 a 21/10 | Arquitetura, Gateway, BFFs, contratos, HATEOAS, sequência SAGA, persistência, Outbox e CQRS. | [PR #1](https://github.com/ArthurDp78/GlicoAcesso/pull/1) · [PR #2](https://github.com/ArthurDp78/GlicoAcesso/pull/2) · [PR #3](https://github.com/ArthurDp78/GlicoAcesso/pull/3) · [PR #4](https://github.com/ArthurDp78/GlicoAcesso/pull/4) |
-| 22/10 | Ajustes de sintaxe dos diagramas de sucesso e compensação após o congelamento. | [Diff](https://github.com/ArthurDp78/GlicoAcesso/compare/b059d68...1ca8bef) |
-| 24/11 | Orquestrador separado, quinto banco, portais e serviços, catálogo, cadastro via CLI, projeção e Compose. | [Revisão](https://github.com/ArthurDp78/GlicoAcesso/commit/fc72d2c) · [Portal cidadão](https://github.com/ArthurDp78/GlicoAcesso/commit/999869a) · [Infraestrutura](https://github.com/ArthurDp78/GlicoAcesso/commit/3cf7772) |
-| 25/11 | Retirada assíncrona, cancelamento durável, limites de prazo e correções de idempotência e vínculo. Teste de compensação no Compose. | [Domínio](https://github.com/ArthurDp78/GlicoAcesso/commit/8f4c8f7) · [Prazo](https://github.com/ArthurDp78/GlicoAcesso/commit/01d9fcc) · [Vínculo](https://github.com/ArthurDp78/GlicoAcesso/commit/015ccff) · [Compensação](https://github.com/ArthurDp78/GlicoAcesso/commit/b4c2130) |
-| 26/11 | Merges de backend e da orientação RAG na `main`. Entraram credenciais por serviço, correções de confiabilidade, testes, pgvector e resultados de avaliação. | [PR #5](https://github.com/ArthurDp78/GlicoAcesso/pull/5) · [PR #6](https://github.com/ArthurDp78/GlicoAcesso/pull/6) |
-
-| Integrante | Contribuições com evidência |
-| --- | --- |
-| Marcos Vinícius Pereira | Fundamentação, decisões de microsserviços e Gateway, documentação central e correções de integração e contratos do backend. [Fundamentação](https://github.com/ArthurDp78/GlicoAcesso/commit/d615242) · [PR #1](https://github.com/ArthurDp78/GlicoAcesso/pull/1) · [Documentação](https://github.com/ArthurDp78/GlicoAcesso/commit/7dbe14c) · [Backend](https://github.com/ArthurDp78/GlicoAcesso/commit/06ca4ab) |
-| Arthur Soares Marques | Repositório e README iniciais, especificação e diagramas da SAGA, integração das frentes em PRs e correções de diagramas. [README](https://github.com/ArthurDp78/GlicoAcesso/commit/289df4a) · [SAGA](https://github.com/ArthurDp78/GlicoAcesso/commit/1dc99b8) · [Correção](https://github.com/ArthurDp78/GlicoAcesso/commit/1ca8bef) |
-| Lana da Silva Miranda | Marca e concepção, persistência, consistência, Outbox e CQRS, delegação de identidade, correções de contratos e testes dos BFFs no backend incorporado na `main`. [Identidade](https://github.com/ArthurDp78/GlicoAcesso/commit/fb75f21) · [PR #4](https://github.com/ArthurDp78/GlicoAcesso/pull/4) · [PR #5](https://github.com/ArthurDp78/GlicoAcesso/pull/5) |
-| Guilherme Lirio Miranda | Contratos dos BFFs e HATEOAS em outubro, arquitetura executável, Compose e orientação com RAG. [HATEOAS](https://github.com/ArthurDp78/GlicoAcesso/commit/992a544) · [Contratos](https://github.com/ArthurDp78/GlicoAcesso/commit/351129f) · [Compose](https://github.com/ArthurDp78/GlicoAcesso/commit/3cf7772) · [RAG](https://github.com/ArthurDp78/GlicoAcesso/commit/529d15d) |
-
-O histórico registra variações de nomes e coautorias. Os PRs #1 a #4 documentam a construção da arquitetura. O PR #5 integrou `feat/backend-microsservicos` e o PR #6 integrou `feat/ia-rag`. [Histórico da main](https://github.com/ArthurDp78/GlicoAcesso/commits/main/) · [Pull requests](https://github.com/ArthurDp78/GlicoAcesso/pulls?q=is%3Amerged)
 
 ## Pendências e limitações
 
