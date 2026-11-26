@@ -8,7 +8,7 @@ from fastapi import Depends, Header, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 
-bearer = HTTPBearer(auto_error=False)
+bearer = HTTPBearer(auto_error=False, scheme_name="bearerAuth")
 Credencial = Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)]
 NAO_AUTENTICADO = {"WWW-Authenticate": "Bearer"}
 
