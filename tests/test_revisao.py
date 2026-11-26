@@ -167,7 +167,7 @@ class RespostasDocumentadas(unittest.TestCase):
 
     def test_unidades_404_e_409(self):
         base, desconhecida = f"/internal/v1/unidades/{a.UNIDADE}", str(uuid4())
-        cadastro = {"nome": "N", "logradouro": "L", "numero": "1", "bairro": "B", "cidade": "C", "estado": "MG", "cep": "1",
+        cadastro = {"nome": "N", "logradouro": "L", "numero": "1", "bairro": "B", "cidade": "C", "estado": "MG", "cep": "12345-678",
                     "orientacoesRetirada": "O", "contatos": [], "horarios": [], "prazoAnaliseHoras": 24}
         comandos = (("PUT", "", cadastro, {**cadastro, "nome": "M"}), ("PUT", "/horarios", {"horarios": []}, {"horarios": [{"diaSemana": 2, "horarioInicial": "08:00:00", "horarioFinal": "09:00:00"}]}),
                     ("PATCH", "/status", {"ativa": True}, {"ativa": False}), ("PUT", "/prazo-analise", {"prazoAnaliseHoras": 24}, {"prazoAnaliseHoras": 25}))

@@ -1,4 +1,5 @@
 import asyncio
+import os
 from typing import Annotated, Literal
 from uuid import UUID
 
@@ -10,7 +11,7 @@ from servicos.comandos import Chave
 from servicos.contratos_reserva import CANCELAVEIS, DadosReserva, LinkReserva, PedidoReserva, ReservaPublica
 from servicos.erros import entrada_invalida_400
 from servicos.identidade_demo import TOKEN_BFF_CIDADAO, TOKEN_CIDADAO, Ator, ator_autenticado
-from servicos.http import falha_de_configuracao
+from servicos.http import falha_de_configuracao, requisitar
 
 
 app = criar_app("GlicoAcesso — BFF Cidadão", TOKEN_CIDADAO, TOKEN_BFF_CIDADAO)

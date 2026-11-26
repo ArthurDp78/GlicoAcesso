@@ -99,6 +99,12 @@ def movimentar(operacao: str, evento: str, profissional: Ator, unidade_id: UUID,
             anterior = resultado_anterior(conexao, "ajustar-estoque", profissional.id, chave, resumo_legado)
         if anterior is not None:
             return anterior
+        if operacao == "registrar-entrada":
+            conexao.execute("""
+                INSERT INTO saldos (unidade_id, item_id, estoque_fisico_atual, permite_reserva)
+                SELECT %s, item_id, 0, false FROM itens WHERE item_id = %s
+                ON CONFLICT DO NOTHING
+            """, (unidade_id, item_id))
         saldo = travar_saldo(conexao, unidade_id, item_id)
         if saldo is None:
             raise HTTPException(404, "Item ou saldo da unidade não encontrado.")

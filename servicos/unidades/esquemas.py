@@ -2,7 +2,7 @@ from datetime import time
 from typing import Annotated
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator, model_validator
 
 from servicos.comandos import PRAZO_MAXIMO_HORAS, Texto
 from servicos.unidades.regras_horarios import validar_periodo, validar_sobreposicoes
@@ -94,11 +94,22 @@ class UnidadeInput(HorariosUnidade, PrazoAnalise):
     bairro: Texto
     cidade: Texto
     estado: Texto
-    cep: Texto
+    cep: Annotated[str, StringConstraints(pattern=r"^[0-9]{5}-?[0-9]{3}$")]
     orientacoesRetirada: Texto
     contatos: list[Contato]
+
+    @field_validator("cep")
+    @classmethod
+    def formatar_cep(cls, valor):
+        digitos = valor.replace("-", "")
+        return f"{digitos[:5]}-{digitos[5:]}"
 
     @field_validator("contatos")
     @classmethod
     def contatos_unicos(cls, valor):
-        return sem_repetidos(valor)
+        return sorted(sem_repetidos(valor), key=lambda contato: (contato.tipo, contato.valor))
+
+    @field_validator("horarios")
+    @classmethod
+    def ordenar_horarios(cls, valor):
+        return sorted(valor, key=lambda horario: (horario.diaSemana, horario.horarioInicial, horario.horarioFinal))

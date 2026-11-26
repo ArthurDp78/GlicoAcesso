@@ -200,7 +200,7 @@ formularioEntrada.addEventListener("submit", async evento => {
     const chave = sessionStorage.getItem(operacao) ?? crypto.randomUUID();
     sessionStorage.setItem(operacao, chave);
     await chamar(`/api/unidade/v1/painel/estoque/${unidadeId}/itens/${itemId}/entradas`, {
-      method: "POST", body: JSON.stringify({quantidade}),
+      method: "POST", body: JSON.stringify({quantidade, motivo: "Entrada de estoque"}),
       headers: {"Content-Type": "application/json", "Idempotency-Key": chave},
     });
     sessionStorage.removeItem(operacao);

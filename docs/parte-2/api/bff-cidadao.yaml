@@ -142,7 +142,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/ReservaCidadao'
         '422':
-          description: Unidade inexistente/inativa ou combinação unidade/item sem permissão para reserva; ou entrada inválida.
+          description: Unidade inexistente, inativa, com prazo legado acima de 720 horas, combinação sem permissão para reserva ou entrada inválida.
         '409':
           description: "`Idempotency-Key` reutilizada com conteúdo diferente."
         '401': { description: Credencial do cidadão ausente ou inválida. }
@@ -180,7 +180,8 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/PedidoEmProcessamento' }
-        '400':
+        '400': { description: "Regra de negócio inválida ou justificativa obrigatória ausente." }
+        '422':
           description: "Entrada inválida ou cabeçalho obrigatório ausente."
         '401':
           description: "Credencial ausente ou inválida."
@@ -207,6 +208,7 @@ paths:
           required: true
           schema: { type: string, format: uuid }
       responses:
+        '422': { description: Entrada ou cabeçalho inválido. }
         '200':
           description: Vista segura e simplificada da reserva, com dados da unidade mesmo inativa. Dados complementares indisponíveis são omitidos.
           content:
@@ -249,5 +251,6 @@ paths:
                       type: string
                       format: date-time
                       description: Timestamp recebido da projeção de Estoque para o estado exibido, preservado pelo BFF sem substituição pelo horário de montagem da resposta.
+
         '422': { description: "Parâmetro, cabeçalho ou corpo inválido, inclusive campo não previsto." }
         '503': { description: "Serviço temporariamente indisponível. Em comandos, repita com a mesma chave e conteúdo." }

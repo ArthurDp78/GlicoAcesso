@@ -46,7 +46,7 @@ Quando esses dados estão dispersos, desatualizados ou difíceis de localizar, p
 
 ### Evidências que fundamentam o problema
 
-Em 2024, a International Diabetes Federation estimou cerca de **16,6 milhões de adultos com diabetes no Brasil**, equivalentes a 10,6% da população adulta. Esse dado dimensiona o público potencial, mas não é usado como prova de dificuldade de acesso.
+Para 2024, a International Diabetes Federation estimou **16,6 milhões de pessoas de 20 a 79 anos com diabetes no Brasil**, com prevalência padronizada por idade de 10,6%. Esse dado dimensiona o público potencial, mas não é usado como prova de dificuldade de acesso.
 
 As evidências que sustentam a formulação do problema são:
 
@@ -172,7 +172,7 @@ A duração-alvo continua entre **4min30s e 4min50s**, permitindo pequena margem
 
 ### Integrante 2 - Evidências e relevância social
 
-> O problema é relevante porque o tratamento do diabetes envolve uma população numerosa e a rede pública tem papel importante nesse acesso. A International Diabetes Federation estimou cerca de **16,6 milhões de adultos com diabetes no Brasil em 2024**.
+> O problema é relevante porque o tratamento do diabetes envolve uma população numerosa e a rede pública tem papel importante nesse acesso. A International Diabetes Federation estimou cerca de **16,6 milhões de pessoas de 20 a 79 anos com diabetes no Brasil em 2024**.
 >
 > Um estudo publicado em 2024, com dados da Pesquisa Nacional de Saúde, identificou que **69,7% da obtenção de insulina analisada ocorreu pelo serviço público** e encontrou desigualdades de acesso associadas a fatores como renda, raça/cor e ausência de plano de saúde.
 >
@@ -204,10 +204,10 @@ A duração-alvo continua entre **4min30s e 4min50s**, permitindo pequena margem
 
 ## Referências
 
-1. [International Diabetes Federation - Dados sobre diabetes no Brasil](https://diabetesatlas.org/es/data-by-location/country/brazil/). Estimativa de 16,6 milhões de adultos com diabetes em 2024.
+1. [International Diabetes Federation - Dados sobre diabetes no Brasil](https://diabetesatlas.org/data-by-location/country/brazil/). Estimativa de 16,6 milhões de adultos com diabetes em 2024.
 2. [Leal et al. - Acesso a medicamentos para hipertensão e diabetes](https://doi.org/10.1590/0102-311XPT241022). *Cadernos de Saúde Pública*, 2024.
 3. [Nascimento et al. - Disponibilidade de medicamentos essenciais](https://doi.org/10.11606/S1518-8787.2017051007062). *Revista de Saúde Pública*, 2017.
 4. [Ministério da Saúde - Insulinas humanas e agulhas para caneta](https://www.gov.br/saude/pt-br/composicao/sectics/daf/cbaf/insulinas-humanas).
 5. [Brasil - Lei nº 14.654/2023](https://www.planalto.gov.br/ccivil_03/_ato2023-2026/2023/lei/l14654.htm).
-6. [PNAUM - Acesso e adesão a medicamentos entre pessoas com diabetes no Brasil](https://doi.org/10.1590/1980-549720180003). *Revista Brasileira de Epidemiologia*, 2018.
+6. [Meiners et al. — Acesso e adesão a medicamentos entre pessoas com diabetes no Brasil: evidências da PNAUM](https://doi.org/10.1590/1980-5497201700030008). *Revista Brasileira de Epidemiologia*, 2017.
 

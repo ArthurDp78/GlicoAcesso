@@ -68,7 +68,7 @@ class Catalogo(unittest.TestCase):
 class Saldos(unittest.TestCase):
     def test_permissao_inicializa_e_projeta(self):
         item = novo_item()
-        self.assertEqual(prof("POST", base(item) + "/entradas", {"quantidade": 1, "motivo": "m"}).status_code, 404)
+        self.assertEqual(prof("POST", base(item) + "/ajustes", {"variacaoFisica": 1, "motivo": "m"}).status_code, 404)
         self.assertEqual(prof("PUT", base(item) + "/permissao", {"permiteReserva": False}).status_code, 200)
         self.assertEqual((saldo(item)["estoque_fisico_atual"], saldo(item)["estoque_version"]), (0, 1))
         prof("PUT", base(item) + "/permissao", {"permiteReserva": False})
@@ -78,6 +78,18 @@ class Saldos(unittest.TestCase):
         a.esperar(lambda: (r := a.chamar("estoque", "GET", consulta)).status_code == 200 and r.json()["permiteReserva"])
         self.assertEqual(prof("PUT", base(str(uuid4())) + "/permissao", {"permiteReserva": True}).status_code, 404)
         self.assertEqual(prof("PUT", base(item, str(uuid4())) + "/permissao", {"permiteReserva": True}).status_code, 403)
+
+    def test_primeira_entrada_cria_saldo_sem_permitir_reservas(self):
+        item, chave = novo_item(), a.nova_chave()
+        corpo = {"quantidade": 3, "motivo": "recebimento"}
+        primeira = prof("POST", base(item) + "/entradas", corpo, chave)
+        self.assertEqual(primeira.status_code, 201)
+        self.assertEqual(prof("POST", base(item) + "/entradas", corpo, chave).json(), primeira.json())
+        self.assertEqual((saldo(item)["estoque_fisico_atual"], saldo(item)["permite_reserva"]), (3, False))
+        consulta = f"/api/cidadao/v1/estoque/disponibilidade?unidadeId={a.UNIDADE}&itemId={item}"
+        a.esperar(lambda: (r := a.chamar("estoque", "GET", consulta)).status_code == 200
+                  and r.json()["quantidadeDisponivel"] == 3 and not r.json()["permiteReserva"])
+        self.assertEqual(prof("POST", base(str(uuid4())) + "/entradas", corpo).status_code, 404)
 
     def test_entrada_e_ajuste(self):
         item, chave = com_saldo(10), a.nova_chave()

@@ -90,11 +90,14 @@ paths:
           required: true
           schema: { type: string, format: uuid }
       responses:
+        '422': { description: Entrada ou cabeçalho inválido. }
         '200':
           description: Autorização encontrada, inclusive se cancelada ou utilizada.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/Autorizacao' }
+        '401': { description: Credencial do profissional ausente ou inválida. }
+        '403': { description: Autorização de outra unidade ou papel sem acesso. }
         '404': { description: Não existe autorização para a reserva. }
         '503': { description: Estado da autorização indisponível. }
         '401': { description: Credencial ausente ou inválida. }
@@ -128,7 +131,7 @@ paths:
                 autorizacaoId: { type: string, format: uuid }
       responses:
         '201':
-          description: Entrega física registada. Dispara evento retirada.concluida.v1. Repetições idênticas reproduzem esta resposta.
+          description: Entrega física e evento retirada.concluida.v1 gravados na mesma transação. Repetições idênticas reproduzem esta resposta.
           content:
             application/json:
               schema:
@@ -138,6 +141,9 @@ paths:
                   retiradaId: { type: string, format: uuid }
                   autorizacaoId: { type: string, format: uuid }
                   realizadaEm: { type: string, format: date-time }
+        '401': { description: Credencial do profissional ausente ou inválida. }
+        '403': { description: Autorização de outra unidade ou papel sem acesso. }
+        '422': { description: Corpo inválido ou chave idempotente ausente ou inválida. }
         '409':
           description: Autorização cancelada, já usada ou inexistente; Reserva não encontrada ou estado consultado diferente de CONFIRMADA; ou `Idempotency-Key` reutilizada com conteúdo diferente. Nenhuma nova entrega é registrada.
         '503':
@@ -183,13 +189,21 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErroComando' }
+        '400': { description: "Regra de negócio inválida ou justificativa obrigatória ausente." }
         '422':
-          description: "AUTORIZACAO_NAO_CRIADA registra recusa conclusiva com ausência de autorização vinculada à reserva."
+          description: Entrada inválida ou recusa de negócio. Somente AUTORIZACAO_NAO_CRIADA confirma a ausência de autorização.
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/ErroComando' }
-        '400':
-          description: "Entrada inválida ou cabeçalho obrigatório ausente."
+              schema:
+                oneOf:
+                  - { $ref: '#/components/schemas/ErroComando' }
+                  - type: object
+                    required: [detail]
+                    properties:
+                      detail:
+                        oneOf:
+                          - { type: array, items: { type: object } }
+                          - { type: string }
         '401':
           description: "Credencial ausente ou inválida."
         '403':
@@ -228,7 +242,8 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ConflitoRevogacao' }
-        '400':
+        '400': { description: "Regra de negócio inválida ou justificativa obrigatória ausente." }
+        '422':
           description: "Entrada inválida ou cabeçalho obrigatório ausente."
         '401':
           description: "Credencial ausente ou inválida."

@@ -103,3 +103,12 @@ O nome `estoque.alocacao-criada.v1` reaproveita o exemplo de envelope do documen
 `estoqueVersion` é monotônica por `(unidadeId, itemId)` e incrementada junto da alteração canônica, sob o controle de concorrência local já definido para `saldos`. A Outbox captura a versão e o estado resultante nessa mesma transação; o worker não consulta o saldo novamente para reconstruir o payload.
 
 A projeção só substitui seu estado por uma versão maior para o mesmo par. Assim, duplicatas ou eventos fora de ordem não fazem a leitura regredir. Os campos quantitativos de cada fato preservam seu significado de negócio, mas a projeção aplica o estado resultante completo, sem acumular deltas. `eventVersion` versiona o contrato; `estoqueVersion` ordena mudanças do saldo. O algoritmo completo da projeção fica para o documento de CQRS.
+
+
+### Propagação executável da retirada
+
+Retiradas publica `retirada.concluida.v1` com confirmação do RabbitMQ. Antes de publicar, declara os três destinos duráveis, `reservas.retirada-concluida`, `estoque.retirada-concluida` e `orquestrador.retirada-concluida`. Cada destino possui uma fila `.erros` própria para mensagens inválidas ou incompatíveis com o estado do domínio.
+
+Reservas grava `RETIRADA` e o histórico na mesma transação da Inbox. Estoque reduz o saldo físico e o alocado, grava a movimentação e publica `estoque.retirada-baixada.v1` pela própria Outbox, preservando a correlação e ligando o evento de origem por `causationId`. O Orquestrador grava a evidência por reserva para reconciliar a disputa com a revogação. O resultado durável de Retiradas continua governando a decisão de liberar estoque.
+
+Os consumidores confirmam a mensagem após o commit. A Inbox impede repetir o efeito do mesmo `eventId`. A reserva, a alocação e a evidência também guardam o identificador da retirada para reconhecer o mesmo fato quando ele chega com outro `eventId`.
