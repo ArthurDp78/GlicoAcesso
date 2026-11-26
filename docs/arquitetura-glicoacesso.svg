@@ -1,0 +1,134 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1480" height="1510" viewBox="0 0 1480 1510" role="img" aria-labelledby="title desc">
+<title id="title">GlicoAcesso — arquitetura distribuída</title>
+<desc id="desc">Entrada pelos portais, serviços de domínio, SAGA, eventos, orientação RAG, persistência e isolamento das redes.</desc>
+<defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0 L10 5 L0 10Z" fill="#33765f"/></marker></defs>
+<rect width="1480" height="1510" fill="#f5faf8"/><g font-family="Segoe UI, Arial, sans-serif">
+<rect x="0" y="0" width="1480" height="123" rx="0" fill="#114e42" stroke="none"/>
+<text x="42" y="58" fill="white" font-size="44" font-weight="700">GlicoAcesso</text>
+<text x="42" y="94" fill="#c7e7da" font-size="22" font-weight="400">Arquitetura do sistema distribuído  /  Consulta, reserva, retirada e orientação ao cidadão</text>
+<text x="42" y="165" fill="#145a49" font-size="26" font-weight="670">Entrada e roteamento</text>
+<rect x="42" y="184" width="235" height="92" rx="13" fill="white" stroke="#bad2c9"/>
+<text x="58" y="213" fill="#144f42" font-size="21" font-weight="650">Portal do cidadão</text>
+<text x="58" y="238" fill="#203e40" font-size="16" font-weight="400">Interface web</text>
+<rect x="333" y="184" width="252" height="92" rx="13" fill="white" stroke="#bad2c9"/>
+<text x="349" y="213" fill="#144f42" font-size="21" font-weight="650">API Gateway</text>
+<text x="349" y="238" fill="#203e40" font-size="16" font-weight="400">Mesma instância</text>
+<text x="349" y="260" fill="#203e40" font-size="16" font-weight="400">Borda e autenticação</text>
+<rect x="645" y="184" width="235" height="92" rx="13" fill="white" stroke="#bad2c9"/>
+<text x="661" y="213" fill="#144f42" font-size="21" font-weight="650">BFF Cidadão</text>
+<text x="661" y="238" fill="#203e40" font-size="16" font-weight="400">Respostas por cliente</text>
+<rect x="947" y="184" width="490" height="92" rx="13" fill="white" stroke="#bad2c9"/>
+<text x="963" y="213" fill="#144f42" font-size="21" font-weight="650">Operações locais</text>
+<text x="963" y="238" fill="#203e40" font-size="16" font-weight="400">Unidades · Estoque · Reservas</text>
+<text x="963" y="260" fill="#203e40" font-size="16" font-weight="400">HTTP para os serviços responsáveis</text>
+<path d="M277 230 L330 230" fill="none" stroke="#33765f" stroke-width="2" marker-end="url(#arr)"/>
+<path d="M585 230 L642 230" fill="none" stroke="#33765f" stroke-width="2" marker-end="url(#arr)"/>
+<path d="M880 230 L943 230" fill="none" stroke="#33765f" stroke-width="2" marker-end="url(#arr)"/>
+<rect x="42" y="289" width="235" height="92" rx="13" fill="white" stroke="#bad2c9"/>
+<text x="58" y="318" fill="#144f42" font-size="21" font-weight="650">Portal da unidade</text>
+<text x="58" y="343" fill="#203e40" font-size="16" font-weight="400">Interface web</text>
+<rect x="333" y="289" width="252" height="92" rx="13" fill="white" stroke="#bad2c9"/>
+<text x="349" y="318" fill="#144f42" font-size="21" font-weight="650">API Gateway</text>
+<text x="349" y="343" fill="#203e40" font-size="16" font-weight="400">Mesma instância</text>
+<text x="349" y="365" fill="#203e40" font-size="16" font-weight="400">Borda e autenticação</text>
+<rect x="645" y="289" width="235" height="92" rx="13" fill="white" stroke="#bad2c9"/>
+<text x="661" y="318" fill="#144f42" font-size="21" font-weight="650">BFF Unidade</text>
+<text x="661" y="343" fill="#203e40" font-size="16" font-weight="400">Respostas por cliente</text>
+<rect x="947" y="289" width="490" height="92" rx="13" fill="white" stroke="#bad2c9"/>
+<text x="963" y="318" fill="#144f42" font-size="21" font-weight="650">Operações locais</text>
+<text x="963" y="343" fill="#203e40" font-size="16" font-weight="400">Unidades · Estoque · Reservas · Retiradas</text>
+<text x="963" y="365" fill="#203e40" font-size="16" font-weight="400">HTTP para os serviços responsáveis</text>
+<path d="M277 335 L330 335" fill="none" stroke="#33765f" stroke-width="2" marker-end="url(#arr)"/>
+<path d="M585 335 L642 335" fill="none" stroke="#33765f" stroke-width="2" marker-end="url(#arr)"/>
+<path d="M880 335 L943 335" fill="none" stroke="#33765f" stroke-width="2" marker-end="url(#arr)"/>
+<text x="42" y="437" fill="#145a49" font-size="26" font-weight="670">Domínio e persistência</text>
+<rect x="42" y="456" width="335" height="92" rx="13" fill="white" stroke="#bad2c9"/>
+<text x="58" y="485" fill="#144f42" font-size="21" font-weight="650">Unidades</text>
+<text x="58" y="510" fill="#203e40" font-size="16" font-weight="400">Cadastro, horários e prazos</text>
+<text x="58" y="532" fill="#203e40" font-size="16" font-weight="400">PostgreSQL · unidades</text>
+<rect x="396" y="456" width="335" height="92" rx="13" fill="white" stroke="#bad2c9"/>
+<text x="412" y="485" fill="#144f42" font-size="21" font-weight="650">Estoque · CQRS</text>
+<text x="412" y="510" fill="#203e40" font-size="16" font-weight="400">Saldo, alocações e projeção</text>
+<text x="412" y="532" fill="#203e40" font-size="16" font-weight="400">PostgreSQL · estoque</text>
+<rect x="750" y="456" width="335" height="92" rx="13" fill="white" stroke="#bad2c9"/>
+<text x="766" y="485" fill="#144f42" font-size="21" font-weight="650">Reservas</text>
+<text x="766" y="510" fill="#203e40" font-size="16" font-weight="400">Solicitação, decisões e histórico</text>
+<text x="766" y="532" fill="#203e40" font-size="16" font-weight="400">PostgreSQL · reservas</text>
+<rect x="1104" y="456" width="335" height="92" rx="13" fill="white" stroke="#bad2c9"/>
+<text x="1120" y="485" fill="#144f42" font-size="21" font-weight="650">Retiradas</text>
+<text x="1120" y="510" fill="#203e40" font-size="16" font-weight="400">Autorizações e entregas</text>
+<text x="1120" y="532" fill="#203e40" font-size="16" font-weight="400">PostgreSQL · retiradas</text>
+<text x="44" y="581" fill="#203e40" font-size="20" font-weight="400">CLI administrativa → Unidades     ·     Reservas → Unidades e Estoque     ·     Estoque → Unidades     ·     Retiradas → Reservas</text>
+<text x="42" y="637" fill="#145a49" font-size="26" font-weight="670">Coordenação da reserva</text>
+<rect x="42" y="656" width="315" height="92" rx="13" fill="white" stroke="#bad2c9"/>
+<text x="58" y="685" fill="#144f42" font-size="21" font-weight="650">Orquestrador da SAGA</text>
+<text x="58" y="710" fill="#203e40" font-size="16" font-weight="400">Confirmação e cancelamento</text>
+<text x="58" y="732" fill="#203e40" font-size="16" font-weight="400">PostgreSQL · execuções e etapas</text>
+<rect x="412" y="656" width="266" height="92" rx="13" fill="white" stroke="#bad2c9"/>
+<text x="428" y="685" fill="#144f42" font-size="21" font-weight="650">Reservas</text>
+<text x="428" y="710" fill="#203e40" font-size="16" font-weight="400">Registra o aceite</text>
+<text x="428" y="732" fill="#203e40" font-size="16" font-weight="400">EM_CONFIRMACAO</text>
+<rect x="735" y="656" width="270" height="92" rx="13" fill="white" stroke="#bad2c9"/>
+<text x="751" y="685" fill="#144f42" font-size="21" font-weight="650">Estoque</text>
+<text x="751" y="710" fill="#203e40" font-size="16" font-weight="400">Aloca a quantidade</text>
+<text x="751" y="732" fill="#203e40" font-size="16" font-weight="400">Compensação libera o saldo</text>
+<rect x="1062" y="656" width="375" height="92" rx="13" fill="white" stroke="#bad2c9"/>
+<text x="1078" y="685" fill="#144f42" font-size="21" font-weight="650">Retiradas → Reservas¹</text>
+<text x="1078" y="710" fill="#203e40" font-size="16" font-weight="400">Prepara a autorização</text>
+<text x="1078" y="732" fill="#203e40" font-size="16" font-weight="400">Pivô em Reservas · CONFIRMADA</text>
+<path d="M357 702 L408 702" fill="none" stroke="#33765f" stroke-width="2" marker-end="url(#arr)"/>
+<path d="M678 702 L731 702" fill="none" stroke="#33765f" stroke-width="2" marker-end="url(#arr)"/>
+<path d="M1005 702 L1058 702" fill="none" stroke="#33765f" stroke-width="2" marker-end="url(#arr)"/>
+<text x="43" y="780" fill="#203e40" font-size="18" font-weight="400">¹ Ordem das etapas. Cada comando parte do Orquestrador. Na compensação, a revogação precede a liberação da alocação.</text>
+<text x="43" y="807" fill="#203e40" font-size="18" font-weight="400">O BFF Cidadão solicita cancelamento distribuído. O BFF Unidade solicita confirmação e cancelamento distribuído.</text>
+<text x="42" y="862" fill="#145a49" font-size="26" font-weight="670">Mensageria e consistência eventual</text>
+<rect x="42" y="880" width="382" height="92" rx="13" fill="white" stroke="#bad2c9"/>
+<text x="58" y="909" fill="#144f42" font-size="21" font-weight="650">Outbox transacional</text>
+<text x="58" y="934" fill="#203e40" font-size="16" font-weight="400">Retiradas publica a entrega concluída.</text>
+<text x="58" y="956" fill="#203e40" font-size="16" font-weight="400">Estoque publica movimentações.</text>
+<rect x="481" y="880" width="300" height="92" rx="13" fill="white" stroke="#bad2c9"/>
+<text x="497" y="909" fill="#144f42" font-size="21" font-weight="650">RabbitMQ</text>
+<text x="497" y="934" fill="#203e40" font-size="16" font-weight="400">Filas duráveis por consumidor</text>
+<text x="497" y="956" fill="#203e40" font-size="16" font-weight="400">Entrega assíncrona</text>
+<rect x="840" y="880" width="597" height="92" rx="13" fill="white" stroke="#bad2c9"/>
+<text x="856" y="909" fill="#144f42" font-size="21" font-weight="650">Consumidores</text>
+<text x="856" y="934" fill="#203e40" font-size="16" font-weight="400">Entrega → Reservas, Estoque e Orquestrador</text>
+<text x="856" y="956" fill="#203e40" font-size="16" font-weight="400">Movimentação → projeção de disponibilidade do Estoque</text>
+<path d="M424 926 L477 926" fill="none" stroke="#33765f" stroke-width="2" marker-end="url(#arr)"/>
+<path d="M781 926 L836 926" fill="none" stroke="#33765f" stroke-width="2" marker-end="url(#arr)"/>
+<text x="42" y="1028" fill="#145a49" font-size="26" font-weight="670">Orientação com RAG</text>
+<rect x="42" y="1048" width="339" height="92" rx="13" fill="white" stroke="#bad2c9"/>
+<text x="58" y="1077" fill="#144f42" font-size="21" font-weight="650">BFF Cidadão</text>
+<text x="58" y="1102" fill="#203e40" font-size="16" font-weight="400">Encaminha a pergunta sobre o item.</text>
+<text x="58" y="1124" fill="#203e40" font-size="16" font-weight="400">Recebe orientação, fontes e consulta.</text>
+<rect x="439" y="1048" width="445" height="92" rx="13" fill="white" stroke="#bad2c9"/>
+<text x="455" y="1077" fill="#144f42" font-size="21" font-weight="650">Orientação · LangChain</text>
+<text x="455" y="1102" fill="#203e40" font-size="16" font-weight="400">Tool → BFF Cidadão → disponibilidade atual</text>
+<text x="455" y="1124" fill="#203e40" font-size="16" font-weight="400">Recuperação, geração, validação e fallback</text>
+<rect x="942" y="1048" width="495" height="92" rx="13" fill="white" stroke="#bad2c9"/>
+<text x="958" y="1077" fill="#144f42" font-size="21" font-weight="650">Google Gemini</text>
+<text x="958" y="1102" fill="#203e40" font-size="16" font-weight="400">Embeddings de documentos e perguntas</text>
+<text x="958" y="1124" fill="#203e40" font-size="16" font-weight="400">Geração estruturada a partir das evidências</text>
+<path d="M381 1094 L435 1094" fill="none" stroke="#33765f" stroke-width="2" marker-end="url(#arr)"/>
+<path d="M884 1094 L938 1094" fill="none" stroke="#33765f" stroke-width="2" marker-end="url(#arr)"/>
+<rect x="42" y="1162" width="339" height="92" rx="13" fill="white" stroke="#bad2c9"/>
+<text x="58" y="1191" fill="#144f42" font-size="21" font-weight="650">Guias do projeto</text>
+<text x="58" y="1216" fill="#203e40" font-size="16" font-weight="400">Base documental versionada</text>
+<text x="58" y="1238" fill="#203e40" font-size="16" font-weight="400">Solicitação, confirmação e retirada</text>
+<rect x="439" y="1162" width="445" height="92" rx="13" fill="white" stroke="#bad2c9"/>
+<text x="455" y="1191" fill="#144f42" font-size="21" font-weight="650">Indexador sob demanda</text>
+<text x="455" y="1216" fill="#203e40" font-size="16" font-weight="400">Divide os guias e solicita embeddings ao Gemini.</text>
+<text x="455" y="1238" fill="#203e40" font-size="16" font-weight="400">Atualiza o índice em uma transação.</text>
+<rect x="942" y="1162" width="495" height="92" rx="13" fill="white" stroke="#bad2c9"/>
+<text x="958" y="1191" fill="#144f42" font-size="21" font-weight="650">PostgreSQL · orientação</text>
+<text x="958" y="1216" fill="#203e40" font-size="16" font-weight="400">pgvector · índice persistido em volume próprio</text>
+<text x="958" y="1238" fill="#203e40" font-size="16" font-weight="400">Orientação consulta os trechos por similaridade.</text>
+<path d="M381 1208 L435 1208" fill="none" stroke="#33765f" stroke-width="2" marker-end="url(#arr)"/>
+<path d="M884 1208 L938 1208" fill="none" stroke="#33765f" stroke-width="2" marker-end="url(#arr)"/>
+<rect x="42" y="1290" width="1395" height="180" rx="13" fill="#dfefe8" stroke="none"/>
+<text x="66" y="1328" fill="#145a49" font-size="24" font-weight="670">Implantação · Docker Compose</text>
+<text x="66" y="1360" fill="#203e40" font-size="18" font-weight="400">Gateway publicado no loopback do host. Rede de borda entre Gateway e BFFs; rede interna entre BFFs e serviços.</text>
+<text x="66" y="1387" fill="#203e40" font-size="18" font-weight="400">Seis bancos independentes com volumes nomeados e redes de dados próprias. RabbitMQ usa a rede de mensageria.</text>
+<text x="66" y="1414" fill="#203e40" font-size="18" font-weight="400">CLI e Unidades compartilham a rede administrativa. Orientação e indexador acessam o Gemini pela rede de saída.</text>
+<text x="66" y="1441" fill="#203e40" font-size="18" font-weight="400">Base: 14 serviços permanentes. Perfil de orientação: mais 2 serviços. CLI e indexador são executados sob demanda.</text>
+</g></svg>

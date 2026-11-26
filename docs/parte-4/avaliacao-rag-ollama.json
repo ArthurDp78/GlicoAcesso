@@ -1,0 +1,236 @@
+{
+  "executado_em": "2026-11-25T14:34:26.258124+00:00",
+  "provedor": "Ollama local",
+  "modelo_geracao": "qwen2.5:3b",
+  "modelo_embedding": "ollama/qwen3-embedding:0.6b",
+  "temperatura": 0,
+  "limite_trechos": 4,
+  "distancia_maxima": 0.6,
+  "base": {
+    "confirmacao#acompanhar": {
+      "versao": 1,
+      "sha256": "64e24cece2f61fee34f0e21f1866ca0dbe249b92ac3cedcd84b472ebbbfb9c9e"
+    },
+    "confirmacao#sem-confirmacao": {
+      "versao": 1,
+      "sha256": "8b1e08689b7adcb2501f404d7d6d7712cff356131d172ab40d31ef9b67d592ed"
+    },
+    "disponibilidade#consulta": {
+      "versao": 1,
+      "sha256": "35a1b8d901f82518f4bd1776750fc23999d41364651b6f6bc4983f46bdcd17f2"
+    },
+    "disponibilidade#reserva-permitida": {
+      "versao": 1,
+      "sha256": "dfd4486f6fe1c041d3d2d4d941cebfdb61b973a5ed8c1f3e334cd07a52a178fa"
+    },
+    "retirada#balcao": {
+      "versao": 1,
+      "sha256": "b7f3bf466608b682e3584950ab8c10216d808b4a88ef46add9070f8a8ca4a97e"
+    },
+    "retirada#acompanhar-entrega": {
+      "versao": 1,
+      "sha256": "e4e986974c1ed2ef8d201b01ff8fe4c0e0bb5263f0d9a0a7a98965ef5f879956"
+    },
+    "solicitacao#enviar": {
+      "versao": 1,
+      "sha256": "e9ef245b2d6973cb43dd4570939bfde9a1f468cc3be8a7f65be442ffd7a67d63"
+    },
+    "solicitacao#cancelar": {
+      "versao": 1,
+      "sha256": "c353b54a902a9719fd996394c6ce1c7937ebb35da3e2140d9e73cdb7ea953370"
+    }
+  },
+  "prompt_sha256": "4764d4a08d378335f5b75052c049794ef9f92f7e0002ee0ae800925bb9cc00c6",
+  "item_id": "20000000-0000-4000-8000-000000000001",
+  "consulta_compartilhada": {
+    "status": "consultada",
+    "unidades": [
+      {
+        "unidadeId": "10000000-0000-4000-8000-000000000001",
+        "nomeUnidade": "Unidade de Demonstração",
+        "disponivel": true,
+        "permiteReserva": true,
+        "atualizadoEm": "2026-11-25T14:33:14.750270Z"
+      }
+    ]
+  },
+  "resultados": [
+    {
+      "caso": {
+        "id": "solicitacao",
+        "pergunta": "Como envio uma solicitação de reserva e onde encontro o código?",
+        "criterio": "Indicar Solicitar reserva, credencial e quantidade, envio e código gerado.",
+        "fontes": [
+          "solicitacao#enviar"
+        ]
+      },
+      "sem_recuperacao": {
+        "estado": "respondida",
+        "resposta": "Para solicitar uma reserva, você deve entrar em contato com a unidade de demonstração através do seu número de telefone ou e-mail fornecido. Para encontrar o código, você precisará confirmar sua reserva após a solicitação. O código de confirmação será enviado para o endereço de e-mail ou número de telefone que você fornecer durante a solicitação.",
+        "fontes": [
+          "fonte1"
+        ],
+        "citacoes_validas": false,
+        "fontes_recuperadas": []
+      },
+      "com_recuperacao": {
+        "estado": "respondida",
+        "resposta": "Para enviar uma solicitação de reserva, siga estes passos:\n\n1. **Consultar disponibilidade**: Escolha um item e clique em **Solicitar reserva** no cartão da **Unidade de Demonstração**.\n2. **Minhas reservas**: Informe a credencial do cidadão e uma quantidade inteira positiva. Confira a **Unidade de Demonstração** e clique em **Enviar solicitação**.\n\nAo registrar o pedido, o portal exibirá o estado **SOLICITADA** e preencherá o campo **Código da reserva**. Guarde esse código para acompanhar o pedido com a mesma credencial do cidadão. O estado **SOLICITADA** indica que o pedido aguarda decisão da unidade. A retirada só pode ser feita após a confirmação.",
+        "fontes": [
+          "solicitacao#enviar"
+        ],
+        "citacoes_validas": true,
+        "fontes_recuperadas": [
+          "solicitacao#enviar",
+          "solicitacao#cancelar",
+          "confirmacao#acompanhar",
+          "disponibilidade#reserva-permitida"
+        ]
+      }
+    },
+    {
+      "caso": {
+        "id": "confirmacao",
+        "pergunta": "Meu pedido está EM_CONFIRMACAO. Já posso ir ao balcão?",
+        "criterio": "Orientar a aguardar CONFIRMADA e consultar o pedido pelo código.",
+        "fontes": [
+          "confirmacao#acompanhar"
+        ]
+      },
+      "sem_recuperacao": {
+        "estado": "sem_evidencia",
+        "resposta": "Não é possível determinar se você pode ir ao balcão sem mais informações sobre a situação do pedido. Consulte o balcão para obter a confirmação mais precisa.",
+        "fontes": [],
+        "citacoes_validas": true,
+        "fontes_recuperadas": []
+      },
+      "com_recuperacao": {
+        "estado": "sem_evidencia",
+        "resposta": "Se o seu pedido está em **EM_CONFIRMACAO**, você não pode ir diretamente ao balcão para retirada. A confirmação está em processamento e ainda não foi confirmada. Você deve aguardar a confirmação, que pode levar alguns instantes. Após a confirmação, você poderá consultar novamente em **Minhas reservas** para verificar se o estado mudou para **CONFIRMADA**. Se o estado permanecer em **EM_CONFIRMACAO**, entre em contato com a unidade para esclarecer o motivo e tomar as próximas ações apropriadas.",
+        "fontes": [
+          "confirmacao#sem-confirmacao"
+        ],
+        "citacoes_validas": true,
+        "fontes_recuperadas": [
+          "retirada#acompanhar-entrega",
+          "retirada#balcao",
+          "confirmacao#acompanhar",
+          "confirmacao#sem-confirmacao"
+        ]
+      }
+    },
+    {
+      "caso": {
+        "id": "retirada",
+        "pergunta": "Como retirar uma reserva confirmada no balcão?",
+        "criterio": "Indicar levar o código e seguir as orientações de retirada da unidade.",
+        "fontes": [
+          "retirada#balcao"
+        ]
+      },
+      "sem_recuperacao": {
+        "estado": "sem_evidencia",
+        "resposta": "",
+        "fontes": [],
+        "citacoes_validas": true,
+        "fontes_recuperadas": []
+      },
+      "com_recuperacao": {
+        "estado": "sem_evidencia",
+        "resposta": "Para retirar uma reserva confirmada no balcão, consulte a reserva em **Minhas reservas** e verifique se o estado está **CONFIRMADA**. No cartão da unidade, confira o endereço, o horário e o campo **Orientações de retirada**. Siga as instruções exibidas para aquela unidade. Leve o código da reserva para que o profissional localize o pedido. No balcão, o profissional consulta a reserva pelo código. Para registrar a entrega, o sistema exige uma reserva confirmada e uma autorização ativa. O registro é feito no painel da unidade.",
+        "fontes": [],
+        "citacoes_validas": true,
+        "fontes_recuperadas": [
+          "retirada#balcao",
+          "solicitacao#cancelar",
+          "retirada#acompanhar-entrega",
+          "confirmacao#acompanhar"
+        ]
+      }
+    },
+    {
+      "caso": {
+        "id": "cancelamento",
+        "pergunta": "Como cancelar uma reserva e o que faço se ficar em processamento?",
+        "criterio": "Indicar Cancelar reserva quando disponível e consultar de novo pelo código.",
+        "fontes": [
+          "solicitacao#cancelar"
+        ]
+      },
+      "sem_recuperacao": {
+        "estado": "sem_evidencia",
+        "resposta": "Para cancelar uma reserva no GlicoAcesso, você deve entrar em contato diretamente com o atendimento ao cliente da rede de unidades. Se a sua reserva estiver em processamento, isso significa que ainda está sendo aguardada para ser confirmada ou cancelada. Em casos de processamento, recomendamos entrar em contato para verificar o status da sua reserva.",
+        "fontes": [],
+        "citacoes_validas": true,
+        "fontes_recuperadas": []
+      },
+      "com_recuperacao": {
+        "estado": "sem_evidencia",
+        "resposta": "Para cancelar uma reserva, consulte **Minhas reservas** e clique no botão **Cancelar reserva** quando estiver disponível. O sistema informará se a reserva foi cancelada ou se está em processamento. Se estiver em processamento, consulte novamente pelo código para acompanhar o resultado.",
+        "fontes": [
+          "solicitacao#cancelar"
+        ],
+        "citacoes_validas": true,
+        "fontes_recuperadas": [
+          "solicitacao#cancelar",
+          "confirmacao#acompanhar",
+          "retirada#acompanhar-entrega",
+          "confirmacao#sem-confirmacao"
+        ]
+      }
+    },
+    {
+      "caso": {
+        "id": "disponibilidade",
+        "pergunta": "Onde posso solicitar reserva para o item selecionado e como conferir se posso reservar?",
+        "criterio": "Identificar as unidades conforme a consulta e distinguir disponibilidade de permissão.",
+        "fontes": [
+          "disponibilidade#reserva-permitida"
+        ]
+      },
+      "sem_recuperacao": {
+        "estado": "respondida",
+        "resposta": "Você pode solicitar uma reserva para o item selecionado na Unidade de Demonstração, pois a disponibilidade é verdadeira e permiteReserva também é verdadeiro. Para conferir a disponibilidade, verifique a unidade de demonstração disponibilizada pela API.",
+        "fontes": [
+          "{'unidadeId': '10000000-0000-4000-8000-000000000001', 'nomeUnidade': 'Unidade de Demonstração', 'disponivel': true, 'permiteReserva': true, 'atualizadoEm': '2026-11-25T14:33:14.750270Z'}"
+        ],
+        "citacoes_validas": false,
+        "fontes_recuperadas": []
+      },
+      "com_recuperacao": {
+        "estado": "sem_evidencia",
+        "resposta": "Para solicitar uma reserva, você deve seguir os passos abaixo, baseados nos trechos fornecidos e na consulta à API do GlicoAcesso. Em **Consultar disponibilidade**, escolha um item e clique em **Solicitar reserva** no cartão da unidade de demonstração. Em **Minhas reservas**, informe a credencial do cidadão e uma quantidade inteira positiva. Confira a unidade selecionada e clique em **Enviar solicitação**. O estado **SOLICITADA** indica que o pedido aguarda decisão da unidade. Para conferir se posso reservar, verifique a consulta à API do GlicoAcesso, que mostra que a unidade de demonstração tem disponibilidade e permite reserva. Se a unidade não permitir reservas, o botão **Solicitar reserva** não aparecerá. Se a consulta falhar, tente novamente. Para acompanhar a reserva, informe a credencial do cidadão e o código recebido ao solicitar em **Minhas reservas** e clique em **Consultar reserva**. O estado **SOLICITADA** indica que o pedido aguarda decisão da unidade.",
+        "fontes": [],
+        "citacoes_validas": true,
+        "fontes_recuperadas": [
+          "solicitacao#enviar",
+          "disponibilidade#reserva-permitida",
+          "solicitacao#cancelar",
+          "confirmacao#acompanhar"
+        ]
+      }
+    },
+    {
+      "caso": {
+        "id": "fora_da_base",
+        "pergunta": "Como consigo a segunda via do meu cartão de transporte?",
+        "criterio": "Indicar informação insuficiente ou tema fora do escopo sem inventar instruções.",
+        "fontes": []
+      },
+      "sem_recuperacao": {
+        "estado": "sem_evidencia",
+        "resposta": "",
+        "fontes": [],
+        "citacoes_validas": true,
+        "fontes_recuperadas": []
+      },
+      "com_recuperacao": {
+        "estado": "sem_evidencia",
+        "resposta": "",
+        "fontes": [],
+        "citacoes_validas": true,
+        "fontes_recuperadas": []
+      }
+    }
+  ]
+}

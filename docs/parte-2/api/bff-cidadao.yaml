@@ -254,3 +254,72 @@ paths:
 
         '422': { description: "Parâmetro, cabeçalho ou corpo inválido, inclusive campo não previsto." }
         '503': { description: "Serviço temporariamente indisponível. Em comandos, repita com a mesma chave e conteúdo." }
+  /orientacoes:
+    post:
+      summary: Orientar o cidadão sobre um item do catálogo
+      operationId: orientarCidadao
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [itemId, pergunta]
+              properties:
+                itemId: { type: string, format: uuid }
+                pergunta: { type: string, minLength: 1, maxLength: 500 }
+      responses:
+        '200':
+          description: Orientação e resultado estruturado da consulta de disponibilidade.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [modo, resposta, fontes, consulta]
+                properties:
+                  modo:
+                    type: string
+                    enum: [rag, orientacao_basica, fora_do_escopo]
+                  resposta: { type: string }
+                  fontes:
+                    type: array
+                    items:
+                      type: object
+                      required: [id, titulo, secao]
+                      properties:
+                        id: { type: string }
+                        titulo: { type: string }
+                        secao: { type: string }
+                  consulta:
+                    type: object
+                    required: [status, unidades]
+                    properties:
+                      status:
+                        type: string
+                        enum: [consultada, indisponivel, nao_consultada]
+                      unidades:
+                        type: array
+                        items:
+                          type: object
+                          required: [unidadeId, nomeUnidade, disponivel, permiteReserva, atualizadoEm]
+                          properties:
+                            unidadeId: { type: string, format: uuid }
+                            nomeUnidade: { type: string }
+                            disponivel: { type: boolean }
+                            permiteReserva: { type: boolean }
+                            atualizadoEm: { type: string, format: date-time }
+        '401': { description: Credencial ausente ou inválida. }
+        '403': { description: Operação exclusiva do cidadão. }
+        '404': { description: Item ausente do catálogo. }
+        '422': { description: Dados da pergunta inválidos. }
+        '429':
+          description: Limite de chamadas ou de capacidade atingido.
+          headers:
+            Retry-After:
+              schema: { type: integer }
+        '502': { description: Serviço interno inacessível ou resposta inválida. }
+        '503': { description: Orientação temporariamente indisponível. }
+        '504': { description: Tempo de comunicação com serviço interno excedido. }

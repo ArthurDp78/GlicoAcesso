@@ -64,6 +64,8 @@ services:
       UNIDADES_URL: "http://unidades:8002"
       ESTOQUE_URL: "http://estoque:8003"
       RESERVAS_URL: "http://reservas:8004"
+      ORIENTACAO_URL: "http://orientacao:8008"
+      GLICO_ORIENTACAO_SERVICE_TOKEN: "${GLICO_ORIENTACAO_SERVICE_TOKEN:-}"
     networks: [borda, servicos]
     depends_on:
       orquestrador:

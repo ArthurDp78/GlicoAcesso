@@ -1,0 +1,63 @@
+services:
+  db-orientacao:
+    image: pgvector/pgvector:0.8.7-pg17
+    environment:
+      POSTGRES_USER: glico
+      POSTGRES_DB: orientacao
+      POSTGRES_PASSWORD: ${ORIENTACAO_DB_PASSWORD:?Configure ORIENTACAO_DB_PASSWORD}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U glico -d orientacao"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    volumes: [dados-orientacao:/var/lib/postgresql/data]
+    networks: [dados-orientacao]
+
+  indexar-orientacao:
+    profiles: [indexacao]
+    build:
+      context: .
+      dockerfile: servicos/orientacao/Dockerfile
+    depends_on:
+      db-orientacao:
+        condition: service_healthy
+    environment:
+      ORIENTACAO_DATABASE_URL: postgresql://glico:${ORIENTACAO_DB_PASSWORD:?Configure ORIENTACAO_DB_PASSWORD}@db-orientacao:5432/orientacao
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      GOOGLE_GENAI_USE_VERTEXAI: "false"
+      ORIENTACAO_MODELO_EMBEDDING: ${ORIENTACAO_MODELO_EMBEDDING:-gemini-embedding-2}
+    networks: [dados-orientacao, provedor]
+
+  orientacao:
+    profiles: [orientacao]
+    build:
+      context: .
+      dockerfile: servicos/orientacao/Dockerfile
+    command: ["sh", "-ec", "python -m servicos.migracoes orientacao && exec python -m uvicorn servicos.orientacao.main:app --host 0.0.0.0 --port 8008"]
+    depends_on:
+      db-orientacao:
+        condition: service_healthy
+    environment:
+      ORIENTACAO_DATABASE_URL: postgresql://glico:${ORIENTACAO_DB_PASSWORD:?Configure ORIENTACAO_DB_PASSWORD}@db-orientacao:5432/orientacao
+      BFF_CIDADAO_URL: http://bff-cidadao:8001
+      GLICO_ORIENTACAO_SERVICE_TOKEN: ${GLICO_ORIENTACAO_SERVICE_TOKEN:-}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      GOOGLE_GENAI_USE_VERTEXAI: "false"
+      ORIENTACAO_MODELO_EMBEDDING: ${ORIENTACAO_MODELO_EMBEDDING:-gemini-embedding-2}
+      ORIENTACAO_MODELO_GERACAO: ${ORIENTACAO_MODELO_GERACAO:-gemini-3.5-flash-lite}
+    healthcheck:
+      test: ["CMD", "python", "-c", "from urllib.request import urlopen; urlopen('http://127.0.0.1:8008/health', timeout=2).close()"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+    networks: [servicos, dados-orientacao, provedor]
+
+networks:
+  servicos:
+    internal: true
+  dados-orientacao:
+    internal: true
+  provedor:
+
+volumes:
+  dados-orientacao:

@@ -1,0 +1,330 @@
+{
+  "executado_em": "2026-11-25T14:41:46.260579+00:00",
+  "modelos_locais": {
+    "embedding": "qwen3-embedding:0.6b",
+    "geracao": "qwen2.5:3b"
+  },
+  "tarifas_openai": {
+    "data": "2026-11-25",
+    "usd_por_milhao": {
+      "embedding": 0.02,
+      "entrada": 0.4,
+      "saida": 1.6
+    }
+  },
+  "amostras": [
+    {
+      "rodada": 1,
+      "caso": "solicitacao",
+      "modo": "orientacao_basica",
+      "chamadas_geracao": 3,
+      "ms_total": 12002.654,
+      "ms_etapas": {
+        "bff": 184.224,
+        "embedding": 77.692,
+        "busca_vetorial": 13.577,
+        "geracao": 10946.044,
+        "chain_e_validacao": 781.116
+      },
+      "tokens_ollama": {
+        "embedding": 17,
+        "entrada": 0,
+        "saida": 0
+      },
+      "tokens_estimados_openai": {
+        "embedding": 16,
+        "entrada": 3246,
+        "saida": 0
+      },
+      "custo_estimado_openai_usd": 0.00129872
+    },
+    {
+      "rodada": 1,
+      "caso": "confirmacao",
+      "modo": "orientacao_basica",
+      "chamadas_geracao": 2,
+      "ms_total": 12015.189,
+      "ms_etapas": {
+        "bff": 103.375,
+        "embedding": 3164.187,
+        "busca_vetorial": 8.784,
+        "geracao": 8023.542,
+        "chain_e_validacao": 715.302
+      },
+      "tokens_ollama": {
+        "embedding": 20,
+        "entrada": 0,
+        "saida": 0
+      },
+      "tokens_estimados_openai": {
+        "embedding": 20,
+        "entrada": 2152,
+        "saida": 0
+      },
+      "custo_estimado_openai_usd": 0.0008612
+    },
+    {
+      "rodada": 1,
+      "caso": "retirada",
+      "modo": "orientacao_basica",
+      "chamadas_geracao": 3,
+      "ms_total": 12003.781,
+      "ms_etapas": {
+        "bff": 94.027,
+        "embedding": 3018.78,
+        "busca_vetorial": 19.799,
+        "geracao": 8091.173,
+        "chain_e_validacao": 780.002
+      },
+      "tokens_ollama": {
+        "embedding": 13,
+        "entrada": 0,
+        "saida": 0
+      },
+      "tokens_estimados_openai": {
+        "embedding": 12,
+        "entrada": 3036,
+        "saida": 0
+      },
+      "custo_estimado_openai_usd": 0.0012146400000000001
+    },
+    {
+      "rodada": 1,
+      "caso": "cancelamento",
+      "modo": "orientacao_basica",
+      "chamadas_geracao": 2,
+      "ms_total": 12014.133,
+      "ms_etapas": {
+        "bff": 101.434,
+        "embedding": 3235.007,
+        "busca_vetorial": 30.679,
+        "geracao": 8009.188,
+        "chain_e_validacao": 637.824
+      },
+      "tokens_ollama": {
+        "embedding": 18,
+        "entrada": 0,
+        "saida": 0
+      },
+      "tokens_estimados_openai": {
+        "embedding": 17,
+        "entrada": 2050,
+        "saida": 0
+      },
+      "custo_estimado_openai_usd": 0.00082034
+    },
+    {
+      "rodada": 1,
+      "caso": "disponibilidade",
+      "modo": "orientacao_basica",
+      "chamadas_geracao": 3,
+      "ms_total": 12002.775,
+      "ms_etapas": {
+        "bff": 96.814,
+        "embedding": 2997.632,
+        "busca_vetorial": 21.589,
+        "geracao": 8109.758,
+        "chain_e_validacao": 776.983
+      },
+      "tokens_ollama": {
+        "embedding": 23,
+        "entrada": 0,
+        "saida": 0
+      },
+      "tokens_estimados_openai": {
+        "embedding": 22,
+        "entrada": 3255,
+        "saida": 0
+      },
+      "custo_estimado_openai_usd": 0.00130244
+    },
+    {
+      "rodada": 1,
+      "caso": "fora_da_base",
+      "modo": "orientacao_basica",
+      "chamadas_geracao": 0,
+      "ms_total": 3626.694,
+      "ms_etapas": {
+        "bff": 107.025,
+        "embedding": 3498.653,
+        "busca_vetorial": 19.39,
+        "geracao": 0.0,
+        "chain_e_validacao": 1.626
+      },
+      "tokens_ollama": {
+        "embedding": 14,
+        "entrada": 0,
+        "saida": 0
+      },
+      "tokens_estimados_openai": {
+        "embedding": 13,
+        "entrada": 0,
+        "saida": 0
+      },
+      "custo_estimado_openai_usd": 2.6e-07
+    },
+    {
+      "rodada": 2,
+      "caso": "solicitacao",
+      "modo": "orientacao_basica",
+      "chamadas_geracao": 3,
+      "ms_total": 12006.744,
+      "ms_etapas": {
+        "bff": 96.414,
+        "embedding": 53.485,
+        "busca_vetorial": 18.975,
+        "geracao": 11059.973,
+        "chain_e_validacao": 777.897
+      },
+      "tokens_ollama": {
+        "embedding": 17,
+        "entrada": 0,
+        "saida": 0
+      },
+      "tokens_estimados_openai": {
+        "embedding": 16,
+        "entrada": 3246,
+        "saida": 0
+      },
+      "custo_estimado_openai_usd": 0.00129872
+    },
+    {
+      "rodada": 2,
+      "caso": "confirmacao",
+      "modo": "orientacao_basica",
+      "chamadas_geracao": 2,
+      "ms_total": 12009.021,
+      "ms_etapas": {
+        "bff": 104.191,
+        "embedding": 3095.572,
+        "busca_vetorial": 23.771,
+        "geracao": 8007.618,
+        "chain_e_validacao": 777.87
+      },
+      "tokens_ollama": {
+        "embedding": 20,
+        "entrada": 0,
+        "saida": 0
+      },
+      "tokens_estimados_openai": {
+        "embedding": 20,
+        "entrada": 2152,
+        "saida": 0
+      },
+      "custo_estimado_openai_usd": 0.0008612
+    },
+    {
+      "rodada": 2,
+      "caso": "retirada",
+      "modo": "orientacao_basica",
+      "chamadas_geracao": 2,
+      "ms_total": 12010.504,
+      "ms_etapas": {
+        "bff": 96.638,
+        "embedding": 3261.455,
+        "busca_vetorial": 33.256,
+        "geracao": 8014.204,
+        "chain_e_validacao": 604.951
+      },
+      "tokens_ollama": {
+        "embedding": 13,
+        "entrada": 0,
+        "saida": 0
+      },
+      "tokens_estimados_openai": {
+        "embedding": 12,
+        "entrada": 2024,
+        "saida": 0
+      },
+      "custo_estimado_openai_usd": 0.00080984
+    },
+    {
+      "rodada": 2,
+      "caso": "cancelamento",
+      "modo": "orientacao_basica",
+      "chamadas_geracao": 3,
+      "ms_total": 12001.332,
+      "ms_etapas": {
+        "bff": 97.109,
+        "embedding": 3032.719,
+        "busca_vetorial": 8.177,
+        "geracao": 8085.909,
+        "chain_e_validacao": 777.418
+      },
+      "tokens_ollama": {
+        "embedding": 18,
+        "entrada": 0,
+        "saida": 0
+      },
+      "tokens_estimados_openai": {
+        "embedding": 17,
+        "entrada": 3075,
+        "saida": 0
+      },
+      "custo_estimado_openai_usd": 0.00123034
+    },
+    {
+      "rodada": 2,
+      "caso": "disponibilidade",
+      "modo": "orientacao_basica",
+      "chamadas_geracao": 2,
+      "ms_total": 12011.221,
+      "ms_etapas": {
+        "bff": 102.86,
+        "embedding": 3516.066,
+        "busca_vetorial": 8.828,
+        "geracao": 8024.515,
+        "chain_e_validacao": 358.952
+      },
+      "tokens_ollama": {
+        "embedding": 23,
+        "entrada": 0,
+        "saida": 0
+      },
+      "tokens_estimados_openai": {
+        "embedding": 22,
+        "entrada": 2170,
+        "saida": 0
+      },
+      "custo_estimado_openai_usd": 0.00086844
+    },
+    {
+      "rodada": 2,
+      "caso": "fora_da_base",
+      "modo": "orientacao_basica",
+      "chamadas_geracao": 0,
+      "ms_total": 3236.301,
+      "ms_etapas": {
+        "bff": 125.163,
+        "embedding": 3078.823,
+        "busca_vetorial": 30.042,
+        "geracao": 0.0,
+        "chain_e_validacao": 2.273
+      },
+      "tokens_ollama": {
+        "embedding": 14,
+        "entrada": 0,
+        "saida": 0
+      },
+      "tokens_estimados_openai": {
+        "embedding": 13,
+        "entrada": 0,
+        "saida": 0
+      },
+      "custo_estimado_openai_usd": 2.6e-07
+    }
+  ],
+  "estimativa_indexacao": {
+    "trechos": 8,
+    "tokens": 1126,
+    "usd": 2.252e-05
+  },
+  "projecao_usd": {
+    "por_consulta": 0.0008805333333333333,
+    "por_volume": {
+      "1000": 0.8805333333333334,
+      "10000": 8.805333333333333,
+      "100000": 88.05333333333333
+    }
+  }
+}

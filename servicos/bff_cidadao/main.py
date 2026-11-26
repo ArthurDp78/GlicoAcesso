@@ -1,5 +1,6 @@
 import asyncio
 import os
+from time import monotonic
 from typing import Annotated, Literal
 from uuid import UUID
 
@@ -8,6 +9,10 @@ from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from servicos.bff import INDISPONIVEL, RESPOSTA_PROCESSAMENTO, RespostaRecusada, Servicos, criar_app, encaminhar
 from servicos.comandos import Chave
+from servicos.contratos_orientacao import (
+    PedidoOrientacao, RespostaOrientacao, ROTA_INTERNA_ORIENTACAO, ROTA_ORIENTACAO, TOKEN_ORIENTACAO,
+)
+from servicos.correlacao import CABECALHO
 from servicos.contratos_reserva import CANCELAVEIS, DadosReserva, LinkReserva, PedidoReserva, ReservaPublica
 from servicos.erros import entrada_invalida_400
 from servicos.identidade_demo import TOKEN_BFF_CIDADAO, TOKEN_CIDADAO, Ator, ator_autenticado
@@ -114,6 +119,47 @@ async def explorar(servicos: DoBff, itemId: UUID):
 
     resultados = await asyncio.gather(*(combinar(unidade) for unidade in unidades))
     return [resultado for resultado in resultados if resultado is not None]
+
+
+@app.post(ROTA_ORIENTACAO, response_model=RespostaOrientacao)
+async def orientar_cidadao(request: Request, response: Response, pedido: PedidoOrientacao, servicos: DoBff,
+                           ator: Cidadao):
+    token = os.getenv(TOKEN_ORIENTACAO, "")
+    if len(token) < 32:
+        raise HTTPException(503, "A orientação está indisponível no momento.")
+
+    janela = int(monotonic() // 60)
+    if getattr(app.state, "janela_orientacao", None) != janela:
+        app.state.janela_orientacao = janela
+        app.state.chamadas_orientacao = {}
+    chamadas = app.state.chamadas_orientacao
+    if chamadas.get(ator.id, 0) >= 10:
+        raise HTTPException(429, "Limite de orientações atingido.", headers={"Retry-After": "60"})
+    chamadas[ator.id] = chamadas.get(ator.id, 0) + 1
+
+    itens = await listar_itens(servicos)
+    if not any(item.itemId == pedido.itemId for item in itens):
+        raise HTTPException(404, "Item não encontrado no catálogo.")
+
+    origem = os.getenv("ORIENTACAO_URL", "http://127.0.0.1:8008").rstrip("/")
+    try:
+        resposta = await requisitar(
+            request.app.state.http, "POST", origem + ROTA_INTERNA_ORIENTACAO,
+            headers={"Authorization": f"Bearer {token}", CABECALHO: request.state.correlacao},
+            json=pedido.model_dump(mode="json"), timeout=14.0,
+        )
+    except HTTPException as erro:
+        raise HTTPException(503, "A orientação está indisponível no momento.") from erro
+    if resposta.status_code == 429:
+        raise HTTPException(429, "Serviço de orientação ocupado.",
+                            headers={"Retry-After": resposta.headers.get("Retry-After", "2")})
+    response.headers["Cache-Control"] = "no-store"
+    if resposta.status_code != 200:
+        raise HTTPException(503, "A orientação está indisponível no momento.")
+    try:
+        return RespostaOrientacao.model_validate_json(resposta.content)
+    except ValidationError as erro:
+        raise HTTPException(503, "A orientação está indisponível no momento.") from erro
 
 
 # --- Reservas do cidadão ---

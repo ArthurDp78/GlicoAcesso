@@ -48,6 +48,21 @@
       <div id="lista" class="lista"></div>
     </section>
 
+    <section class="consulta" id="orientacao" aria-labelledby="titulo-orientacao" hidden>
+      <h2 id="titulo-orientacao">Orientação sobre o item</h2>
+      <form id="perguntar-orientacao">
+        <div class="campo">
+          <label for="pergunta-orientacao">Sua pergunta</label>
+          <input id="pergunta-orientacao" type="text" required maxlength="500"
+                 placeholder="Como faço para reservar e retirar?" aria-describedby="ajuda-orientacao">
+        </div>
+        <button type="submit">Pedir orientação</button>
+      </form>
+      <p id="ajuda-orientacao" class="status">Use o token do cidadão em Minhas reservas. Evite incluir dados pessoais na pergunta.</p>
+      <p id="status-orientacao" class="status" role="status" aria-live="polite"></p>
+      <div id="resultado-orientacao"></div>
+    </section>
+
     <section class="consulta" aria-labelledby="titulo-reserva">
       <h2 id="titulo-reserva">Minhas reservas</h2>
       <div class="campo credencial">

@@ -5,6 +5,10 @@
 !.python-version
 !servicos/
 !servicos/**
+!docs/
+!docs/parte-4/
+!docs/parte-4/base-conhecimento/
+!docs/parte-4/base-conhecimento/*.md
 !identidade-visual/
 !identidade-visual/logo-sem-fundo.png
 

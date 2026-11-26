@@ -16,6 +16,7 @@ OPERACOES = {
     CIDADAO: (
         *(("GET", caminho) for caminho in PUBLICAS),
         ("POST", "/reservas"), ("GET", "/reservas/{reservaId}"), ("POST", "/reservas/{reservaId}/cancelar"),
+        ("POST", "/orientacoes"),
     ),
     UNIDADE: (
         ("GET", "/unidade"), ("PUT", "/unidade"), ("PUT", "/unidade/horarios"), ("PUT", "/unidade/prazo-analise"),
@@ -32,7 +33,9 @@ OPERACOES = {
 COM_400 = ("/reservas/{reservaId}/decisao", "/reservas/{reservaId}/cancelar")
 # Listas fechadas: cabeçalhos de identidade delegada (X-Ator-*) e quaisquer outros não atravessam a borda.
 CABECALHOS_DE_IDA = ("authorization", "idempotency-key", "content-type")
-CABECALHOS_DE_VOLTA = ("content-type", "cache-control", "location", "www-authenticate")
+CABECALHOS_DE_VOLTA = ("content-type", "cache-control", "location", "www-authenticate", "retry-after")
+# Consultas por POST: não criam recurso e dispensam Idempotency-Key.
+SEM_CHAVE = ("/orientacoes",)
 LIMITE_CORPO_BYTES = 1_048_576
 
 
@@ -100,7 +103,7 @@ def instalar(app: FastAPI) -> None:
                 "name": "X-Correlation-Id", "in": "header", "required": False,
                 "schema": {"type": "string", "format": "uuid"},
             })
-            if metodo in ("POST", "PUT", "PATCH"):
+            if metodo in ("POST", "PUT", "PATCH") and caminho not in SEM_CHAVE:
                 parametros.append({
                     "name": "Idempotency-Key", "in": "header", "required": True,
                     "schema": {"type": "string", "minLength": 1, "maxLength": 128},

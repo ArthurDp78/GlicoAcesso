@@ -1,0 +1,30 @@
+[
+  {
+    "http": 200,
+    "segundos": 1.739,
+    "modo": "rag",
+    "fontes": [
+      "retirada#balcao",
+      "solicitacao#enviar"
+    ],
+    "consulta": "consultada"
+  },
+  {
+    "http": 200,
+    "segundos": 1.376,
+    "modo": "rag",
+    "fontes": [
+      "retirada#balcao"
+    ],
+    "consulta": "consultada"
+  },
+  {
+    "http": 200,
+    "segundos": 7.356,
+    "modo": "rag",
+    "fontes": [
+      "retirada#balcao"
+    ],
+    "consulta": "consultada"
+  }
+]

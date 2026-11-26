@@ -1,0 +1,366 @@
+{
+  "executado_em": "2026-11-25T16:48:57.588693+00:00",
+  "provedor": "Google AI Studio",
+  "modelo_geracao": "gemini-3.5-flash-lite",
+  "modelo_embedding": "gemini-embedding-2",
+  "temperatura": "padrao_do_provedor",
+  "limite_trechos": 4,
+  "distancia_maxima": 0.6,
+  "base": {
+    "confirmacao#acompanhar": {
+      "versao": 1,
+      "sha256": "64e24cece2f61fee34f0e21f1866ca0dbe249b92ac3cedcd84b472ebbbfb9c9e"
+    },
+    "confirmacao#sem-confirmacao": {
+      "versao": 1,
+      "sha256": "8b1e08689b7adcb2501f404d7d6d7712cff356131d172ab40d31ef9b67d592ed"
+    },
+    "disponibilidade#consulta": {
+      "versao": 1,
+      "sha256": "35a1b8d901f82518f4bd1776750fc23999d41364651b6f6bc4983f46bdcd17f2"
+    },
+    "disponibilidade#reserva-permitida": {
+      "versao": 1,
+      "sha256": "dfd4486f6fe1c041d3d2d4d941cebfdb61b973a5ed8c1f3e334cd07a52a178fa"
+    },
+    "retirada#balcao": {
+      "versao": 1,
+      "sha256": "b7f3bf466608b682e3584950ab8c10216d808b4a88ef46add9070f8a8ca4a97e"
+    },
+    "retirada#acompanhar-entrega": {
+      "versao": 1,
+      "sha256": "e4e986974c1ed2ef8d201b01ff8fe4c0e0bb5263f0d9a0a7a98965ef5f879956"
+    },
+    "solicitacao#enviar": {
+      "versao": 1,
+      "sha256": "e9ef245b2d6973cb43dd4570939bfde9a1f468cc3be8a7f65be442ffd7a67d63"
+    },
+    "solicitacao#cancelar": {
+      "versao": 1,
+      "sha256": "c353b54a902a9719fd996394c6ce1c7937ebb35da3e2140d9e73cdb7ea953370"
+    }
+  },
+  "prompt_sha256": "4764d4a08d378335f5b75052c049794ef9f92f7e0002ee0ae800925bb9cc00c6",
+  "item_id": "31a8296a-87a9-58ef-b8fc-a2248dab22b3",
+  "consulta_compartilhada": {
+    "status": "consultada",
+    "unidades": []
+  },
+  "resultados": [
+    {
+      "caso": {
+        "id": "solicitacao",
+        "pergunta": "Como envio uma solicitação de reserva e onde encontro o código?",
+        "criterio": "Indicar Solicitar reserva, credencial e quantidade, envio e código gerado.",
+        "fontes": [
+          "solicitacao#enviar"
+        ]
+      },
+      "sem_recuperacao": {
+        "estado": "sem_evidencia",
+        "resposta": "",
+        "fontes": [],
+        "geracao_segundos": 1.784,
+        "uso_geracao": {
+          "gemini-3.5-flash-lite": {
+            "input_tokens": 273,
+            "output_tokens": 27,
+            "total_tokens": 300,
+            "input_token_details": {
+              "cache_read": 0
+            }
+          }
+        },
+        "citacoes_validas": true,
+        "fontes_recuperadas": []
+      },
+      "com_recuperacao": {
+        "estado": "respondida",
+        "resposta": "Para enviar uma solicitação, acesse Consultar disponibilidade, escolha um item e clique em Solicitar reserva no cartão da unidade desejada, ou vá em Minhas reservas, informe a credencial e a quantidade, confira a unidade e clique em Enviar solicitação. O código da reserva é exibido pelo portal no momento em que o pedido é registrado, com o estado SOLICITADA.",
+        "fontes": [
+          "solicitacao#enviar"
+        ],
+        "geracao_segundos": 10.636,
+        "uso_geracao": {
+          "gemini-3.5-flash-lite": {
+            "input_tokens": 878,
+            "output_tokens": 104,
+            "total_tokens": 982,
+            "input_token_details": {
+              "cache_read": 0
+            }
+          }
+        },
+        "citacoes_validas": true,
+        "fontes_recuperadas": [
+          "solicitacao#enviar",
+          "solicitacao#cancelar",
+          "confirmacao#acompanhar",
+          "disponibilidade#reserva-permitida"
+        ]
+      }
+    },
+    {
+      "caso": {
+        "id": "confirmacao",
+        "pergunta": "Meu pedido está EM_CONFIRMACAO. Já posso ir ao balcão?",
+        "criterio": "Orientar a aguardar CONFIRMADA e consultar o pedido pelo código.",
+        "fontes": [
+          "confirmacao#acompanhar"
+        ]
+      },
+      "sem_recuperacao": {
+        "estado": "sem_evidencia",
+        "resposta": "",
+        "fontes": [],
+        "geracao_segundos": 0.943,
+        "uso_geracao": {
+          "gemini-3.5-flash-lite": {
+            "input_tokens": 277,
+            "output_tokens": 27,
+            "total_tokens": 304,
+            "input_token_details": {
+              "cache_read": 0
+            }
+          }
+        },
+        "citacoes_validas": true,
+        "fontes_recuperadas": []
+      },
+      "com_recuperacao": {
+        "estado": "respondida",
+        "resposta": "Ainda não vá ao balcão. O estado EM_CONFIRMACAO indica que o profissional aceitou o pedido e a confirmação está em processamento, sendo necessário que o sistema aloque o item no estoque e prepare a autorização de retirada. Apenas vá ao balcão quando o estado for CONFIRMADA.",
+        "fontes": [
+          "confirmacao#acompanhar"
+        ],
+        "geracao_segundos": 3.658,
+        "uso_geracao": {
+          "gemini-3.5-flash-lite": {
+            "input_tokens": 870,
+            "output_tokens": 90,
+            "total_tokens": 960,
+            "input_token_details": {
+              "cache_read": 0
+            }
+          }
+        },
+        "citacoes_validas": true,
+        "fontes_recuperadas": [
+          "retirada#acompanhar-entrega",
+          "confirmacao#acompanhar",
+          "retirada#balcao",
+          "confirmacao#sem-confirmacao"
+        ]
+      }
+    },
+    {
+      "caso": {
+        "id": "retirada",
+        "pergunta": "Como retirar uma reserva confirmada no balcão?",
+        "criterio": "Indicar levar o código e seguir as orientações de retirada da unidade.",
+        "fontes": [
+          "retirada#balcao"
+        ]
+      },
+      "sem_recuperacao": {
+        "estado": "sem_evidencia",
+        "resposta": "",
+        "fontes": [],
+        "geracao_segundos": 1.344,
+        "uso_geracao": {
+          "gemini-3.5-flash-lite": {
+            "input_tokens": 271,
+            "output_tokens": 14,
+            "total_tokens": 285,
+            "input_token_details": {
+              "cache_read": 0
+            }
+          }
+        },
+        "citacoes_validas": true,
+        "fontes_recuperadas": []
+      },
+      "com_recuperacao": {
+        "estado": "respondida",
+        "resposta": "Consulte a reserva em Minhas reservas para verificar se o estado está CONFIRMADA. No cartão da unidade, confira o endereço, o horário e as Orientações de retirada, seguindo as instruções específicas da unidade. Leve o código da reserva para que o profissional localize o pedido no balcão.",
+        "fontes": [
+          "retirada#balcao"
+        ],
+        "geracao_segundos": 0.843,
+        "uso_geracao": {
+          "gemini-3.5-flash-lite": {
+            "input_tokens": 809,
+            "output_tokens": 102,
+            "total_tokens": 911,
+            "input_token_details": {
+              "cache_read": 0
+            }
+          }
+        },
+        "citacoes_validas": true,
+        "fontes_recuperadas": [
+          "retirada#balcao",
+          "retirada#acompanhar-entrega",
+          "solicitacao#cancelar",
+          "confirmacao#acompanhar"
+        ]
+      }
+    },
+    {
+      "caso": {
+        "id": "cancelamento",
+        "pergunta": "Como cancelar uma reserva e o que faço se ficar em processamento?",
+        "criterio": "Indicar Cancelar reserva quando disponível e consultar de novo pelo código.",
+        "fontes": [
+          "solicitacao#cancelar"
+        ]
+      },
+      "sem_recuperacao": {
+        "estado": "sem_evidencia",
+        "resposta": "",
+        "fontes": [],
+        "geracao_segundos": 1.326,
+        "uso_geracao": {
+          "gemini-3.5-flash-lite": {
+            "input_tokens": 274,
+            "output_tokens": 14,
+            "total_tokens": 288,
+            "input_token_details": {
+              "cache_read": 0
+            }
+          }
+        },
+        "citacoes_validas": true,
+        "fontes_recuperadas": []
+      },
+      "com_recuperacao": {
+        "estado": "respondida",
+        "resposta": "Para cancelar, consulte a reserva em Minhas reservas, clique no botão Cancelar reserva quando disponível e confirme. Se o cancelamento ficar em processamento, consulte novamente pelo código para ver o resultado.",
+        "fontes": [
+          "solicitacao#cancelar"
+        ],
+        "geracao_segundos": 4.259,
+        "uso_geracao": {
+          "gemini-3.5-flash-lite": {
+            "input_tokens": 862,
+            "output_tokens": 78,
+            "total_tokens": 940,
+            "input_token_details": {
+              "cache_read": 0
+            }
+          }
+        },
+        "citacoes_validas": true,
+        "fontes_recuperadas": [
+          "solicitacao#cancelar",
+          "confirmacao#sem-confirmacao",
+          "confirmacao#acompanhar",
+          "disponibilidade#reserva-permitida"
+        ]
+      }
+    },
+    {
+      "caso": {
+        "id": "disponibilidade",
+        "pergunta": "Onde posso solicitar reserva para o item selecionado e como conferir se posso reservar?",
+        "criterio": "Identificar as unidades conforme a consulta e distinguir disponibilidade de permissão.",
+        "fontes": [
+          "disponibilidade#reserva-permitida"
+        ]
+      },
+      "sem_recuperacao": {
+        "estado": "sem_evidencia",
+        "resposta": "",
+        "fontes": [],
+        "geracao_segundos": 0.892,
+        "uso_geracao": {
+          "gemini-3.5-flash-lite": {
+            "input_tokens": 278,
+            "output_tokens": 27,
+            "total_tokens": 305,
+            "input_token_details": {
+              "cache_read": 0
+            }
+          }
+        },
+        "citacoes_validas": true,
+        "fontes_recuperadas": []
+      },
+      "com_recuperacao": {
+        "estado": "respondida",
+        "resposta": "Para solicitar reserva, acesse Consultar disponibilidade, escolha um item e clique em Solicitar reserva no cartão da unidade desejada, ou vá em Minhas reservas, informe a credencial do cidadão e uma quantidade inteira positiva, confira a unidade selecionada e clique em Enviar solicitação. O botão Solicitar reserva aparece quando o cartão do item indica Disponível e Reserva pela unidade — Permitida.",
+        "fontes": [
+          "solicitacao#enviar",
+          "disponibilidade#reserva-permitida"
+        ],
+        "geracao_segundos": 3.393,
+        "uso_geracao": {
+          "gemini-3.5-flash-lite": {
+            "input_tokens": 938,
+            "output_tokens": 134,
+            "total_tokens": 1072,
+            "input_token_details": {
+              "cache_read": 0
+            }
+          }
+        },
+        "citacoes_validas": true,
+        "fontes_recuperadas": [
+          "solicitacao#enviar",
+          "disponibilidade#reserva-permitida",
+          "confirmacao#acompanhar",
+          "confirmacao#sem-confirmacao"
+        ]
+      }
+    },
+    {
+      "caso": {
+        "id": "fora_da_base",
+        "pergunta": "Como consigo a segunda via do meu cartão de transporte?",
+        "criterio": "Indicar informação insuficiente ou tema fora do escopo sem inventar instruções.",
+        "fontes": []
+      },
+      "sem_recuperacao": {
+        "estado": "fora_do_escopo",
+        "resposta": "",
+        "fontes": [],
+        "geracao_segundos": 1.01,
+        "uso_geracao": {
+          "gemini-3.5-flash-lite": {
+            "input_tokens": 271,
+            "output_tokens": 16,
+            "total_tokens": 287,
+            "input_token_details": {
+              "cache_read": 0
+            }
+          }
+        },
+        "citacoes_validas": true,
+        "fontes_recuperadas": []
+      },
+      "com_recuperacao": {
+        "estado": "fora_do_escopo",
+        "resposta": "",
+        "fontes": [],
+        "geracao_segundos": 11.175,
+        "uso_geracao": {
+          "gemini-3.5-flash-lite": {
+            "input_tokens": 810,
+            "output_tokens": 29,
+            "total_tokens": 839,
+            "input_token_details": {
+              "cache_read": 0
+            }
+          }
+        },
+        "citacoes_validas": true,
+        "fontes_recuperadas": [
+          "solicitacao#enviar",
+          "solicitacao#cancelar",
+          "retirada#acompanhar-entrega",
+          "disponibilidade#consulta"
+        ]
+      }
+    }
+  ]
+}

@@ -12,5 +12,13 @@ dependencies = [
     "uvicorn>=0.38,<1",
 ]
 
+[dependency-groups]
+orientacao = [
+    "google-genai>=3,<4",
+    "langchain-google-genai>=4,<5",
+    "pgvector>=0.4,<1",
+    "tiktoken>=0.12,<1",
+]
+
 [tool.uv]
 package = false

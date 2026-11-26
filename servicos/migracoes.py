@@ -11,6 +11,8 @@ SERVICOS = {
     "orquestrador": "ORQUESTRADOR_DATABASE_URL",
     "retiradas": "RETIRADAS_DATABASE_URL",
 }
+# Perfil opcional com pgvector: migra pelo mesmo comando, fora dos bancos do domínio.
+BANCOS = SERVICOS | {"orientacao": "ORIENTACAO_DATABASE_URL"}
 
 
 # As duas linhas criaram parte do esquema sob nomes diferentes. Para um banco da main,
@@ -30,7 +32,7 @@ def migrar(servico: str, carregar_demo: bool) -> None:
     if not migracoes:
         raise RuntimeError(f"Nenhuma migração encontrada para {servico}.")
 
-    with conectar(SERVICOS[servico]) as conexao:
+    with conectar(BANCOS[servico]) as conexao:
         conexao.execute("SELECT pg_advisory_xact_lock(6122026)")
         conexao.execute("""
             CREATE TABLE IF NOT EXISTS migracoes (
@@ -52,7 +54,7 @@ def migrar(servico: str, carregar_demo: bool) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Aplica as migrações do banco de um serviço.")
-    parser.add_argument("servico", choices=SERVICOS)
+    parser.add_argument("servico", choices=BANCOS)
     parser.add_argument("--demo", action="store_true", help="Inclui os dados iniciais de demonstração.")
     args = parser.parse_args()
     try:

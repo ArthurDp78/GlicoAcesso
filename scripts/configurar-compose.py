@@ -5,12 +5,15 @@ import re
 import secrets
 from pathlib import Path
 
+EXTERNOS = {"GOOGLE_API_KEY"}
+
 
 def configurar(raiz: Path, arquivo: Path, verificar: bool) -> None:
     modelo = (raiz / ".env.example").read_text(encoding="utf-8").splitlines()
     padrao = re.compile(r"^([A-Z_][A-Z_0-9]*)=(.*)$")
     campos = dict(padrao.fullmatch(linha).groups() for linha in modelo if padrao.fullmatch(linha))
-    obrigatorios = {nome for nome, valor in campos.items() if not valor}
+    # Chaves de provedores externos vêm do usuário; o campo fica vazio e a orientação usa o fallback.
+    obrigatorios = {nome for nome, valor in campos.items() if not valor and nome not in EXTERNOS}
     linhas = arquivo.read_text(encoding="utf-8-sig").splitlines() if arquivo.exists() else []
     existentes = {}
     for linha in linhas:

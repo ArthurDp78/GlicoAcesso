@@ -256,4 +256,99 @@ function mostrarCancelamento(reserva) {
 
 codigoReserva.addEventListener("input", () => acoesReserva.replaceChildren());
 credencial.addEventListener("input", () => acoesReserva.replaceChildren());
+
+const secaoOrientacao = document.querySelector("#orientacao");
+const formularioOrientacao = document.querySelector("#perguntar-orientacao");
+const perguntaOrientacao = document.querySelector("#pergunta-orientacao");
+const statusOrientacao = document.querySelector("#status-orientacao");
+const resultadoOrientacao = document.querySelector("#resultado-orientacao");
+let revisaoOrientacao = 0;
+
+seletor.addEventListener("change", () => {
+  revisaoOrientacao++;
+  secaoOrientacao.hidden = !seletor.value;
+  resultadoOrientacao.replaceChildren();
+  statusOrientacao.textContent = "";
+});
+
+function mostrarOrientacao(dados) {
+  const cartaoResposta = document.createElement("article");
+  cartaoResposta.className = "cartao";
+  cartaoResposta.append(texto("p", dados.resposta));
+
+  if (dados.fontes.length) {
+    const fontes = document.createElement("ul");
+    for (const fonte of dados.fontes) {
+      fontes.append(texto("li", fonte.titulo + " — " + fonte.secao));
+    }
+    cartaoResposta.append(texto("h3", "Fontes do GlicoAcesso"), fontes);
+  }
+
+  const consulta = dados.consulta;
+  if (consulta.status === "consultada") {
+    cartaoResposta.append(texto("h3", "Disponibilidade consultada"));
+    if (consulta.unidades.length) {
+      const unidades = document.createElement("ul");
+      for (const unidade of consulta.unidades) {
+        const saldo = unidade.disponivel ? "Disponível" : "Sem saldo disponível";
+        const permissao = unidade.permiteReserva ? "Reserva permitida" : "Reserva indisponível";
+        const atualizado = formatoData.format(new Date(unidade.atualizadoEm));
+        unidades.append(texto("li", unidade.nomeUnidade + " · " + saldo + " · " + permissao +
+          " · Atualizado em " + atualizado));
+      }
+      cartaoResposta.append(unidades);
+    } else {
+      cartaoResposta.append(texto("p", "Nenhuma unidade informou disponibilidade para este item."));
+    }
+  } else if (consulta.status === "indisponivel") {
+    cartaoResposta.append(texto("p", "Não foi possível consultar a disponibilidade agora."));
+  }
+  resultadoOrientacao.replaceChildren(cartaoResposta);
+}
+
+formularioOrientacao.addEventListener("submit", async (evento) => {
+  evento.preventDefault();
+  const itemId = seletor.value;
+  const pergunta = perguntaOrientacao.value.trim();
+  if (!itemId || !pergunta) return;
+
+  const token = credencial.value.trim();
+  if (!token) {
+    statusOrientacao.textContent = "Informe o token do cidadão em Minhas reservas.";
+    credencial.focus();
+    return;
+  }
+
+  const botao = evento.submitter;
+  const revisao = revisaoOrientacao;
+  botao.disabled = true;
+  resultadoOrientacao.replaceChildren();
+  statusOrientacao.textContent = "Consultando os guias e a disponibilidade…";
+
+  try {
+    const resposta = await fetch(api + "/orientacoes", {
+      method: "POST",
+      headers: {"Content-Type": "application/json", Authorization: "Bearer " + token},
+      body: JSON.stringify({itemId, pergunta}),
+    });
+    if (revisao !== revisaoOrientacao) return;
+    if (resposta.status === 401 || resposta.status === 403) {
+      throw new Error("Confira o token do cidadão.");
+    }
+    if (resposta.status === 429) throw new Error("Aguarde um momento e tente novamente.");
+    if (resposta.status === 404) throw new Error("Selecione um item disponível no catálogo.");
+    if (!resposta.ok) throw new Error("Orientação indisponível. Use Consultar disponibilidade ou Minhas reservas.");
+    const dados = await resposta.json();
+    if (revisao !== revisaoOrientacao) return;
+    mostrarOrientacao(dados);
+    statusOrientacao.textContent = dados.modo === "orientacao_basica" ? "Orientação básica exibida." : "Resposta exibida.";
+  } catch (erro) {
+    if (revisao === revisaoOrientacao) {
+      statusOrientacao.textContent = erro instanceof TypeError
+        ? "Falha de conexão. Tente novamente." : erro.message;
+    }
+  } finally {
+    botao.disabled = false;
+  }
+});
 carregarCatalogo();
