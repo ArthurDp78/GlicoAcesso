@@ -1,6 +1,7 @@
 """Os contratos gerados em execução devem documentar a borda publicada."""
 import unittest
 
+from servicos.bff_cidadao.main import app as cidadao
 from servicos.bff_unidade.main import app as unidade
 from servicos.gateway.main import app as gateway
 from servicos.gateway.rotas import OPERACOES, UNIDADE
@@ -41,3 +42,19 @@ class OpenAPIRuntime(unittest.TestCase):
         self.assertIn("200", operacao["responses"])
         self.assertIn(("GET", "/painel/estoque/catalogo"), OPERACOES[UNIDADE])
         self.assertIn(caminho, gateway.openapi()["paths"])
+
+    def test_respostas_assincronas_documentam_corpo_e_location(self):
+        operacoes = (
+            (cidadao, "/api/cidadao/v1/reservas/{reservaId}/cancelar"),
+            (unidade, "/api/unidade/v1/reservas/{reservaId}/decisao"),
+            (unidade, "/api/unidade/v1/reservas/{reservaId}/cancelar"),
+        )
+        for app, caminho in operacoes:
+            with self.subTest(caminho=caminho):
+                schema = app.openapi()
+                resposta = schema["paths"][caminho]["post"]["responses"]["202"]
+                self.assertIn("Location", resposta["headers"])
+                referencia = resposta["content"]["application/json"]["schema"]["$ref"]
+                modelo = schema["components"]["schemas"][referencia.rsplit("/", 1)[-1]]
+                self.assertIn("reservaId", modelo["required"])
+                self.assertEqual(modelo["properties"]["reservaId"]["format"], "uuid")

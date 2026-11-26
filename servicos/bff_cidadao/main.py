@@ -5,7 +5,7 @@ from uuid import UUID
 from fastapi import Depends, HTTPException, Request, Response
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
-from servicos.bff import INDISPONIVEL, RespostaRecusada, Servicos, criar_app, encaminhar
+from servicos.bff import INDISPONIVEL, RESPOSTA_PROCESSAMENTO, RespostaRecusada, Servicos, criar_app, encaminhar
 from servicos.comandos import Chave
 from servicos.contratos_reserva import CANCELAVEIS, DadosReserva, LinkReserva, PedidoReserva, ReservaPublica
 from servicos.erros import entrada_invalida_400
@@ -167,7 +167,7 @@ async def consultar_reserva(request: Request, response: Response, reservaId: UUI
     return apresentar(conteudo, **complementos)
 
 
-@app.post(API + "/reservas/{reservaId}/cancelar")
+@app.post(API + "/reservas/{reservaId}/cancelar", responses=RESPOSTA_PROCESSAMENTO)
 async def cancelar_reserva(request: Request, reservaId: UUID, cidadao: Cidadao, chave: Chave):
     return await encaminhar(
         Servicos(request, TOKEN_BFF_CIDADAO, cidadao, chave), reservaId, f"{API}/reservas/{reservaId}/cancelar",

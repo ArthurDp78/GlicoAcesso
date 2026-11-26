@@ -2,11 +2,12 @@
 import logging
 import os
 from contextlib import asynccontextmanager
+from uuid import UUID
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, Response
-from pydantic import BaseModel, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 from servicos import correlacao
 from servicos.http import cliente_http, falha_de_configuracao, requisitar
@@ -25,6 +26,26 @@ REPASSADOS = (200, 201, 400, 403, 404, 409, 422)
 INDISPONIVEL = "Serviço temporariamente indisponível. Repita a operação; em comandos, use a mesma chave e conteúdo."
 SEM_CACHE = {"Cache-Control": "no-store"}
 log = logging.getLogger("uvicorn.error")
+
+
+class PedidoEmProcessamento(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reservaId: UUID
+
+
+RESPOSTA_PROCESSAMENTO = {
+    202: {
+        "model": PedidoEmProcessamento,
+        "description": "Pedido registrado para processamento.",
+        "headers": {
+            "Location": {
+                "description": "Caminho público para acompanhar a reserva.",
+                "schema": {"type": "string", "format": "uri-reference"},
+            }
+        },
+    }
+}
 
 
 class RespostaRecusada(Exception):

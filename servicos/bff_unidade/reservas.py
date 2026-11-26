@@ -7,7 +7,7 @@ from uuid import UUID
 from fastapi import APIRouter, Response
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
-from servicos.bff import encaminhar
+from servicos.bff import RESPOSTA_PROCESSAMENTO, encaminhar
 from servicos.bff_unidade.contexto import API, Comando, Consulta, caminho_unidade
 from servicos.bff_unidade.representacoes import ESTOQUE_PAINEL, UNIDADE
 from servicos.contratos_reserva import CancelamentoUnidade
@@ -113,7 +113,7 @@ async def consultar_reserva(reservaId: UUID, servicos: Consulta, response: Respo
     return apresentar(reserva, itens, unidade, autorizacao, estoque)
 
 
-@rotas.post("/reservas/{reservaId}/decisao")
+@rotas.post("/reservas/{reservaId}/decisao", responses=RESPOSTA_PROCESSAMENTO)
 async def decidir(reservaId: UUID, corpo: DecisaoProfissional, servicos: Comando):
     return await encaminhar(
         servicos, reservaId, f"{API}/reservas/{reservaId}/decisao", "ACEITE_ENCAMINHAR", "confirmacoes",
@@ -121,7 +121,7 @@ async def decidir(reservaId: UUID, corpo: DecisaoProfissional, servicos: Comando
     )
 
 
-@rotas.post("/reservas/{reservaId}/cancelar")
+@rotas.post("/reservas/{reservaId}/cancelar", responses=RESPOSTA_PROCESSAMENTO)
 async def cancelar(reservaId: UUID, corpo: CancelamentoUnidade, servicos: Comando):
     payload = corpo.model_dump_json().encode()
     return await encaminhar(
