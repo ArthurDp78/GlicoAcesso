@@ -10,7 +10,7 @@ services:
     command: ["--help"]
     environment:
       UNIDADES_URL: http://unidades:8002
-      GLICO_GESTOR_REDE_TOKEN: ${GLICO_GESTOR_REDE_TOKEN:-}
+      GLICO_ADMIN_SERVICE_TOKEN: ${GLICO_ADMIN_SERVICE_TOKEN:-}
     networks: [administracao]
 
 networks:

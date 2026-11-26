@@ -14,9 +14,26 @@ components:
       type: http
       scheme: bearer
       description: >-
-        Credencial de serviço verificada pelo destinatário. Comandos vinculados
-        a um ator exigem contexto delegado e verificável na credencial. O
-        destinatário identifica e autoriza tanto o chamador quanto o ator.
+        Credencial própria do serviço ou BFF chamador, verificada pelo destinatário.
+        A identidade do ator só é aceita nos cabeçalhos X-Ator-* acompanhados da
+        credencial de um chamador autorizado a delegá-la: o BFF Cidadão delega
+        somente CIDADAO, o BFF Unidade somente PROFISSIONAL e o Orquestrador os
+        atores dos pedidos que persistiu. O token do usuário não é aceito aqui.
+    atorPapel:
+      type: apiKey
+      in: header
+      name: X-Ator-Papel
+      description: CIDADAO ou PROFISSIONAL. Nunca aceito diretamente do cliente.
+    atorId:
+      type: apiKey
+      in: header
+      name: X-Ator-Id
+      description: Identificador estável do ator autenticado pelo BFF.
+    atorUnidade:
+      type: apiKey
+      in: header
+      name: X-Ator-Unidade-Id
+      description: Unidade vinculada ao profissional. Obrigatório para PROFISSIONAL.
   parameters:
     ReservaId:
       name: reservaId
@@ -36,7 +53,7 @@ components:
         Reutilize a chave e o conteúdo no mesmo comando. O escopo inclui
         operação e principal delegado. Repetição idêntica devolve o resultado
         original. Mesma chave com outro conteúdo retorna conflito.
-      schema: { type: string, minLength: 1 }
+      schema: { type: string, minLength: 1, maxLength: 128 }
   schemas:
     ErroComando:
       type: object
@@ -70,7 +87,7 @@ components:
         tipo: { type: string, enum: [CONFIRMACAO, CANCELAMENTO] }
         estadoExecucao:
           type: string
-          enum: [AGUARDANDO_CONFIRMACAO, EM_EXECUCAO, COMPENSANDO, COMPENSACAO_PENDENTE, CANCELANDO, CANCELAMENTO_PENDENTE, INTERROMPIDA, CONCLUIDA, COMPENSADA, CANCELADA]
+          enum: [EM_EXECUCAO, COMPENSANDO, COMPENSACAO_PENDENTE, CANCELANDO, CANCELAMENTO_PENDENTE, INTERROMPIDA, CONCLUIDA, COMPENSADA, CANCELADA]
         motivoEncerramento: { type: string }
 paths:
   /internal/v1/reservas/{reservaId}/confirmacoes:
@@ -78,8 +95,8 @@ paths:
       operationId: solicitarConfirmacao
       summary: Solicitar confirmação de reserva
       description: >-
-        Somente BFF Unidade em nome de profissional. Na demonstração, o BFF autentica o profissional e emite uma credencial Bearer assinada de curta duração com o papel, o identificador e a unidade. O Orquestrador valida a assinatura, a validade e o papel. Reservas valida o vínculo com a unidade, a decisão e o prazo na transação de aceite. A resposta confirma a gravação do pedido e da primeira intenção. A conclusão de negócio é consultada em Reservas.
-      security: [{ serviceAuth: [] }]
+        Somente BFF Unidade em nome de profissional. O Orquestrador valida a identidade de serviço do BFF e o papel delegado de profissional. Reservas valida o vínculo com a unidade, a decisão e o prazo na transação de aceite. A resposta confirma a gravação do pedido e da primeira intenção. A existência da reserva não é consultada na recepção; uma reserva inexistente encerra a execução como INTERROMPIDA. A conclusão de negócio é consultada em Reservas.
+      security: [{ serviceAuth: [], atorPapel: [], atorId: [], atorUnidade: [] }]
       parameters:
         - { $ref: '#/components/parameters/ReservaId' }
         - { $ref: '#/components/parameters/IdempotencyKey' }
@@ -90,16 +107,14 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/PedidoRecebido' }
-        '422':
+        '400':
           description: "Entrada inválida ou cabeçalho obrigatório ausente."
         '401':
           description: "Credencial ausente ou inválida."
         '403':
           description: "Chamador ou ator sem permissão."
-        '404':
-          description: "Recurso não encontrado."
         '409':
-          description: "EXECUCAO_CONCORRENTE, ESTADO_INCOMPATIVEL ou CHAVE_IDEMPOTENTE_CONFLITANTE. A repetição idêntica de pedido já admitido recupera a resposta original."
+          description: "EXECUCAO_CONCORRENTE ou CHAVE_IDEMPOTENTE_CONFLITANTE. O estado da reserva é validado depois, no aceite em Reservas. A repetição idêntica de pedido já admitido recupera a resposta original."
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErroComando' }
@@ -111,7 +126,7 @@ paths:
       summary: Solicitar cancelamento distribuído
       description: >-
         BFF Cidadão ou BFF Unidade, em nome do ator autenticado. Para profissional, justificativa é obrigatória e deve ter ao menos cinco caracteres após remover espaços externos. Para cidadão, o corpo é omitido. O Orquestrador verifica com Reservas a permissão do ator e registra o pedido antes de responder. A transição é revalidada antes de qualquer reversão. O processamento usa uma execução distinta de eventual confirmação ativa e respeita o resultado durável de Retiradas.
-      security: [{ serviceAuth: [] }]
+      security: [{ serviceAuth: [], atorPapel: [], atorId: [] }, { serviceAuth: [], atorPapel: [], atorId: [], atorUnidade: [] }]
       parameters:
         - { $ref: '#/components/parameters/ReservaId' }
         - { $ref: '#/components/parameters/IdempotencyKey' }
@@ -127,7 +142,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/PedidoRecebido' }
-        '422':
+        '400':
           description: "Entrada inválida ou cabeçalho obrigatório ausente."
         '401':
           description: "Credencial ausente ou inválida."
@@ -147,7 +162,7 @@ paths:
       operationId: consultarPedidoSaga
       summary: Consultar o processamento interno de um pedido da SAGA
       description: Acesso restrito ao BFF do ator que solicitou o pedido. A resposta identifica o andamento técnico.
-      security: [{ serviceAuth: [] }]
+      security: [{ serviceAuth: [], atorPapel: [], atorId: [] }, { serviceAuth: [], atorPapel: [], atorId: [], atorUnidade: [] }]
       parameters:
         - name: sagaId
           in: path
@@ -155,7 +170,6 @@ paths:
           schema: { type: string, format: uuid }
         - { $ref: '#/components/parameters/CorrelationId' }
       responses:
-        '422': { description: Entrada ou cabeçalho inválido. }
         '200':
           description: "Pedido encontrado."
           content:
@@ -169,3 +183,4 @@ paths:
           description: "Pedido não encontrado."
         '503':
           description: "Serviço temporariamente indisponível. Repita o comando com a mesma chave e conteúdo quando o resultado estiver incerto."
+        '422': { description: "Parâmetro, cabeçalho ou corpo inválido." }

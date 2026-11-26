@@ -117,6 +117,14 @@ Existem quatro microsserviços de domínio e um serviço independente de orquest
 
 | **Orquestrador da SAGA** | Execuções e etapas duráveis de confirmação e cancelamento distribuído, tentativas, resultados, compensações e Inbox de retirada. | Estado canônico da reserva, regras de transição de domínio, saldo ou autorização de retirada. |
 
+**Horários de atendimento.** Em Unidades, cada período DEVE ter início estritamente anterior ao fim no mesmo dia, sem duração nula e sem atravessar a meia-noite. Uma unidade PODE ter vários períodos por dia, desde que NÃO se sobreponham; períodos consecutivos (08:00–12:00 e 12:00–17:00) e horários iguais em dias diferentes são permitidos. Um período inválido rejeita a operação inteira.
+
+**Prazo de análise.** `prazoAnaliseHoras` DEVE estar entre 1 e 720 horas (30 dias). Reservas trata um prazo fora dessa faixa como configuração inválida e não cria a solicitação.
+
+**Unidade inativa.** NÃO recebe nem aceita solicitações. O profissional vinculado PODE consultar, rejeitar, cancelar e entregar reservas existentes, conforme o estado de cada uma.
+
+**Cadastro administrativo.** O cadastro de unidades e de itens do catálogo pertence a uma autoridade administrativa interna, com credencial própria e sem rota nos BFFs. São conflitantes unidades com mesmo nome e endereço e itens com mesmo nome e tipo, sem distinguir maiúsculas nem espaços excedentes. O banco garante a unicidade.
+
 ### 5.1 Regras de fronteira
 
 1. Cada serviço mantém a verdade do seu domínio. Por exemplo, Reservas pode exibir `itemId`, mas o nome, o tipo e a descrição canônicos do item pertencem a Estoque.
@@ -124,6 +132,8 @@ Existem quatro microsserviços de domínio e um serviço independente de orquest
 3. Não se faz transação ACID distribuída entre os bancos dos serviços. Cada serviço confirma suas próprias transações locais.
 4. BFFs podem combinar respostas de serviços para cada cliente, mas não se tornam donos dos dados nem armazenam cópias como fonte de verdade.
 5. A aplicação da Etapa 2 não prevê um serviço próprio de identidade. Autenticação pode ser fornecida por um provedor externo; identidade e autorização de chamadas são tratadas na borda e propagadas aos serviços conforme necessário.
+6. O BFF autentica o usuário e chama os serviços com credencial própria e a identidade delegada em `X-Ator-Papel`, `X-Ator-Id` e, para profissional, `X-Ator-Unidade-Id`. O token do usuário não é repassado. Um serviço só considera esses cabeçalhos depois de verificar a credencial de um chamador autorizado a delegar: o BFF Cidadão só delega `CIDADAO`, o BFF Unidade só delega `PROFISSIONAL` e o Orquestrador delega o ator do pedido que persistiu. Cabeçalhos de identidade enviados pelo cliente são descartados.
+7. Na inicialização, cada serviço exige suas credenciais, com no mínimo 32 caracteres, e recusa tokens iguais entre identidades ou papéis que conheça.
 
 ## 6. Arquitetura de comunicação
 
@@ -201,7 +211,7 @@ Mudanças aditivas compatíveis, como um campo opcional que os consumidores exis
 | `sagaId` | UUID | Orquestrador | Identifica uma execução da SAGA. Confirmação e cancelamento são execuções distintas, vinculadas ao mesmo `reservaId`; retries da mesma execução reutilizam o mesmo `sagaId`. Só pode haver uma execução ativa por reserva. |
 | `eventId` | UUID | Serviço produtor | Identificador global de uma mensagem; consumidores registram-no para deduplicação. |
 | `correlationId` | UUID | BFF/Gateway na entrada, se não recebido | Agrupa logs e chamadas da mesma requisição ponta a ponta. |
-| `Idempotency-Key` | Cabeçalho HTTP com string opaca | Chamador da operação | Identifica um comando lógico e permite repetir o mesmo comando sem duplicar efeitos. O valor recebido é persistido como `idempotencyKey` no banco quando aplicável. |
+| `Idempotency-Key` | Cabeçalho HTTP com string opaca | Chamador da operação | Identifica um comando lógico e permite repetir o mesmo comando sem duplicar efeitos. Tem de 1 a 128 caracteres. O valor recebido é persistido como `idempotencyKey` no banco quando aplicável. |
 
 ### 7.1 Convenção de idempotência
 
@@ -256,6 +266,7 @@ Regras adicionais:
 - Não existe transição direta de `SOLICITADA` para `CONFIRMADA`: a unidade precisa decidir e a SAGA precisa concluir.
 - O cidadão pode cancelar a própria reserva enquanto ela estiver ativa e antes da retirada física. Um profissional autenticado e vinculado à unidade da reserva também pode cancelar; para esse ator, `justificativa` é obrigatória e fica registrada na auditoria. Uma reserva rejeitada, expirada, cancelada, retirada ou com falha de confirmação já é terminal e não aceita cancelamento adicional.
 - A expiração automática ocorre somente enquanto a reserva está `SOLICITADA`: quando `agora >= decisaoAte` e nenhuma decisão venceu a corrida, Reservas muda o estado para `EXPIRADA`. O prazo é configurado por unidade em `prazoAnalise` e copiado para `decisaoAte` ao criar a solicitação. Como a SAGA ainda não começou, não há estoque a liberar. Reserva `EM_CONFIRMACAO` não expira por relógio: é finalizada ou cancelada pela SAGA.
+- Se o prazo vencer e a expiração ainda não tiver sido gravada, um cancelamento autorizado de `SOLICITADA` continua permitido e pode vencer a corrida. Aceite e rejeição são recusados após `decisaoAte`.
 - `CONFIRMADA` pode ser cancelada, mas o cancelamento coordena a revogação da autorização e a liberação da alocação antes de mudar para `CANCELADA`.
 - `CANCELAMENTO_EM_ANDAMENTO` informa que o pedido foi aceito, mas efeitos distribuídos ainda estão sendo revertidos. Só passa a `CANCELADA` depois da confirmação de todas as operações aplicáveis.
 - Retirada e cancelamento são concorrentes: Retiradas deve garantir que apenas um deles possa vencer. Se a entrega física for registrada primeiro, o cancelamento é recusado e o consumo de `retirada.concluida.v1` leva a reserva de `CONFIRMADA` ou `CANCELAMENTO_EM_ANDAMENTO` para `RETIRADA`; se o cancelamento concluir primeiro, a autorização não pode mais ser usada.
@@ -553,6 +564,18 @@ Se a implementação ou a revisão do enunciado mostrar que uma decisão precisa
 4. avisar as quatro pessoas e integrar a mudança por branch/pull request.
 
 Enquanto essa revisão não acontecer, prevalece a decisão deste documento. Nenhum documento especializado deve introduzir silenciosamente um novo estado, evento, identificador, banco compartilhado, participante da SAGA ou endpoint que contradiga o contrato-base.
+
+### 17.1 Alterações registradas
+
+| Data | Decisão anterior | Nova decisão | Razão | Documentos afetados |
+|---|---|---|---|---|
+| 24/11/2026 | Prazo de análise sem máximo. | Máximo de 720 horas. | Evitar prazos inválidos ou que excedam a faixa de datas. | 00, 01, 09, `unidade.yaml` e BFFs. |
+| 24/11/2026 | Efeito da inativação sobre reservas existentes indefinido. | Profissional conclui o que está em aberto; novas solicitações e aceites são recusados. | Não deixar cidadãos sem atendimento nem estoque preso. | 00, 01, 05 e `reserva.yaml`. |
+| 24/11/2026 | Formato da identidade delegada em aberto. | Credenciais próprias dos BFFs e cabeçalhos `X-Ator-*`. | Cumprir a restrição de chamador dos contratos. | 00, 03, 04 e contratos de domínio. |
+| 24/11/2026 | Autoridade e critério de conflito dos cadastros indefinidos. | Autoridade administrativa e unicidade normalizada. | Evitar cadastros duplicados. | 00, 01, 09, `unidade.yaml` e `estoque.yaml`. |
+| 24/11/2026 | `404` de unidade na listagem de estoque e de reserva em `confirmacoes`. | Removidos dos contratos. | Estoque não é dono do cadastro de unidades e responde `403` a unidade alheia; a existência da reserva é validada por Reservas no aceite. | `estoque.yaml` e `orquestrador.yaml`. |
+| 24/11/2026 | Reconstrução da projeção descrita sem comando. | Comando operacional com trava da projeção. | Recuperação sem parar o serviço. | 12. |
+| 24/11/2026 | Sem regra para a validade e a sobreposição dos períodos de atendimento. | Períodos válidos no mesmo dia e sem sobreposição, conforme a seção 5. | Evitar agendas contraditórias na consulta pública. | 00, 01, 09 e `api/unidade.yaml`. |
 
 ## 18. Referência ao enunciado
 

@@ -2,7 +2,7 @@ import unittest
 
 from pydantic import ValidationError
 
-from servicos.unidades.main import UnidadeInput
+from servicos.unidades.esquemas import UnidadeInput
 
 
 class TestDadosCadastroUnidades(unittest.TestCase):

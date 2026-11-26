@@ -64,3 +64,5 @@ O índice abaixo usa os nomes reais dos arquivos atuais. O documento 00 é a bas
 ## 7. Estado da implementação
 
 Os documentos e contratos especificam a arquitetura da Parte 2. A aplicação executável e as demonstrações das etapas seguintes ainda precisam ser entregues. A configuração física do Gateway, as credenciais entre serviços, os detalhes de implantação e os parâmetros operacionais de retomada ficam para a implementação.
+
+- [13 — Identidade, autorização e evolução para usuários reais](13-identidade-autorizacao-e-evolucao.md): estado da demonstração, decisões pendentes e critérios para evolução segura.

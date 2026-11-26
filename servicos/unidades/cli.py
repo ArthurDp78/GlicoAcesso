@@ -39,9 +39,9 @@ def main(argv: list[str] | None = None) -> int:
     chave = args.chave
     if not 1 <= len(chave) <= 128 or not chave.isascii() or not chave.isprintable() or chave.strip() != chave:
         return falhar("Informe uma chave de 1 a 128 caracteres ASCII imprimíveis, sem espaços nas bordas.", 2)
-    token = os.environ.get("GLICO_GESTOR_REDE_TOKEN", "")
+    token = os.environ.get("GLICO_ADMIN_SERVICE_TOKEN", "")
     if len(token) < 32 or not token.isascii() or not token.isprintable() or " " in token:
-        return falhar("Configure uma credencial válida em GLICO_GESTOR_REDE_TOKEN.", 2)
+        return falhar("Configure uma credencial válida em GLICO_ADMIN_SERVICE_TOKEN.", 2)
     try:
         dados = json.loads(args.arquivo.read_text(encoding="utf-8-sig"))
     except (OSError, ValueError):

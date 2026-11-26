@@ -21,7 +21,7 @@ class TestCliUnidades(unittest.TestCase):
         self.token = "credencial-exclusiva-para-o-teste-local"
         self.enterContext(patch.dict(os.environ, {
             "UNIDADES_URL": "http://unidades:8002",
-            "GLICO_GESTOR_REDE_TOKEN": self.token,
+            "GLICO_ADMIN_SERVICE_TOKEN": self.token,
         }))
         self.saida = self.enterContext(redirect_stdout(io.StringIO()))
         self.erro = self.enterContext(redirect_stderr(io.StringIO()))

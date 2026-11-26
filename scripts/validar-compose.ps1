@@ -179,8 +179,8 @@ try {
   Conferir ($catalogo.unidadeId -eq $unidade -and $catalogo.itens.itemId -contains $medicamento) 'Catálogo do profissional incompleto.'
   $rotaEntrada = "/api/unidade/v1/painel/estoque/$unidade/itens/$medicamento/entradas"
   $chaveEntrada = [guid]::NewGuid().ToString()
-  $entrada = Requisitar $rotaEntrada -Status 201 -Token $profissional -Chave $chaveEntrada -Corpo @{quantidade = 4}
-  $repeticao = Requisitar $rotaEntrada -Status 201 -Token $profissional -Chave $chaveEntrada -Corpo @{quantidade = 4}
+  $entrada = Requisitar $rotaEntrada -Status 201 -Token $profissional -Chave $chaveEntrada -Corpo @{quantidade = 4; motivo = 'Entrada de teste'}
+  $repeticao = Requisitar $rotaEntrada -Status 201 -Token $profissional -Chave $chaveEntrada -Corpo @{quantidade = 4; motivo = 'Entrada de teste'}
   Conferir ($entrada.movimentacaoId -and $entrada.movimentacaoId -eq $repeticao.movimentacaoId) 'A entrada foi duplicada.'
 
   $rotaPermissao = "/api/unidade/v1/painel/estoque/$unidade/itens/$medicamento/permissao"
@@ -281,7 +281,7 @@ try {
   $unidades = @(Requisitar '/api/cidadao/v1/unidades')
   Conferir (@($unidades | Where-Object unidadeId -eq $cadastrada).Count -eq 1) 'Cadastro perdido após a recriação.'
   Conferir ((Requisitar $rotaReserva -Token $cidadao).status -eq 'RETIRADA') 'Estado RETIRADA perdido após a recriação.'
-  $repeticao = Requisitar $rotaEntrada -Status 201 -Token $profissional -Chave $chaveEntrada -Corpo @{quantidade = 4}
+  $repeticao = Requisitar $rotaEntrada -Status 201 -Token $profissional -Chave $chaveEntrada -Corpo @{quantidade = 4; motivo = 'Entrada de teste'}
   Conferir ($repeticao.movimentacaoId -eq $entrada.movimentacaoId) 'Movimentação ou idempotência perdida após a recriação.'
   Conferir (Saldo-Confere -AposRetirada) 'Projeção divergente após a recriação.'
   Conferir ((Requisitar $rotaDistribuida -Token $cidadao).status -eq 'CANCELADA') 'Cancelamento perdido após a recriação.'

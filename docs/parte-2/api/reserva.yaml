@@ -11,12 +11,26 @@ components:
       type: http
       scheme: bearer
       description: >-
-        Credencial de serviço verificada pelo destinatário. Comandos vinculados
-        a um ator exigem contexto delegado e verificável na credencial. O
-        destinatário identifica e autoriza tanto o chamador quanto o ator.
-    bearerAuth:
-      type: http
-      scheme: bearer
+        Credencial própria do serviço ou BFF chamador, verificada pelo destinatário.
+        A identidade do ator só é aceita nos cabeçalhos X-Ator-* acompanhados da
+        credencial de um chamador autorizado a delegá-la: o BFF Cidadão delega
+        somente CIDADAO, o BFF Unidade somente PROFISSIONAL e o Orquestrador os
+        atores dos pedidos que persistiu. O token do usuário não é aceito aqui.
+    atorPapel:
+      type: apiKey
+      in: header
+      name: X-Ator-Papel
+      description: CIDADAO ou PROFISSIONAL. Nunca aceito diretamente do cliente.
+    atorId:
+      type: apiKey
+      in: header
+      name: X-Ator-Id
+      description: Identificador estável do ator autenticado pelo BFF.
+    atorUnidade:
+      type: apiKey
+      in: header
+      name: X-Ator-Unidade-Id
+      description: Unidade vinculada ao profissional. Obrigatório para PROFISSIONAL.
   parameters:
     ReservaId:
       name: reservaId
@@ -33,7 +47,7 @@ components:
       in: header
       required: true
       description: Chave estável para repetir o mesmo comando com o mesmo resultado.
-      schema: { type: string, minLength: 1 }
+      schema: { type: string, minLength: 1, maxLength: 128 }
   schemas:
     ErroComando:
       type: object
@@ -126,8 +140,7 @@ paths:
         uma nova entrega se receber 200 com o mesmo reservaId e status CONFIRMADA.
         Não modifica a Reserva, não a bloqueia durante a entrega e não exige
         Idempotency-Key. A revogação e a entrega são serializadas em Retiradas.
-      security:
-        - bearerAuth: []
+      security: [{ serviceAuth: [] }]
       parameters:
         - name: reservaId
           in: path
@@ -139,7 +152,6 @@ paths:
           description: correlationId do fluxo, quando propagado para rastreamento.
           schema: { type: string, format: uuid }
       responses:
-        '422': { description: Entrada ou cabeçalho inválido. }
         '200':
           description: Estado canônico atual. Status diferente de CONFIRMADA não autoriza a entrega.
           headers:
@@ -161,19 +173,18 @@ paths:
           description: Reserva não encontrada; não autoriza entrega.
         '503':
           description: Estado canônico indisponível; não autoriza entrega.
+        '422': { description: "Parâmetro, cabeçalho ou corpo inválido." }
   /internal/v1/reservas/{reservaId}:
     get:
       summary: Consultar reserva para agregação pelos BFFs
       description: Retorna dados canônicos da solicitação. A autorização verifica se o ator é o cidadão proprietário ou profissional vinculado à unidade; o BFF aplica a projeção apropriada ao público.
-      security:
-        - bearerAuth: []
+      security: [{ serviceAuth: [], atorPapel: [], atorId: [] }, { serviceAuth: [], atorPapel: [], atorId: [], atorUnidade: [] }]
       parameters:
         - name: reservaId
           in: path
           required: true
           schema: { type: string, format: uuid }
       responses:
-        '422': { description: Entrada ou cabeçalho inválido. }
         '200':
           description: Solicitação encontrada e visível ao ator autenticado.
           content:
@@ -182,11 +193,11 @@ paths:
         '403': { description: Ator sem acesso à reserva. }
         '401': { description: Credencial ausente ou inválida. }
         '404': { description: Reserva não encontrada ou invisível para o cidadão autenticado. }
+        '422': { description: "Parâmetro, cabeçalho ou corpo inválido." }
   /api/cidadao/v1/reservas:
     post:
       summary: Criar solicitação
-      security:
-        - bearerAuth: []
+      security: [{ serviceAuth: [], atorPapel: [], atorId: [] }]
       parameters:
         - { $ref: '#/components/parameters/IdempotencyKey' }
       requestBody:
@@ -195,6 +206,7 @@ paths:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               required: [unidadeId, itemId, quantidade]
               properties:
                 unidadeId: { type: string, format: uuid }
@@ -208,17 +220,19 @@ paths:
               schema:
                 $ref: '#/components/schemas/Reserva'
         '422':
-          description: Unidade inexistente, inativa, com prazo legado acima de 720 horas ou combinação unidade/item sem permissão para reserva.
+          description: Unidade inexistente/inativa ou combinação unidade/item sem permissão para reserva; ou entrada inválida.
         '409':
           description: "`Idempotency-Key` reutilizada com conteúdo diferente."
         '401': { description: Credencial do cidadão ausente ou inválida. }
+        '403': { description: Chamador ou ator sem permissão. }
+        '503': { description: "Unidades, Estoque ou banco indisponível, ou configuração de prazo inválida. Nenhuma solicitação é criada." }
   /api/cidadao/v1/reservas/{reservaId}/cancelar:
     post:
       operationId: cancelarSolicitacaoCidadao
       summary: Cancelar solicitação pendente do cidadão
       description: >-
-        O BFF correspondente encaminha a credencial Bearer do ator. Após verificar a autorização, Reservas aplica a transição condicional apenas em SOLICITADA. Para EM_CONFIRMACAO ou CONFIRMADA, registra e devolve 409 com codigo CANCELAMENTO_DISTRIBUIDO, sem alterar a reserva. A decisão de encaminhamento ou resultado local é persistida para replay da mesma chave e conteúdo, antes de reavaliar o estado em retries.
-      security: [{ bearerAuth: [] }]
+        Somente o BFF correspondente, com identidade delegada do ator. Após verificar a autorização, Reservas aplica a transição condicional apenas em SOLICITADA, inclusive se o prazo já venceu e a expiração ainda não foi gravada. Para EM_CONFIRMACAO ou CONFIRMADA, registra e devolve 409 com codigo CANCELAMENTO_DISTRIBUIDO, sem alterar a reserva. A decisão de encaminhamento ou resultado local é persistida para replay da mesma chave e conteúdo, antes de reavaliar o estado em retries.
+      security: [{ serviceAuth: [], atorPapel: [], atorId: [] }]
       parameters:
         - { $ref: '#/components/parameters/ReservaId' }
         - { $ref: '#/components/parameters/IdempotencyKey' }
@@ -229,7 +243,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/EstadoReserva' }
-        '422':
+        '400':
           description: "Entrada inválida ou cabeçalho obrigatório ausente."
         '401':
           description: "Credencial ausente ou inválida."
@@ -247,8 +261,8 @@ paths:
   /api/unidade/v1/reservas:
     get:
       summary: Listar solicitações pendentes da unidade do profissional
-      description: Retorna somente reservas SOLICITADA da unidade vinculada ao ator autenticado, sem exigir unidadeId fornecido pelo cliente.
-      security: [{ bearerAuth: [] }]
+      description: Retorna somente reservas SOLICITADA da unidade vinculada ao ator delegado, ainda que ela esteja inativa, sem exigir unidadeId fornecido pelo cliente.
+      security: [{ serviceAuth: [], atorPapel: [], atorId: [], atorUnidade: [] }]
       responses:
         '200':
           description: Solicitações aguardando decisão.
@@ -258,13 +272,14 @@ paths:
                 type: array
                 items: { $ref: '#/components/schemas/Reserva' }
         '403': { description: Profissional sem unidade vinculada. }
+        '401': { description: Credencial ausente ou inválida. }
   /api/unidade/v1/reservas/{reservaId}/decisao:
     post:
       operationId: encaminharDecisaoUnidade
       summary: Registrar rejeição ou encaminhar aceite
       description: >-
-        Somente BFF Unidade em nome de profissional vinculado. REJEITAR aplica a transição local de uma solicitação SOLICITADA dentro do prazo. Para ACEITAR elegível, grava e devolve 409 ACEITE_ENCAMINHAR sem registrar o aceite nem alterar o estado da reserva. O encaminhamento ou a rejeição é persistido sob a mesma operação e chave para impedir que uma repetição com outra decisão use outro destino. O Orquestrador envia o comando de aceite e Reservas revalida prazo, ator e estado.
-      security: [{ serviceAuth: [] }]
+        Somente BFF Unidade em nome de profissional vinculado. REJEITAR aplica a transição local de uma solicitação SOLICITADA dentro do prazo. Uma unidade inativa pode rejeitar, mas não aceitar (403). Para ACEITAR elegível, grava e devolve 409 ACEITE_ENCAMINHAR sem registrar o aceite nem alterar o estado da reserva. O encaminhamento ou a rejeição é persistido sob a mesma operação e chave para impedir que uma repetição com outra decisão use outro destino. O Orquestrador envia o comando de aceite e Reservas revalida prazo, ator e estado.
+      security: [{ serviceAuth: [], atorPapel: [], atorId: [], atorUnidade: [] }]
       parameters:
         - { $ref: '#/components/parameters/ReservaId' }
         - { $ref: '#/components/parameters/IdempotencyKey' }
@@ -280,7 +295,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/EstadoReserva' }
-        '422':
+        '400':
           description: "Entrada inválida ou cabeçalho obrigatório ausente."
         '401':
           description: "Credencial ausente ou inválida."
@@ -300,8 +315,8 @@ paths:
       operationId: cancelarSolicitacaoUnidade
       summary: Cancelar solicitação pendente pela unidade
       description: >-
-        O BFF correspondente encaminha a credencial Bearer do ator. Após verificar a autorização, Reservas aplica a transição condicional apenas em SOLICITADA. Para EM_CONFIRMACAO ou CONFIRMADA, registra e devolve 409 com codigo CANCELAMENTO_DISTRIBUIDO, sem alterar a reserva. A decisão de encaminhamento ou resultado local é persistida para replay da mesma chave e conteúdo, antes de reavaliar o estado em retries. A justificativa é obrigatória e deve ter ao menos cinco caracteres após remover espaços externos.
-      security: [{ bearerAuth: [] }]
+        Somente o BFF correspondente, com identidade delegada do ator. Após verificar a autorização, Reservas aplica a transição condicional apenas em SOLICITADA, inclusive se o prazo já venceu e a expiração ainda não foi gravada. Para EM_CONFIRMACAO ou CONFIRMADA, registra e devolve 409 com codigo CANCELAMENTO_DISTRIBUIDO, sem alterar a reserva. A decisão de encaminhamento ou resultado local é persistida para replay da mesma chave e conteúdo, antes de reavaliar o estado em retries. A justificativa é obrigatória e deve ter ao menos cinco caracteres após remover espaços externos.
+      security: [{ serviceAuth: [], atorPapel: [], atorId: [], atorUnidade: [] }]
       parameters:
         - { $ref: '#/components/parameters/ReservaId' }
         - { $ref: '#/components/parameters/IdempotencyKey' }
@@ -317,7 +332,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/EstadoReserva' }
-        '422':
+        '400':
           description: "Entrada inválida ou cabeçalho obrigatório ausente."
         '401':
           description: "Credencial ausente ou inválida."
@@ -338,7 +353,7 @@ paths:
       summary: Registrar aceite na reserva
       description: >-
         Somente o Orquestrador com identidade delegada do profissional. Valida a unidade, o prazo e o estado SOLICITADA. Grava a decisão, EM_CONFIRMACAO, auditoria e resultado idempotente em transação local. Os dados retornados permitem alocar e preparar autorização.
-      security: [{ serviceAuth: [] }]
+      security: [{ serviceAuth: [], atorPapel: [], atorId: [], atorUnidade: [] }]
       parameters:
         - { $ref: '#/components/parameters/ReservaId' }
         - { $ref: '#/components/parameters/IdempotencyKey' }
@@ -354,7 +369,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/AceiteRegistrado' }
-        '422':
+        '400':
           description: "Entrada inválida ou cabeçalho obrigatório ausente."
         '401':
           description: "Credencial ausente ou inválida."
@@ -391,7 +406,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/EstadoReserva' }
-        '422':
+        '400':
           description: "Entrada inválida ou cabeçalho obrigatório ausente."
         '401':
           description: "Credencial ausente ou inválida."
@@ -428,7 +443,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/EstadoReserva' }
-        '422':
+        '400':
           description: "Entrada inválida ou cabeçalho obrigatório ausente."
         '401':
           description: "Credencial ausente ou inválida."
@@ -449,7 +464,7 @@ paths:
       summary: Registrar início do cancelamento distribuído
       description: >-
         Somente o Orquestrador com identidade delegada. Reservas valida o ator e o estado EM_CONFIRMACAO ou CONFIRMADA para gravar CANCELAMENTO_EM_ANDAMENTO. Justificativa é obrigatória para profissional e deve ter ao menos cinco caracteres após remover espaços externos.
-      security: [{ serviceAuth: [] }]
+      security: [{ serviceAuth: [], atorPapel: [], atorId: [] }, { serviceAuth: [], atorPapel: [], atorId: [], atorUnidade: [] }]
       parameters:
         - { $ref: '#/components/parameters/ReservaId' }
         - { $ref: '#/components/parameters/IdempotencyKey' }
@@ -465,7 +480,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/EstadoReserva' }
-        '422':
+        '400':
           description: "Entrada inválida ou cabeçalho obrigatório ausente."
         '401':
           description: "Credencial ausente ou inválida."
@@ -502,7 +517,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/EstadoReserva' }
-        '422':
+        '400':
           description: "Entrada inválida ou cabeçalho obrigatório ausente."
         '401':
           description: "Credencial ausente ou inválida."
@@ -525,7 +540,7 @@ paths:
         Somente Orquestrador com identidade delegada. Reservas valida propriedade
         ou vínculo do profissional e devolve o estado canônico para avaliação.
         A consulta é somente leitura e a transição revalida a autorização e o estado.
-      security: [{ serviceAuth: [] }]
+      security: [{ serviceAuth: [], atorPapel: [], atorId: [] }, { serviceAuth: [], atorPapel: [], atorId: [], atorUnidade: [] }]
       parameters:
         - { $ref: '#/components/parameters/ReservaId' }
         - { $ref: '#/components/parameters/CorrelationId' }
@@ -543,3 +558,4 @@ paths:
           description: "Reserva não encontrada."
         '503':
           description: "Serviço temporariamente indisponível. Repita o comando com a mesma chave e conteúdo quando o resultado estiver incerto."
+        '422': { description: "Parâmetro, cabeçalho ou corpo inválido." }

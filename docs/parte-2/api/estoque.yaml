@@ -11,12 +11,30 @@ components:
       type: http
       scheme: bearer
       description: >-
-        Credencial de serviço verificada pelo destinatário. Comandos vinculados
-        a um ator exigem contexto delegado e verificável na credencial. O
-        destinatário identifica e autoriza tanto o chamador quanto o ator.
-    bearerAuth:
+        Credencial própria do serviço ou BFF chamador, verificada pelo destinatário.
+        A identidade do ator só é aceita nos cabeçalhos X-Ator-* acompanhados da
+        credencial de um chamador autorizado a delegá-la: o BFF Cidadão delega
+        somente CIDADAO, o BFF Unidade somente PROFISSIONAL e o Orquestrador os
+        atores dos pedidos que persistiu. O token do usuário não é aceito aqui.
+    atorPapel:
+      type: apiKey
+      in: header
+      name: X-Ator-Papel
+      description: CIDADAO ou PROFISSIONAL. Nunca aceito diretamente do cliente.
+    atorId:
+      type: apiKey
+      in: header
+      name: X-Ator-Id
+      description: Identificador estável do ator autenticado pelo BFF.
+    atorUnidade:
+      type: apiKey
+      in: header
+      name: X-Ator-Unidade-Id
+      description: Unidade vinculada ao profissional. Obrigatório para PROFISSIONAL.
+    adminAuth:
       type: http
       scheme: bearer
+      description: Credencial interna da autoridade administrativa, sem rota nos BFFs.
   parameters:
     CorrelationId:
       name: X-Correlation-Id
@@ -34,7 +52,7 @@ components:
       in: header
       required: true
       description: Chave estável para repetir o mesmo comando com o mesmo resultado.
-      schema: { type: string, minLength: 1 }
+      schema: { type: string, minLength: 1, maxLength: 128 }
   schemas:
     ErroComando:
       type: object
@@ -132,10 +150,11 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/DisponibilidadeItem' }
         '404': { description: Combinação de unidade e item sem projeção. }
+        '422': { description: "Parâmetro, cabeçalho ou corpo inválido." }
   /api/unidade/v1/estoque/itens:
     get:
       summary: Listar catálogo de itens
-      security: [{ bearerAuth: [] }]
+      security: [{ serviceAuth: [], atorPapel: [], atorId: [], atorUnidade: [] }]
       responses:
         '200':
           description: Catálogo canônico de medicamentos e insumos.
@@ -144,17 +163,18 @@ paths:
               schema:
                 type: array
                 items: { $ref: '#/components/schemas/Item' }
+        '401': { description: Credencial ausente ou inválida. }
+        '403': { description: Chamador ou ator sem permissão. }
   /api/unidade/v1/estoque/{unidadeId}/itens:
     get:
       summary: Consultar catálogo e saldos projetados de uma unidade
-      security: [{ bearerAuth: [] }]
+      security: [{ serviceAuth: [], atorPapel: [], atorId: [], atorUnidade: [] }]
       parameters:
         - name: unidadeId
           in: path
           required: true
           schema: { type: string, format: uuid }
       responses:
-        '422': { description: Entrada ou cabeçalho inválido. }
         '200':
           description: Itens e disponibilidade com o instante da projeção aplicado.
           content:
@@ -163,12 +183,13 @@ paths:
                 type: array
                 items: { $ref: '#/components/schemas/EstoqueUnidadeItem' }
         '403': { description: Ator sem acesso à unidade. }
-        '404': { description: Unidade não encontrada. }
+        '401': { description: Credencial ausente ou inválida. }
+        '422': { description: "Parâmetro, cabeçalho ou corpo inválido." }
   /internal/v1/unidades/{unidadeId}/itens/{itemId}/permissao-reserva:
     get:
       summary: Consultar permissão canônica de reserva
       description: Leitura do modelo de escrita usada por Reservas ao criar uma solicitação; não depende da projeção de disponibilidade.
-      security: [{ bearerAuth: [] }]
+      security: [{ serviceAuth: [] }]
       parameters:
         - name: unidadeId
           in: path
@@ -179,7 +200,6 @@ paths:
           required: true
           schema: { type: string, format: uuid }
       responses:
-        '422': { description: Entrada ou cabeçalho inválido. }
         '200':
           description: Permissão atual da combinação unidade/item.
           content:
@@ -187,11 +207,70 @@ paths:
               schema: { $ref: '#/components/schemas/PermissaoReserva' }
         '404': { description: "Unidade, item ou configuração de saldo não encontrada." }
         '503': { description: Modelo canônico de Estoque indisponível. }
+        '401': { description: Credencial ausente ou inválida. }
+        '403': { description: Chamador ou ator sem permissão. }
+        '422': { description: "Parâmetro, cabeçalho ou corpo inválido." }
+  /internal/v1/itens:
+    post:
+      summary: Cadastrar item no catálogo
+      security: [{ adminAuth: [] }]
+      parameters: [{ $ref: '#/components/parameters/IdempotencyKey' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [nome, tipo]
+              properties:
+                nome: { type: string, minLength: 1 }
+                tipo: { type: string, enum: [MEDICAMENTO, INSUMO] }
+                descricao: { type: string }
+      responses:
+        '201':
+          description: Item cadastrado; a repetição idêntica reproduz a resposta original.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Item' }
+        '409': { description: Chave idempotente reutilizada com conteúdo diferente (CHAVE_IDEMPOTENTE_CONFLITANTE) ou item com mesmo nome e tipo (CADASTRO_CONFLITANTE). }
+        '401': { description: Credencial ausente ou inválida. }
+        '403': { description: Chamador ou ator sem permissão. }
+        '422': { description: "Parâmetro, cabeçalho ou corpo inválido." }
+  /internal/v1/itens/{itemId}:
+    put:
+      summary: Atualizar cadastro de item
+      security: [{ adminAuth: [] }]
+      parameters:
+        - name: itemId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [nome, tipo]
+              properties:
+                nome: { type: string, minLength: 1 }
+                tipo: { type: string, enum: [MEDICAMENTO, INSUMO] }
+                descricao: { type: string }
+      responses:
+        '200': { description: Cadastro do item atualizado. }
+        '404': { description: Item não encontrado. }
+        '409': { description: Chave idempotente reutilizada com conteúdo diferente (CHAVE_IDEMPOTENTE_CONFLITANTE) ou item com mesmo nome e tipo (CADASTRO_CONFLITANTE). }
+        '401': { description: Credencial ausente ou inválida. }
+        '403': { description: Chamador ou ator sem permissão. }
+        '422': { description: "Parâmetro, cabeçalho ou corpo inválido." }
   /api/unidade/v1/estoque/{unidadeId}/itens/{itemId}/permissao:
     put:
       summary: Configurar se item permite reserva
       description: Atualiza a permissão do saldo existente ou inicializa a relação unidade/item com saldo físico e alocado iguais a zero antes de aplicar a configuração.
-      security: [{ bearerAuth: [] }]
+      security: [{ serviceAuth: [], atorPapel: [], atorId: [], atorUnidade: [] }]
       parameters:
         - name: unidadeId
           in: path
@@ -208,25 +287,21 @@ paths:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               required: [permiteReserva]
               properties:
                 permiteReserva: { type: boolean }
       responses:
-        '422': { description: Entrada ou cabeçalho inválido. }
         '200': { description: Configuração atualizada. }
         '401': { description: Não autenticado. }
         '403': { description: Sem permissão para a unidade. }
-        '404': { description: Unidade ou item não encontrado. }
+        '404': { description: Item não encontrado. }
         '409': { description: Chave idempotente reutilizada com conteúdo diferente. }
+        '422': { description: "Parâmetro, cabeçalho ou corpo inválido." }
   /api/unidade/v1/estoque/{unidadeId}/itens/{itemId}/entradas:
     post:
       summary: Registrar entrada física no estoque
-      description: >-
-        O profissional da unidade seleciona um item do catálogo pelo itemId
-        e informa a quantidade recebida na sua unidade ativa. A primeira entrada cria o saldo com
-        alocação zero e permissão de reserva desativada. Entradas posteriores
-        somam ao saldo físico e mantêm a permissão atual.
-      security: [{ bearerAuth: [] }]
+      security: [{ serviceAuth: [], atorPapel: [], atorId: [], atorUnidade: [] }]
       parameters:
         - name: unidadeId
           in: path
@@ -243,27 +318,27 @@ paths:
           application/json:
             schema:
               type: object
-              required: [quantidade]
+              additionalProperties: false
+              required: [quantidade, motivo]
               properties:
-                quantidade: { type: integer, minimum: 1, maximum: 2147483647 }
-                motivo: { type: string, minLength: 1, default: Entrada de estoque }
+                quantidade: { type: integer, minimum: 1 }
+                motivo: { type: string, minLength: 1 }
       responses:
         '201':
           description: Entrada, movimento e evento de projeção registrados atomicamente; repetição idêntica reproduz a resposta original.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/MovimentacaoEstoque' }
-        '401': { description: Credencial ausente ou inválida. }
         '403': { description: Ator sem permissão para a unidade. }
-        '404': { description: Unidade ativa ou item do catálogo não encontrado. }
-        '409': { description: CHAVE_IDEMPOTENTE_CONFLITANTE ou LIMITE_ESTOQUE_EXCEDIDO. }
-        '422': { description: Quantidade ou chave idempotente inválida. }
-        '503': { description: Banco de Estoque indisponível ou validação de unidade indisponível. }
+        '404': { description: "Item não encontrado ou unidade inválida." }
+        '409': { description: Chave idempotente reutilizada com conteúdo diferente. }
+        '401': { description: Credencial ausente ou inválida. }
+        '422': { description: "Parâmetro, cabeçalho ou corpo inválido." }
   /api/unidade/v1/estoque/{unidadeId}/itens/{itemId}/ajustes:
     post:
       summary: Ajustar saldo físico por variação
       description: Variação positiva acrescenta saldo; negativa reduz saldo. O ajuste não pode reduzir o físico abaixo da quantidade já alocada.
-      security: [{ bearerAuth: [] }]
+      security: [{ serviceAuth: [], atorPapel: [], atorId: [], atorUnidade: [] }]
       parameters:
         - name: unidadeId
           in: path
@@ -280,6 +355,7 @@ paths:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               required: [variacaoFisica, motivo]
               properties:
                 variacaoFisica:
@@ -288,15 +364,16 @@ paths:
                     - { type: integer, minimum: 1 }
                 motivo: { type: string, minLength: 1 }
       responses:
-        '422': { description: Entrada ou cabeçalho inválido. }
         '201':
           description: Ajuste, movimento e evento de projeção registrados atomicamente; repetição idêntica reproduz a resposta original.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/MovimentacaoEstoque' }
         '403': { description: Ator sem permissão para a unidade. }
-        '404': { description: "Unidade, item ou saldo não encontrado." }
+        '404': { description: "Item ou saldo da unidade não encontrado." }
         '409': { description: Ajuste incompatível com alocações ativas ou chave reutilizada com conteúdo diferente. }
+        '401': { description: Credencial ausente ou inválida. }
+        '422': { description: "Parâmetro, cabeçalho ou corpo inválido." }
   /internal/v1/alocacoes:
     post:
       summary: Alocar estoque para a SAGA
@@ -315,6 +392,7 @@ paths:
           application/json:
             schema:
               type: object
+              additionalProperties: false
               required: [sagaId, reservaId, unidadeId, itemId, quantidade]
               properties:
                 sagaId: { type: string, format: uuid }
@@ -335,7 +413,7 @@ paths:
               schema: { $ref: '#/components/schemas/ErroComando' }
         '404':
           description: "Item ou saldo da unidade não encontrado. Nenhuma alocação foi criada."
-        '422':
+        '400':
           description: "Entrada inválida ou cabeçalho obrigatório ausente."
         '401':
           description: "Credencial ausente ou inválida."
@@ -367,7 +445,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErroComando' }
-        '422':
+        '400':
           description: "Entrada inválida ou cabeçalho obrigatório ausente."
         '401':
           description: "Credencial ausente ou inválida."

@@ -42,15 +42,19 @@ Contrato relacionado: [unidade.yaml](./api/unidade.yaml).
 |---|---|---|
 | `unidades` | `unidadeId uuid`; `nome`, `logradouro`, `numero`, `bairro`, `cidade`, `estado`, `cep`, `orientacoesRetirada text`; `prazoAnaliseHoras integer`; `ativa boolean`; `createdAt`, `updatedAt timestamptz`. Todos obrigatórios. | PK `unidadeId`. |
 | `contatos_unidade` | `unidadeId uuid`; `tipo`, `valor text`. Todos obrigatórios. | PK composta `(unidadeId, tipo, valor)`; FK `unidadeId → unidades.unidadeId`. |
-| `horarios_unidade` | `unidadeId uuid`; `diaSemana smallint`; `horarioInicial`, `horarioFinal time`. Todos obrigatórios. Cada linha representa um intervalo de atendimento. | PK composta `(unidadeId, diaSemana, horarioInicial, horarioFinal)`; FK `unidadeId → unidades.unidadeId`. |
+| `horarios_unidade` | `unidadeId uuid`; `diaSemana smallint`; `horarioInicial`, `horarioFinal time`; `legado boolean`. Todos obrigatórios. Cada linha representa um intervalo de atendimento. | PK composta `(unidadeId, diaSemana, horarioInicial, horarioFinal)`; FK `unidadeId → unidades.unidadeId`. |
 
 O endereço fica diretamente em `unidades`, sem tabela própria e sem `complemento`. `numero` e `cep` são textos para preservar sua representação. Contatos e horários ficam em relações 1:N, permitindo vários contatos e intervalos para a mesma unidade.
 
 ### Integridade e compatibilidade
 
+- `CHECK (prazoAnaliseHoras <= 720)` para novos valores; prazos anteriores são preservados com `prazoLegado` até serem alterados.
+- `identidade text` é gerada de nome e endereço normalizados e tem índice único. Duplicatas anteriores são preservadas com `duplicidadeLegada`, fora do índice, até mudarem de identidade.
 - `CHECK (prazoAnaliseHoras > 0)`: prazo obrigatório para toda a unidade. Ele corresponde ao campo de mesmo nome da consulta interna; `prazoAnalise` é a denominação conceitual do documento 00.
 - `ativa` tem `DEFAULT true`: a unidade cadastrada já entra operacional. A saída de participação usa `ativa = false`, preservando o cadastro e as referências históricas mantidas por outros serviços.
 - `diaSemana` usa 1 a 7, de segunda-feira a domingo, com `CHECK` desse intervalo. As PKs dos detalhes impedem contatos e intervalos exatamente duplicados.
+- Em `horarios_unidade`, `CHECK (horarioInicial < horarioFinal)` impede duração nula, inversão e passagem pela meia-noite (`24:00` também é recusado). `EXCLUDE` por unidade e dia impede sobreposição, com períodos semiabertos `[inicial, final)`, que permitem consecutivos. Usa a extensão `btree_gist`.
+- Períodos anteriores às regras que as violem são preservados e marcados com `legado boolean` (padrão `false`), fora das duas constraints. Deixam de existir quando os horários da unidade são substituídos por um conjunto válido.
 - `endereco` e `horarioAtendimento`, hoje expostos como textos no OpenAPI, são compostos pela aplicação a partir dos campos e intervalos locais. A organização interna não altera esses nomes ou tipos HTTP.
 
 Este banco não contém referências a outros domínios. Os índices das PKs atendem à consulta por unidade e à carga de seus contatos e horários; não se propõem índices adicionais sem consulta definida.
@@ -65,6 +69,8 @@ Contrato relacionado: [estoque.yaml](./api/estoque.yaml).
 | `saldos` | `unidadeId`, `itemId uuid`; `estoqueFisicoAtual`, `quantidadeAlocada integer`; `permiteReserva boolean`; `estoqueVersion bigint`; `createdAt`, `updatedAt timestamptz`. Todos obrigatórios. | PK composta `(unidadeId, itemId)`; FK `itemId → itens.itemId`. |
 | `alocacoes` | `alocacaoId`, `reservaId`, `sagaId`, `unidadeId`, `itemId uuid`; `quantidade integer`; `idempotencyKey text`; `correlationId uuid`; `createdAt`, `updatedAt timestamptz`, obrigatórios. `liberadaEm`, `consumidaEm timestamptz`, opcionais. | PK `alocacaoId`; `UNIQUE (reservaId)`; FK composta `(unidadeId, itemId) → saldos`. |
 | `movimentacoes` | `movimentacaoId`, `unidadeId`, `itemId uuid`; `variacaoFisica integer`; `ocorridaEm timestamptz`, obrigatórios. `alocacaoId`, `retiradaId uuid`, opcionais conforme a origem; `atorId`, `motivo text`, opcionais quando não aplicáveis. | PK `movimentacaoId`; FK composta `(unidadeId, itemId) → saldos`; FK opcional `alocacaoId → alocacoes.alocacaoId`. |
+
+`itens.identidade` é gerada de nome e tipo normalizados e tem índice único, com o mesmo tratamento de duplicatas anteriores de Unidades.
 
 `itens` separa o cadastro canônico do item de suas quantidades em cada unidade. A API limita `tipo` a `MEDICAMENTO` ou `INSUMO`; o banco pode armazená-lo como `text` com constraint equivalente, sem exigir um tipo ENUM específico do PostgreSQL.
 

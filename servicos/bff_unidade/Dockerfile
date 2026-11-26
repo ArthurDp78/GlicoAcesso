@@ -18,6 +18,8 @@ ENV PATH="/app/.venv/bin:$PATH" \
 COPY --from=dependencias /app/.venv /app/.venv
 COPY servicos/*.py ./servicos/
 COPY servicos/bff_unidade/ ./servicos/bff_unidade/
+COPY servicos/estoque/esquemas.py ./servicos/estoque/
+COPY servicos/unidades/esquemas.py servicos/unidades/regras_horarios.py ./servicos/unidades/
 
 USER 10001:10001
 EXPOSE 8005
