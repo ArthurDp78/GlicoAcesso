@@ -80,6 +80,9 @@ class IdentidadeECorrelacao(Base):
                          ("CIDADAO", "cidadao-demo", correlacao, chave))
         self.assertNotIn("x-ator-unidade-id", no_servico)
 
+        reserva = r.json()["reservaId"]
+        uni("POST", f"/reservas/{reserva}/decisao", json={"decisao": "ACEITAR"})
+        a.esperar_estado(reserva, "CONFIRMADA")
         uni("GET", "/painel/reservas/" + r.json()["reservaId"])
         for servico in ("reservas", "retiradas", "unidades"):
             visto = a.proxies[f"bff>{servico}"].vistos[-1][3]
