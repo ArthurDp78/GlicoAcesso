@@ -1,14 +1,8 @@
-# GlicoAcesso — Apresentação da Solução
+# GlicoAcesso — Documentação para o cliente
 
 ![Logotipo do GlicoAcesso](../identidade-visual/logo-sem-fundo.png)
 
-## Conheça o GlicoAcesso
-
-O GlicoAcesso é um protótipo desenvolvido para ajudar pessoas com diabetes e seus cuidadores a planejar a retirada de medicamentos e insumos em unidades de saúde participantes.
-
-A pessoa consulta em um portal quais unidades informaram disponibilidade, quando o dado foi atualizado, onde fica a unidade e quais orientações deve seguir. Onde a reserva estiver habilitada, ela pode solicitar o item, acompanhar a decisão e apresentar o código no balcão. Do outro lado, a equipe da unidade tem um painel para organizar solicitações, registrar entradas e dar baixa na entrega pelo mesmo fluxo.
-
-O diferencial é reunir **informação de disponibilidade, orientações da unidade e acompanhamento da reserva**. Para uma rede municipal ou instituição parceira, a proposta também oferece um ponto de partida para organizar como suas unidades publicam e mantêm essa informação.
+O GlicoAcesso é um protótipo que ajuda pessoas com diabetes e seus cuidadores a planejar a retirada de medicamentos e insumos em unidades de saúde participantes. No portal, é possível consultar onde um item aparece como disponível, ver as orientações da unidade e acompanhar uma reserva. A equipe da unidade usa um painel para atualizar o estoque, analisar pedidos e registrar entregas.
 
 ## Etapa 1 — Entendendo o problema e construindo a solução
 
@@ -54,82 +48,85 @@ A separação entre os dois públicos foi mantida no executável de novembro. O 
 
 ## Etapa 3 — Preparação para funcionamento e implantação
 
-A versão publicada em 24 de novembro foi empacotada para instalação local em um ambiente compatível com Docker Compose. A instalação reúne as interfaces, os módulos da aplicação e os serviços que guardam e distribuem as informações. Uma equipe técnica configura as credenciais, inicia o ambiente e pode verificar os serviços pelo roteiro de demonstração.
+O projeto passou a usar Docker Compose para iniciar a demonstração em um computador preparado pela equipe técnica. A instalação reúne as interfaces, os módulos da aplicação e os serviços que guardam e distribuem as informações. Uma equipe técnica configura as credenciais, inicia o ambiente e pode verificar os serviços pelo roteiro de demonstração.
 
-Depois da instalação, o portal e o painel são acessados por navegador. O cidadão pode abrir a consulta pública. Pedir ou cancelar reserva exige a credencial de cidadão. A operação do painel exige a credencial de profissional da unidade. O cadastro de uma unidade nova é feito pela administração da rede com uma ferramenta separada.
+Depois da instalação, o portal e o painel são acessados por navegador. O cidadão pode abrir a consulta pública. Solicitar, acompanhar ou cancelar uma reserva exige a credencial de cidadão. A operação do painel exige a credencial de profissional da unidade. O cadastro de uma unidade nova é feito pela administração da rede com uma ferramenta separada.
 
-Os dados ficam em armazenamento persistente. Reiniciar a instalação mantendo a configuração e os volumes preserva os registros. A separação dos módulos oferece pontos claros de manutenção e uma base para ampliar a rede em fases. A demonstração atual utiliza unidades e volumes de teste. A operação em uma rede institucional exige pessoas responsáveis pelo cadastro, pelo estoque, pelo atendimento e pela proteção dos dados. [Execução local do protótipo](../README.md#subir-o-sistema-completo-com-docker-compose)
+Os dados ficam em armazenamento persistente. Reiniciar a instalação mantendo a configuração e os volumes preserva os registros. A separação dos módulos oferece pontos claros de manutenção e uma base para ampliar a rede em fases. A demonstração atual utiliza unidades e volumes de teste. A operação em uma rede institucional exige pessoas responsáveis pelo cadastro, pelo estoque, pelo atendimento e pela proteção dos dados. [Instalação local](DOCUMENTACAO_TECNICA.md#executar-do-zero)
 
-## Etapa 4 — Integração e inteligência artificial
+## Etapa 4 — Integração e orientação ao cidadão
 
-A versão de **25 de novembro de 2026** reúne a busca, a solicitação de reserva, a decisão da unidade, o cancelamento e o registro da entrega. A equipe pode lançar entradas de estoque e habilitar reserva para cada item no painel. Ao concluir uma entrega, o sistema atualiza o andamento visto pelo cidadão e os registros de estoque. Essas atualizações podem aparecer em instantes distintos.
+Nesta etapa, a demonstração reúne o caminho completo. O cidadão consulta o item e solicita a reserva. A equipe da unidade decide, acompanha o estoque e registra a entrega. O cidadão pode verificar o resultado pelo código e pedir ajuda no portal para entender como seguir em cada momento.
 
-O portal usa **dados cadastrados pelas unidades e atualizações de estoque**, com dados fictícios para a demonstração. O catálogo inicial tem itens do elenco de diabetes do Programa Farmácia Popular do Brasil e os exemplos de teste. O catálogo ajuda a identificar o item. A unidade participante continua sendo a fonte sobre estoque local e orientações de retirada. [Elenco do Ministério da Saúde](https://www.gov.br/saude/pt-br/composicao/sectics/farmacia-popular/arquivos/lista-de-medicamentos-e-insumos-pfpb.pdf/view)
+O catálogo inicial inclui itens do elenco de diabetes do Programa Farmácia Popular do Brasil, além dos exemplos criados para a demonstração. O catálogo ajuda a identificar o item. As unidades participantes fornecem as informações sobre disponibilidade, horário e retirada. [Elenco do Ministério da Saúde](https://www.gov.br/saude/pt-br/composicao/sectics/farmacia-popular/arquivos/lista-de-medicamentos-e-insumos-pfpb.pdf/view)
 
-### Recursos de inteligência artificial
+### Portal do cidadão
 
-A inteligência artificial faz parte da etapa final do projeto e ainda não está disponível nessa versão. A experiência atual oferece orientações registradas, horário de atendimento, disponibilidade e acompanhamento da reserva na tela. A futura integração ainda precisa demonstrar de quais fontes obtém informações, quando consegue responder e como se comporta se uma fonte estiver indisponível.
+1. Escolha um medicamento ou insumo e clique em **Consultar**.
+2. Confira as unidades encontradas, o endereço, o horário de atendimento, as orientações e quando a disponibilidade foi atualizada.
+3. Se o item estiver disponível e a unidade aceitar reservas, use a credencial de demonstração, informe a quantidade e envie a solicitação. Guarde o código da reserva.
+4. Em **Minhas reservas**, consulte o pedido pelo código. Quando estiver confirmado, siga as orientações da unidade e leve o código ao balcão. Se precisar cancelar, use a opção quando ela estiver disponível e consulte o andamento novamente.
 
-### Quando uma operação depende de confirmação
+#### Por que a consulta mostra duas informações sobre o item
 
-Para o usuário, o pedido pode aparecer como solicitado ou em processamento até a unidade e o sistema concluírem as etapas necessárias. Se a autorização não puder ser criada após a reserva da quantidade no estoque, o sistema aciona a liberação e registra a falha da confirmação. Se o profissional já registrou a entrega, o cancelamento tem de respeitar essa entrega. Em uma falha de conexão, os portais exibem feedback. A pessoa pode consultar a reserva novamente pelo código quando o sistema estiver disponível.
+A **disponibilidade** indica se havia saldo para aquele item na última atualização exibida. A **permissão de reserva** indica se a unidade aceita pedidos pelo portal para aquele item. Uma unidade pode ter saldo e atender diretamente no balcão, conforme as orientações que cadastrou. A data e a hora ajudam a avaliar quão recente é o dado antes de planejar a visita.
 
-## Como funciona na prática
+#### Por que é preciso acompanhar a reserva
 
-### Jornada de quem precisa retirar um item
+Ao enviar a solicitação, o cidadão recebe um código para consultar aquele pedido. A equipe tem um prazo para analisar a solicitação. Quando ela aceita, o sistema ainda precisa separar a quantidade no estoque e preparar a autorização de retirada. Quando as duas etapas terminam, o portal mostra a confirmação.
 
-Uma cuidadora quer retirar tiras reagentes para uma pessoa que acompanha. No portal, ela escolhe o item, consulta as unidades participantes e verifica o horário, as orientações e a data de atualização. Se a unidade estiver aceitando reservas para aquele item, a cuidadora informa a quantidade e a credencial de demonstração e recebe um código. Ela usa o código para acompanhar o pedido e, após confirmação, planeja a visita.
-
-```mermaid
-flowchart LR
-    search["Escolher item e consultar"]
-    search --> check["Conferir unidade, horário e atualização"]
-    check --> available{"Reserva habilitada e item disponível?"}
-    available -->|"Sim"| request["Solicitar e guardar o código"]
-    available -->|"Não"| checkOther["Consultar outra unidade ou seguir a orientação exibida"]
-    request --> track["Acompanhar pelo código"]
-    track --> confirmed["Quando confirmada, ir ao balcão"]
-```
-
-![Portal do cidadão com o resultado da consulta por tiras reagentes](assets/portal-cidadao.png)
-
-*Consulta real no protótipo, com uma unidade fictícia.*
-
-### Jornada da equipe da unidade
-
-A unidade recebeu um lote de um medicamento. O profissional entra no painel com a credencial vinculada, lança a entrada, consulta o estoque e define se aceita reservas para aquele item. Quando chega uma solicitação, pode aceitar ou rejeitar. Após confirmação e comparecimento do cidadão, localiza a reserva pelo código e registra a entrega autorizada.
-
-```mermaid
-flowchart LR
-    entry["Registrar entrada e definir permissão"]
-    entry --> queue["Consultar solicitações da unidade"]
-    queue --> decision{"Decisão"}
-    decision -->|"Aceitar"| process["Aguardar confirmação"]
-    decision -->|"Rejeitar"| refuse["Cidadão consulta a decisão"]
-    process --> counter["Buscar código e registrar entrega autorizada"]
-    counter --> complete["Pedido e estoque são atualizados"]
-```
-
-![Painel da unidade com uma solicitação pendente e o estoque da demonstração](assets/painel-unidade.png)
-
-*Painel real do protótipo, com uma reserva e estoque fictícios. O campo de credencial está oculto na captura.*
-
-A administração da rede cadastra novas unidades e informa os dados de atendimento. A equipe usa o painel para a operação diária. Na versão atual, ajustes manuais de saldo e algumas alterações cadastrais estão disponíveis à equipe técnica pela integração da plataforma.
-
-## Benefícios da solução
-
-- **Planejamento da ida à unidade.** O cidadão pode consultar horário, orientações, disponibilidade informada e o andamento do pedido.
-- **Organização do atendimento.** A equipe acompanha solicitações pendentes, consulta reservas pelo código e registra a entrega no mesmo fluxo de trabalho.
-- **Clareza sobre a atualização do estoque.** O portal mostra quando a disponibilidade exibida foi atualizada. A equipe tem acesso às quantidades físicas, alocadas e disponíveis na visão operacional.
-- **Integridade da confirmação e do cancelamento.** A aplicação coordena a reserva da quantidade e a emissão da autorização, com mecanismos para liberar o saldo quando aplicável.
-- **Base para manutenção e expansão.** A implantação local padronizada e a divisão das responsabilidades facilitam avaliar a plataforma em uma primeira rede participante.
-
-## Disponibilidade e evolução
-
-| Situação em 25/11/2026 | O que a instituição pode avaliar |
+| Situação do pedido | O que fazer |
 | --- | --- |
-| **Protótipo demonstrável localmente** | Portal cidadão, painel da unidade, cadastro administrativo, estoque, reserva, cancelamento e entrega presencial registrada. |
-| **Em evolução** | Integração com os sistemas de estoque da rede, contas individuais, preparação operacional para um piloto com unidades reais e desenvolvimento da funcionalidade de IA. |
-| **Resultados a medir** | Tempo de busca, deslocamentos sem retirada, prazo entre solicitação e atendimento e satisfação. |
+| Solicitado ou em confirmação | Guarde o código e consulte novamente em **Minhas reservas**. |
+| Confirmado | Confira as instruções da unidade e leve o código ao balcão. |
+| Rejeitado, expirado ou com falha na confirmação | Consulte novamente as unidades para verificar as opções disponíveis. |
+| Cancelamento em andamento | Consulte pelo código até o portal mostrar o resultado. |
+| Retirado | A unidade já registrou a entrega. |
 
-A disponibilidade depende das unidades cadastradas, do item e da informação de estoque mais recente. A proposta é apoiar o acesso à rede participante. A confirmação final da dispensação segue os requisitos da unidade e as orientações dos profissionais responsáveis.
+![Consulta por tiras reagentes no portal do cidadão](assets/portal-cidadao.png)
+
+*Exemplo de consulta com dados fictícios.*
+
+#### Orientação sobre o item
+
+A orientação existe para ajudar quando uma dúvida surge no meio do caminho. Por exemplo, a pessoa pode ter encontrado uma unidade e ainda precisar saber como confirmar o andamento ou o que levar na retirada. O recurso consulta os guias do GlicoAcesso para responder em linguagem direta.
+
+Com o item selecionado e a credencial informada em **Minhas reservas**, use **Pedir orientação**. Uma pergunta de exemplo é *“Qual código devo levar ao balcão e onde vejo as orientações para retirar uma reserva confirmada?”*
+
+Quando a resposta usa os guias, o portal mostra os títulos e as seções consultadas para indicar de onde vieram as instruções. A disponibilidade aparece em uma área própria porque vem dos registros de estoque do sistema. Ali é possível conferir a unidade, a permissão para reservar e o horário da última atualização. Se a resposta automática estiver indisponível, a tela indica como continuar pela consulta comum ou por **Minhas reservas**.
+
+Use esse recurso para dúvidas sobre o funcionamento do GlicoAcesso e evite incluir dados pessoais na pergunta. Para dúvidas sobre tratamento, procure um profissional de saúde. Para acompanhar um pedido específico, use o código em **Minhas reservas**.
+
+### Painel da unidade
+
+1. Informe a credencial da unidade e clique em **Carregar painel**.
+2. Em **Estoque da unidade**, registre as entradas e ajuste a permissão de reserva para cada item.
+3. Em **Aguardando decisão**, aceite ou rejeite as solicitações da unidade. Após o aceite, o pedido pode levar alguns instantes para aparecer como confirmado.
+4. Em **Consultar reserva e registrar retirada**, procure o pedido pelo código. Quando a entrega estiver autorizada, registre a retirada no balcão. Se precisar cancelar um pedido e a opção estiver disponível, informe o motivo no painel.
+
+#### Por que a equipe registra cada etapa
+
+- **Entrada e permissão de reserva.** A entrada registra o que chegou à unidade. A permissão permite à equipe escolher, por item, se aceita solicitações pelo portal.
+- **Decisão sobre o pedido.** O aceite inicia a separação da quantidade e a preparação da autorização. Assim, a quantidade reservada fica separada do saldo que pode atender outros pedidos.
+- **Entrega no balcão.** O código vincula o atendimento ao pedido certo. Ao registrar a entrega, o sistema atualiza o pedido, desconta o que saiu do estoque físico e encerra a separação daquela quantidade. A equipe pode ver essas atualizações em momentos diferentes.
+
+A administração da rede cadastra novas unidades por uma ferramenta própria. A equipe de cada unidade cuida da operação diária no painel.
+
+![Solicitação pendente e estoque no painel da unidade](assets/painel-unidade.png)
+
+*Exemplo de painel com dados fictícios.*
+
+### O que o vídeo da Etapa 4 vai mostrar
+
+1. A inicialização do ambiente local com Docker e a abertura do portal do cidadão e do painel da unidade.
+2. A consulta a um item, o pedido de reserva, o aceite pela unidade e o acompanhamento pelo código.
+3. O registro da entrega no balcão e a atualização da reserva e do estoque.
+4. Uma pergunta ao recurso de orientação, com a fonte do guia e os dados de disponibilidade exibidos na tela.
+
+## O que uma instituição pode avaliar em um piloto
+
+A demonstração usa dados fictícios em uma instalação local. Em um piloto, a rede pode acompanhar se as pessoas encontram uma unidade com mais facilidade, quantas viagens terminam sem retirada e quanto tempo decorre entre o pedido e o atendimento. Esses dados ajudam a decidir se o serviço melhora a rotina de quem retira e de quem atende.
+
+Para manter as informações úteis, a rede precisa definir quem atualiza o cadastro, os horários, as orientações e o estoque de cada unidade. A dispensação segue os requisitos e as orientações da unidade responsável.
+
+[Documentação técnica e preparação do ambiente](DOCUMENTACAO_TECNICA.md#roteiro-técnico-do-vídeo)
