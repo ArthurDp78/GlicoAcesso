@@ -21,3 +21,14 @@ class GuardiaoDeContrato(unittest.TestCase):
             )
             self.assertNotEqual(resultado.returncode, 0, resultado.stdout)
             self.assertIn("fora do contrato", resultado.stdout)
+
+    def test_arquivo_vazio_falha(self):
+        with tempfile.TemporaryDirectory() as pasta:
+            trocas = Path(pasta) / "trocas.jsonl"
+            trocas.write_text("", encoding="utf-8")
+            resultado = subprocess.run(
+                [sys.executable, "-m", "tests.contratos", str(trocas)],
+                cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True,
+            )
+            self.assertNotEqual(resultado.returncode, 0)
+            self.assertIn("Nenhuma troca HTTP", resultado.stdout)

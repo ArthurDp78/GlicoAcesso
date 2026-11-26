@@ -89,6 +89,9 @@ def main(caminho):
             problemas[f"{nome} aceitou comando sem chave"] += 1
     for extra in sorted(extras):
         print(f"[fora do contrato] {extra}")
+    if not cobertas:
+        print("Nenhuma troca HTTP documentada foi verificada.")
+        return 1
     for problema, vezes in sorted(problemas.items()):
         print(f"[{vezes}x] {problema}")
     faltam = [f"{o[0]} {o[1]} {o[2]}: {s}" for o in operacoes for s in o[5]["responses"] if (f"{o[0]} {o[1]} {o[2]}", s) not in cobertas]
